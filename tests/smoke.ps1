@@ -16,12 +16,34 @@ function ConvertTo-NormalizedOutputText([object[]]$Items) {
     return (@($Items | ForEach-Object { "$_" }) -join "`n")
 }
 
+function Invoke-NativeCapture([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5 promotes native stderr to error records. Negative
+        # smoke cases must capture those records and assert the exit code instead
+        # of terminating the whole test harness before the assertion runs.
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Command)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Output = $output
+        Text = ConvertTo-NormalizedOutputText $output
+    }
+}
+
 function Run-Validator([string]$ProjectRoot) {
     $validator = Join-Path $ProjectRoot "scripts/validate_project.ps1"
-    $output = & $engine -NoProfile -ExecutionPolicy Bypass -File $validator -Root $ProjectRoot 2>&1
+    $result = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File $validator -Root $ProjectRoot 2>&1
+    }
     return @{
-        Code = $LASTEXITCODE
-        Text = ConvertTo-NormalizedOutputText @($output)
+        Code = $result.Code
+        Text = $result.Text
     }
 }
 
@@ -68,11 +90,13 @@ try {
     $brokenSkill = Join-Path $tempRoot "broken-skill"
     Copy-Item -LiteralPath $skill -Destination $brokenSkill -Recurse
     Remove-Item -LiteralPath (Join-Path $brokenSkill "references/protocol.md")
-    $brokenSkillOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $brokenSkill "scripts/validate_skill.ps1") `
-        -SkillRoot $brokenSkill 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($brokenSkillOutput | Out-String) -notmatch "Missing required skill file: references/protocol.md") {
+    $brokenSkillResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $brokenSkill "scripts/validate_skill.ps1") `
+            -SkillRoot $brokenSkill 2>&1
+    }
+    if ($brokenSkillResult.Code -eq 0 -or
+        $brokenSkillResult.Text -notmatch "Missing required skill file: references/protocol.md") {
         throw "PowerShell skill health validator accepted a missing required file."
     }
 
@@ -183,13 +207,13 @@ try {
         $environmentText -notmatch '(?m)^PASS required: git$') {
         throw 'PowerShell environment doctor failed a valid required-tool check.'
     }
-    $coreEnvironmentOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill 'scripts/environment_doctor.ps1') -Core 2>&1)
-    $coreEnvironmentExitCode = $LASTEXITCODE
-    $coreEnvironmentText = ConvertTo-NormalizedOutputText $coreEnvironmentOutput
-    if ($coreEnvironmentExitCode -notin @(0, 1) -or
-        $coreEnvironmentText -notmatch '(?m)^(PASS|MISSING) required: git$' -or
-        $coreEnvironmentText -notmatch '(?m)^(PASS|MISSING) required: gh$') {
+    $coreEnvironmentResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill 'scripts/environment_doctor.ps1') -Core 2>&1
+    }
+    if ($coreEnvironmentResult.Code -notin @(0, 1) -or
+        $coreEnvironmentResult.Text -notmatch '(?m)^(PASS|MISSING) required: git$' -or
+        $coreEnvironmentResult.Text -notmatch '(?m)^(PASS|MISSING) required: gh$') {
         throw 'PowerShell core environment check did not provide bounded pre-clone diagnostics.'
     }
 
@@ -324,11 +348,13 @@ try {
     Assert-InvalidProject $unknownTool `
         "Optional tools contains unsupported tool 'madeup-tool'" `
         'Unknown environment tool'
-    $unknownDoctorOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $unknownTool 'scripts/environment_doctor.ps1') `
-        -Root $unknownTool 2>&1)
-    if ($LASTEXITCODE -eq 0 -or
-        ($unknownDoctorOutput | Out-String) -notmatch 'Unsupported optional tool: madeup-tool') {
+    $unknownDoctorResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $unknownTool 'scripts/environment_doctor.ps1') `
+            -Root $unknownTool 2>&1
+    }
+    if ($unknownDoctorResult.Code -eq 0 -or
+        $unknownDoctorResult.Text -notmatch 'Unsupported optional tool: madeup-tool') {
         throw 'PowerShell environment doctor accepted an unknown tool.'
     }
 
@@ -449,22 +475,24 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         $readinessText -notmatch '(?m)^PPS readiness: OK$') {
         throw 'PowerShell readiness gate rejected a verified valid package.'
     }
-    $readinessPending = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $assetCase 'scripts/readiness_check.ps1') `
-        -Root $assetCase 2>&1)
-    $readinessPendingExitCode = $LASTEXITCODE
-    $readinessPendingText = ConvertTo-NormalizedOutputText $readinessPending
-    if ($readinessPendingExitCode -ne 3 -or
-        $readinessPendingText -notmatch '(?m)^PPS readiness: VERIFY PENDING$') {
+    $readinessPendingResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $assetCase 'scripts/readiness_check.ps1') `
+            -Root $assetCase 2>&1
+    }
+    if ($readinessPendingResult.Code -ne 3 -or
+        $readinessPendingResult.Text -notmatch '(?m)^PPS readiness: VERIFY PENDING$') {
         throw 'PowerShell readiness gate accepted work without explicit verification attestation.'
     }
     $env:PPS_FAKE_RCLONE_COUNT = '0'
     $env:PPS_FAKE_RCLONE_BYTES = '0'
-    $missingCloudOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $assetCase 'scripts/asset_check.ps1') `
-        -Root $assetCase -Handoff 2>&1)
-    if ($LASTEXITCODE -eq 0 -or
-        ($missingCloudOutput | Out-String) -notmatch 'Cloud asset A-CORE-001 durable copy mismatch') {
+    $missingCloudResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $assetCase 'scripts/asset_check.ps1') `
+            -Root $assetCase -Handoff 2>&1
+    }
+    if ($missingCloudResult.Code -eq 0 -or
+        $missingCloudResult.Text -notmatch 'Cloud asset A-CORE-001 durable copy mismatch') {
         throw 'PowerShell asset handoff accepted a missing durable cloud copy.'
     }
     $env:PATH = $originalPath
@@ -474,11 +502,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $missingCore = Join-Path $tempRoot 'missing-core-asset'
     Copy-Item -LiteralPath $assetCase -Destination $missingCore -Recurse
     Remove-Item -LiteralPath (Join-Path $missingCore 'local-assets/source/core.bin')
-    $missingCoreOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $missingCore 'scripts/asset_check.ps1') `
-        -Root $missingCore -Handoff 2>&1)
-    if ($LASTEXITCODE -eq 0 -or
-        ($missingCoreOutput | Out-String) -notmatch 'Required asset A-CORE-001 is not materialized') {
+    $missingCoreResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $missingCore 'scripts/asset_check.ps1') `
+            -Root $missingCore -Handoff 2>&1
+    }
+    if ($missingCoreResult.Code -eq 0 -or
+        $missingCoreResult.Text -notmatch 'Required asset A-CORE-001 is not materialized') {
         throw 'PowerShell asset handoff accepted a missing core asset.'
     }
 
@@ -539,11 +569,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     }
     & git -C $riskCase add -N assets/oversized.mp4
     if ($LASTEXITCODE -ne 0) { throw 'Could not stage the asset-risk fixture.' }
-    $riskOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill 'scripts/asset_check.ps1') `
-        -Root $riskCase -Risk 2>&1)
-    if ($LASTEXITCODE -eq 0 -or
-        ($riskOutput | Out-String) -notmatch 'Tracked non-LFS file exceeds the 95 MiB safe push ceiling') {
+    $riskResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill 'scripts/asset_check.ps1') `
+            -Root $riskCase -Risk 2>&1
+    }
+    if ($riskResult.Code -eq 0 -or
+        $riskResult.Text -notmatch 'Tracked non-LFS file exceeds the 95 MiB safe push ceiling') {
         throw 'PowerShell asset risk audit accepted a tracked non-LFS file above 95 MiB.'
     }
 
@@ -598,11 +630,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     }
 
     & git -C $gitCase remote add broken (Join-Path $tempRoot "does-not-exist.git")
-    $failedFetchOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $gitCase "scripts/status_check.ps1") `
-        -Root $gitCase -Fetch 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($failedFetchOutput | Out-String) -notmatch "Git-Fetch: FAILED") {
+    $failedFetchResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitCase "scripts/status_check.ps1") `
+            -Root $gitCase -Fetch 2>&1
+    }
+    if ($failedFetchResult.Code -eq 0 -or
+        $failedFetchResult.Text -notmatch "Git-Fetch: FAILED") {
         throw "PowerShell status returned success after a requested fetch failed."
     }
     & git -C $gitCase remote remove broken
@@ -676,16 +710,20 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     & git -C $gitCase add CONTEXT.md
     & git -C $gitCase restore --worktree -- CONTEXT.md
     if ($LASTEXITCODE -ne 0) { throw "Could not prepare the staged-snapshot hook test." }
-    $psHookOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $gitCase "scripts/pre-commit.ps1") `
-        -Root $gitCase 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($psHookOutput | Out-String) -notmatch "staged project validation failed") {
+    $psHookResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitCase "scripts/pre-commit.ps1") `
+            -Root $gitCase 2>&1
+    }
+    if ($psHookResult.Code -eq 0 -or
+        $psHookResult.Text -notmatch "staged project validation failed") {
         throw "PowerShell pre-commit accepted invalid staged PPS state."
     }
-    $hookOutput = & git -C $gitCase commit -m "test: invalid state" 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($hookOutput | Out-String) -notmatch "PPS pre-commit: staged project validation failed") {
+    $hookResult = Invoke-NativeCapture {
+        & git -C $gitCase commit -m "test: invalid state" 2>&1
+    }
+    if ($hookResult.Code -eq 0 -or
+        $hookResult.Text -notmatch "PPS pre-commit: staged project validation failed") {
         throw "Installed pre-commit hook accepted invalid staged PPS state."
     }
 
@@ -696,41 +734,51 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         "keep`n",
         $utf8NoBom
     )
-    $nonemptyOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName nonempty -ParentDir $tempRoot -NoGit 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($nonemptyOutput | Out-String) -notmatch "Refusing to initialize a non-empty target" -or
+    $nonemptyResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/init_project.ps1") `
+            -ProjectName nonempty -ParentDir $tempRoot -NoGit 2>&1
+    }
+    if ($nonemptyResult.Code -eq 0 -or
+        $nonemptyResult.Text -notmatch "Refusing to initialize a non-empty target" -or
         -not (Test-Path -LiteralPath (Join-Path $nonempty "user.txt") -PathType Leaf)) {
         throw "Initializer did not safely refuse a non-empty target."
     }
 
-    $invalidNameOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName "invalid/name" -ParentDir $tempRoot -NoGit 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($invalidNameOutput | Out-String) -notmatch "may contain only") {
+    $invalidNameResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/init_project.ps1") `
+            -ProjectName "invalid/name" -ParentDir $tempRoot -NoGit 2>&1
+    }
+    if ($invalidNameResult.Code -eq 0 -or
+        $invalidNameResult.Text -notmatch "may contain only") {
         throw "Initializer accepted an invalid project name."
     }
-    $dotDotNameOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName ".." -ParentDir $tempRoot -NoGit 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($dotDotNameOutput | Out-String) -notmatch "cannot be '.' or '..'") {
+    $dotDotNameResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/init_project.ps1") `
+            -ProjectName ".." -ParentDir $tempRoot -NoGit 2>&1
+    }
+    if ($dotDotNameResult.Code -eq 0 -or
+        $dotDotNameResult.Text -notmatch "cannot be '.' or '..'") {
         throw "Initializer accepted '..' as a project name."
     }
-    $reservedNameOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName "CON" -ParentDir $tempRoot -NoGit 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($reservedNameOutput | Out-String) -notmatch "Windows-reserved device name") {
+    $reservedNameResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/init_project.ps1") `
+            -ProjectName "CON" -ParentDir $tempRoot -NoGit 2>&1
+    }
+    if ($reservedNameResult.Code -eq 0 -or
+        $reservedNameResult.Text -notmatch "Windows-reserved device name") {
         throw "Initializer accepted a non-portable reserved project name."
     }
-    $contradictoryOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName "contradictory" -ParentDir $tempRoot -NoGit -InstallHook 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($contradictoryOutput | Out-String) -notmatch "cannot be used with -NoGit") {
+    $contradictoryResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/init_project.ps1") `
+            -ProjectName "contradictory" -ParentDir $tempRoot -NoGit -InstallHook 2>&1
+    }
+    if ($contradictoryResult.Code -eq 0 -or
+        $contradictoryResult.Text -notmatch "cannot be used with -NoGit") {
         throw "Initializer accepted contradictory Git options."
     }
 
@@ -1097,11 +1145,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     }
 
     $insideReport = Join-Path $legacy "MIGRATION_REPORT.md"
-    $insideOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
-        -Root $legacy -OutputPath $insideReport 2>&1
-    if ($LASTEXITCODE -eq 0 -or
-        ($insideOutput | Out-String) -notmatch "Refusing to write the audit report inside the target project" -or
+    $insideResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
+            -Root $legacy -OutputPath $insideReport 2>&1
+    }
+    if ($insideResult.Code -eq 0 -or
+        $insideResult.Text -notmatch "Refusing to write the audit report inside the target project" -or
         (Test-Path -LiteralPath $insideReport)) {
         throw "Audit report was incorrectly allowed inside the target."
     }
