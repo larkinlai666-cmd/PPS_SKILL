@@ -40,6 +40,24 @@ function Get-SectionField([string[]]$Lines, [string]$Section, [string]$Field) {
     return $null
 }
 
+function Test-GitRepository([string]$GitCommand, [string]$Path) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5 converts expected native stderr into an error
+        # record. A non-repository is a normal probe result, so use the native
+        # exit code rather than allowing that record to terminate the packet.
+        $ErrorActionPreference = 'SilentlyContinue'
+        $probeOutput = @(
+            & $GitCommand -C $Path rev-parse --is-inside-work-tree 2>$null
+        )
+        $probeExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return $probeExitCode -eq 0 -and
+        (($probeOutput -join "`n").Trim() -eq 'true')
+}
+
 $packet = [System.Collections.Generic.List[string]]::new()
 $packet.Add('# PPS Resume Packet')
 $packet.Add('')
@@ -131,7 +149,7 @@ if (Test-Path -LiteralPath $assetChecker -PathType Leaf) {
 $packet.Add('')
 $packet.Add('## Repository Risk')
 $git = Get-Command git -ErrorAction SilentlyContinue
-if ($null -ne $git -and (& $git.Source -C $rootFull rev-parse --is-inside-work-tree 2>$null) -eq 'true') {
+if ($null -ne $git -and (Test-GitRepository $git.Source $rootFull)) {
     $branch = ((& $git.Source -C $rootFull branch --show-current 2>$null) | Out-String).Trim()
     if ([string]::IsNullOrWhiteSpace($branch)) { $branch = 'detached' }
     $firstChange = ((& $git.Source -C $rootFull status --porcelain --untracked-files=normal 2>$null | Select-Object -First 1) | Out-String).Trim()
