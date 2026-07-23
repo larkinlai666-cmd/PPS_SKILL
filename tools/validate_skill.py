@@ -29,27 +29,40 @@ required = [
     "SKILL.md",
     "agents/openai.yaml",
     "assets/templates/AGENTS.md",
+    "assets/templates/ASSETS.md",
     "assets/templates/CONTEXT.md",
     "assets/templates/CURRENT_REVIEW_EVIDENCE.md",
     "assets/templates/DECISIONS.md",
     "assets/templates/MAIN.md",
+    "assets/templates/ENVIRONMENT.md",
+    "assets/templates/PROJECT_MAP.md",
     "assets/templates/PROJECT_README.md",
     "assets/templates/PROJECT_STATE.md",
     "assets/templates/SOURCE_INDEX.md",
     "assets/templates/gitattributes.template",
     "assets/templates/gitignore.template",
     "references/design-rationale.md",
+    "references/environment-bootstrap.md",
     "references/asset-management.md",
     "references/git-sync.md",
     "references/migration.md",
     "references/protocol.md",
+    "references/project-modes.md",
     "references/retrieval-and-gates.md",
     "scripts/audit_legacy_project.ps1",
     "scripts/audit_legacy_project.sh",
+    "scripts/asset_check.ps1",
+    "scripts/asset_check.sh",
     "scripts/init_project.ps1",
     "scripts/init_project.sh",
+    "scripts/environment_doctor.ps1",
+    "scripts/environment_doctor.sh",
     "scripts/pre-commit",
     "scripts/pre-commit.ps1",
+    "scripts/readiness_check.ps1",
+    "scripts/readiness_check.sh",
+    "scripts/resume_packet.ps1",
+    "scripts/resume_packet.sh",
     "scripts/status_check.ps1",
     "scripts/status_check.sh",
     "scripts/validate_project.ps1",
@@ -88,10 +101,14 @@ else:
     if fields.get("name") != "pps-skill":
         error("SKILL.md name must be pps-skill.")
     description = fields.get("description", "")
-    if len(description) < 80 or "方案型项目" not in description:
-        error("SKILL.md description must explain capability and Chinese trigger context.")
+    if len(description) < 80 or "个人项目状态管理" not in description:
+        error("SKILL.md description must explain universal personal-project capability and Chinese trigger context.")
     for trigger in (
         "发起项目",
+        "个人项目状态管理",
+        "轻量网页开发",
+        "小游戏开发",
+        "大型代码库继续开发",
         "跨设备同步项目",
         "多端推进同一任务",
         "换设备继续",
@@ -104,6 +121,7 @@ else:
         "clone并继续",
         "从GitHub接入并继续",
         "跨agent协作",
+        "大文件素材同步",
         "这个定了",
     ):
         if trigger not in description:

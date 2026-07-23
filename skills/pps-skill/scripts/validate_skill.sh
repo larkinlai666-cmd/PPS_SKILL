@@ -24,10 +24,13 @@ required=(
   SKILL.md
   agents/openai.yaml
   assets/templates/AGENTS.md
+  assets/templates/ASSETS.md
   assets/templates/CONTEXT.md
   assets/templates/CURRENT_REVIEW_EVIDENCE.md
   assets/templates/DECISIONS.md
   assets/templates/MAIN.md
+  assets/templates/ENVIRONMENT.md
+  assets/templates/PROJECT_MAP.md
   assets/templates/PROJECT_README.md
   assets/templates/PROJECT_STATE.md
   assets/templates/SOURCE_INDEX.md
@@ -35,16 +38,26 @@ required=(
   assets/templates/gitignore.template
   references/asset-management.md
   references/design-rationale.md
+  references/environment-bootstrap.md
   references/git-sync.md
   references/migration.md
   references/protocol.md
+  references/project-modes.md
   references/retrieval-and-gates.md
   scripts/audit_legacy_project.ps1
   scripts/audit_legacy_project.sh
+  scripts/asset_check.ps1
+  scripts/asset_check.sh
   scripts/init_project.ps1
   scripts/init_project.sh
+  scripts/environment_doctor.ps1
+  scripts/environment_doctor.sh
   scripts/pre-commit
   scripts/pre-commit.ps1
+  scripts/readiness_check.ps1
+  scripts/readiness_check.sh
+  scripts/resume_packet.ps1
+  scripts/resume_packet.sh
   scripts/status_check.ps1
   scripts/status_check.sh
   scripts/validate_project.ps1
@@ -77,8 +90,9 @@ for script in "$skill_root/scripts/"*.sh "$skill_root/scripts/pre-commit"; do
 done
 
 for token in \
-  '{{PROJECT_NAME}}' '{{PROFILE}}' '{{TIMESTAMP}}' '{{DATE}}' \
-  '{{DEVICE}}' '{{MAIN_ARTIFACT}}' '{{COVERAGE_ARTIFACT}}'; do
+  '{{PROJECT_NAME}}' '{{PROFILE}}' '{{MODE}}' '{{TIMESTAMP}}' '{{DATE}}' \
+  '{{DEVICE}}' '{{MAIN_ARTIFACT}}' '{{COVERAGE_ARTIFACT}}' \
+  '{{READ_SET}}' '{{WRITE_SET}}' '{{OPTIONAL_TOOLS}}'; do
   if ! grep -RqsF "$token" "$skill_root/assets/templates"; then
     add_error "Templates are missing required token: $token"
   fi

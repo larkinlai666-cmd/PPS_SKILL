@@ -43,18 +43,45 @@ try {
         }
     }
 
+    function Export-StagedAnchor([string]$RelativePath) {
+        if ([string]::IsNullOrWhiteSpace($RelativePath) -or $RelativePath -eq '.') {
+            return
+        }
+        if (Test-Path -LiteralPath (Join-Path $snapshot $RelativePath)) {
+            return
+        }
+        $objectType = ((& $git.Source -C $topLevel cat-file -t ":$RelativePath" 2>$null) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($objectType)) {
+            return
+        }
+        if ($objectType -eq 'tree') {
+            New-Item -ItemType Directory -Path (Join-Path $snapshot $RelativePath) -Force | Out-Null
+        } else {
+            Export-StagedPath $RelativePath
+        }
+    }
+
     foreach ($relative in @(
         'README.md',
         'AGENTS.md',
         'PROJECT_STATE.md',
         'DECISIONS.md',
         'CONTEXT.md',
+        'PROJECT_MAP.md',
+        'ENVIRONMENT.md',
+        'ASSETS.md',
         'SOURCE_INDEX.md',
         'docs/CURRENT_REVIEW_EVIDENCE.md',
+        'scripts/asset_check.ps1',
+        'scripts/asset_check.sh',
         'scripts/status_check.ps1',
         'scripts/status_check.sh',
         'scripts/validate_project.ps1',
-        'scripts/validate_project.sh'
+        'scripts/validate_project.sh',
+        'scripts/environment_doctor.ps1',
+        'scripts/environment_doctor.sh',
+        'scripts/resume_packet.ps1',
+        'scripts/resume_packet.sh'
     )) {
         Export-StagedPath $relative
     }
@@ -71,7 +98,7 @@ try {
         )
         if ($hotStateMatch.Success) {
             $hotState = $hotStateMatch.Groups['body'].Value
-            foreach ($name in @('Main', 'Capsule', 'Coverage')) {
+            foreach ($name in @('Main', 'Map', 'Environment', 'Capsule', 'Coverage')) {
                 $fieldMatch = [regex]::Match(
                     $hotState,
                     '(?m)^-\s+' + [regex]::Escape($name) + ':\s*(.*?)\s*$'
@@ -84,7 +111,49 @@ try {
                     $relative -match '(^|/)\.\.(/|$)') {
                     continue
                 }
-                Export-StagedPath $relative
+                Export-StagedAnchor $relative
+            }
+        }
+    }
+
+    $contextPath = Join-Path $snapshot 'CONTEXT.md'
+    if (Test-Path -LiteralPath $contextPath -PathType Leaf) {
+        $contextText = [System.IO.File]::ReadAllText($contextPath, [System.Text.Encoding]::UTF8)
+        $worksetMatch = [regex]::Match(
+            $contextText,
+            '(?ms)^##\s+Workset Manifest\s*\r?\n(?<body>.*?)(?=^##\s+|\z)'
+        )
+        if ($worksetMatch.Success) {
+            $workset = $worksetMatch.Groups['body'].Value
+            $readMatch = [regex]::Match($workset, '(?m)^-\s+Read:\s*(.*?)\s*$')
+            if ($readMatch.Success -and $readMatch.Groups[1].Value.Trim() -ne 'none') {
+                foreach ($relative in @($readMatch.Groups[1].Value.Split(',') | ForEach-Object { $_.Trim() })) {
+                    if ([string]::IsNullOrWhiteSpace($relative) -or
+                        [System.IO.Path]::IsPathRooted($relative) -or
+                        $relative.Contains('\') -or
+                        $relative -match '(^|/)\.\.(/|$)') {
+                        continue
+                    }
+                    Export-StagedAnchor $relative
+                }
+            }
+            $mapPath = Join-Path $snapshot 'PROJECT_MAP.md'
+            if (Test-Path -LiteralPath $mapPath -PathType Leaf) {
+                $mapText = [System.IO.File]::ReadAllText($mapPath, [System.Text.Encoding]::UTF8)
+                $mapRows = [regex]::Matches(
+                    $mapText,
+                    '(?m)^\|\s*C-[^|]+\|\s*(?<root>[^|]*?)\s*\|'
+                )
+                foreach ($row in $mapRows) {
+                    $relative = $row.Groups['root'].Value.Trim()
+                    if ([string]::IsNullOrWhiteSpace($relative) -or
+                        [System.IO.Path]::IsPathRooted($relative) -or
+                        $relative.Contains('\') -or
+                        $relative -match '(^|/)\.\.(/|$)') {
+                        continue
+                    }
+                    Export-StagedAnchor $relative
+                }
             }
         }
     }
@@ -120,7 +189,7 @@ try {
 $staged = @(& $git.Source -C $topLevel diff --cached --name-only)
 $contentChanged = @(
     $staged | Where-Object {
-        $_ -match '^(docs/|assets/|prototypes/|README\.md$|AGENTS\.md$|DECISIONS\.md$|CONTEXT\.md$|SOURCE_INDEX\.md$)'
+        $_ -match '^(docs/|assets/|prototypes/|README\.md$|AGENTS\.md$|DECISIONS\.md$|CONTEXT\.md$|PROJECT_MAP\.md$|ENVIRONMENT\.md$|ASSETS\.md$|SOURCE_INDEX\.md$)'
     }
 ).Count -gt 0
 $stateChanged = $staged -contains 'PROJECT_STATE.md'

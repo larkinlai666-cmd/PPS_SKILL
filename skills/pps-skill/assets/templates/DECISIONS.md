@@ -12,15 +12,15 @@
 ### M-001 [active]
 
 - Summary: Use globally stable authority IDs and retrieve the active package by its explicit workset manifest.
-- Source: PPS/1.0 bootstrap.
+- Source: PPS/1.1 bootstrap.
 - Scope: Entire project.
 - Supersedes: none.
 - Affects: State, context recovery, decisions, review packages.
 
 ### M-002 [active]
 
-- Summary: A package cannot close until its main artifact, authority records, current capsule, hot state, and constraint coverage agree and validation passes.
-- Source: PPS/1.0 bootstrap.
+- Summary: A package cannot close until its changed artifacts, authority records, current capsule, hot state, workset, and coverage agree and declared verification passes.
+- Source: PPS/1.1 bootstrap.
 - Scope: Every package close.
 - Supersedes: none.
 - Affects: Review, approval, handoff, finalization.

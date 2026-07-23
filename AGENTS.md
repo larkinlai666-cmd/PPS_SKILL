@@ -9,7 +9,7 @@ The distributable skill lives only in `skills/pps-skill/`. Repository-level file
 3. Keep repository governance files outside the skill directory.
 4. Treat PowerShell and Bash behavior as one compatibility surface.
 5. Add a negative test when fixing a validation omission.
-6. Run `python tools/validate_skill.py` and the applicable smoke tests.
+6. Run `python3 tools/validate_skill.py` on macOS/Linux (`python` on Windows) and the applicable smoke tests.
 
 ## Protocol compatibility
 

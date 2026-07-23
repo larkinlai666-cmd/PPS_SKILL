@@ -2,10 +2,13 @@
 
 ## Hot State
 
-- Protocol: PPS/1.0
+- Protocol: PPS/1.1
 - Profile: {{PROFILE}}
+- Mode: {{MODE}}
 - Stage: 0 / bootstrap
 - Main: {{MAIN_ARTIFACT}}
+- Map: PROJECT_MAP.md
+- Environment: ENVIRONMENT.md
 - Package: PKG-001
 - Status: active
 - Capsule: CONTEXT.md
@@ -17,11 +20,11 @@
 
 ## Objective
 
-Produce and approve the current main artifact. Replace this paragraph with the concrete outcome and acceptance condition.
+Produce the current project outcome and satisfy its acceptance condition. Replace this paragraph with the concrete result.
 
 ## Scope
 
-- In scope: define the first real deliverable.
+- In scope: define the first real end-to-end deliverable.
 - Out of scope: tooling expansion not required by the deliverable.
 
 ## Milestones
@@ -33,4 +36,4 @@ Produce and approve the current main artifact. Replace this paragraph with the c
 
 ## Resume Note
 
-Start with `scripts/status_check.*`, then follow the exact IDs in `CONTEXT.md`.
+Start with `scripts/resume_packet.*`, then follow only the exact authority, component, asset IDs, and paths in `CONTEXT.md`. Git history and required asset materialization are separate readiness states.

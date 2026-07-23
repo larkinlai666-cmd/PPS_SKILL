@@ -2,6 +2,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$ProjectName,
+    [ValidateSet('document', 'software', 'hybrid')]
+    [string]$Mode = 'document',
     [ValidateSet('standard', 'evidence')]
     [string]$Profile = 'standard',
     [string]$ParentDir,
@@ -77,7 +79,26 @@ $timestamp = $now.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $date = $now.ToString("yyyy-MM-dd")
 $device = $env:COMPUTERNAME
 if ([string]::IsNullOrWhiteSpace($device)) { $device = 'unknown-device' }
-$mainArtifact = 'docs/MAIN.md'
+switch ($Mode) {
+    'document' {
+        $mainArtifact = 'docs/MAIN.md'
+        $readSet = 'PROJECT_STATE.md,CONTEXT.md,docs/MAIN.md'
+        $writeSet = 'PROJECT_STATE.md,CONTEXT.md,docs/MAIN.md'
+        $optionalTools = 'gh,pandoc,imagemagick'
+    }
+    'software' {
+        $mainArtifact = '.'
+        $readSet = 'PROJECT_STATE.md,CONTEXT.md,PROJECT_MAP.md'
+        $writeSet = 'PROJECT_STATE.md,CONTEXT.md,PROJECT_MAP.md'
+        $optionalTools = 'gh,rg,node,python'
+    }
+    'hybrid' {
+        $mainArtifact = '.'
+        $readSet = 'PROJECT_STATE.md,CONTEXT.md,PROJECT_MAP.md,docs/MAIN.md'
+        $writeSet = 'PROJECT_STATE.md,CONTEXT.md,PROJECT_MAP.md,docs/MAIN.md'
+        $optionalTools = 'gh,rg,node,python,pandoc,imagemagick'
+    }
+}
 $coverageArtifact = if ($Profile -eq 'evidence') {
     'docs/CURRENT_REVIEW_EVIDENCE.md'
 } else {
@@ -87,11 +108,15 @@ $coverageArtifact = if ($Profile -eq 'evidence') {
 $replacements = @{
     '{{PROJECT_NAME}}' = $ProjectName
     '{{PROFILE}}' = $Profile
+    '{{MODE}}' = $Mode
     '{{TIMESTAMP}}' = $timestamp
     '{{DATE}}' = $date
     '{{DEVICE}}' = $device
     '{{MAIN_ARTIFACT}}' = $mainArtifact
     '{{COVERAGE_ARTIFACT}}' = $coverageArtifact
+    '{{READ_SET}}' = $readSet
+    '{{WRITE_SET}}' = $writeSet
+    '{{OPTIONAL_TOOLS}}' = $optionalTools
 }
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
@@ -109,7 +134,11 @@ Render-Template 'AGENTS.md' (Join-Path $target 'AGENTS.md')
 Render-Template 'PROJECT_STATE.md' (Join-Path $target 'PROJECT_STATE.md')
 Render-Template 'DECISIONS.md' (Join-Path $target 'DECISIONS.md')
 Render-Template 'CONTEXT.md' (Join-Path $target 'CONTEXT.md')
-Render-Template 'MAIN.md' (Join-Path $docsDir 'MAIN.md')
+Render-Template 'PROJECT_MAP.md' (Join-Path $target 'PROJECT_MAP.md')
+Render-Template 'ENVIRONMENT.md' (Join-Path $target 'ENVIRONMENT.md')
+if ($Mode -ne 'software') {
+    Render-Template 'MAIN.md' (Join-Path $docsDir 'MAIN.md')
+}
 Render-Template 'gitignore.template' (Join-Path $target '.gitignore')
 Render-Template 'gitattributes.template' (Join-Path $target '.gitattributes')
 
@@ -123,6 +152,14 @@ foreach ($scriptName in @(
     'status_check.sh',
     'validate_project.ps1',
     'validate_project.sh',
+    'environment_doctor.ps1',
+    'environment_doctor.sh',
+    'resume_packet.ps1',
+    'resume_packet.sh',
+    'asset_check.ps1',
+    'asset_check.sh',
+    'readiness_check.ps1',
+    'readiness_check.sh',
     'pre-commit',
     'pre-commit.ps1'
 )) {
@@ -189,6 +226,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "PPS project initialized: $target"
+Write-Host "Mode: $Mode"
 Write-Host "Profile: $Profile"
 $branch = if ($NoGit -or $null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
     'not initialized'

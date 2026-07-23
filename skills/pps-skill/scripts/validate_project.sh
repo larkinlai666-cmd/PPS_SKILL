@@ -196,6 +196,99 @@ manifest_ids() {
   result="$ids"
 }
 
+path_manifest() {
+  local value="$1"
+  local label="$2"
+  local must_exist="$3"
+  local trimmed
+  local lowered
+  local duplicate
+  local resolved_paths=""
+  local resolved_path
+  trimmed="$(printf '%s' "$value" |
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  lowered="$(printf '%s' "$trimmed" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
+    none|'')
+      result=""
+      return
+      ;;
+  esac
+  if [[ "$trimmed" == *",,"* || "$trimmed" == ,* || "$trimmed" == *, ]]; then
+    add_error "$label must be 'none' or a comma-separated list of project-relative paths: $value"
+    result=""
+    return
+  fi
+  while IFS= read -r rel; do
+    rel="$(printf '%s' "$rel" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [[ -z "$rel" ]]; then
+      add_error "$label contains an empty path entry."
+      continue
+    fi
+    if [[ "$rel" == "." || "$rel" == *[\*\?\[\]\{\}]* ]]; then
+      add_error "$label path must name an exact file or bounded subdirectory, not '.' or a glob: $rel"
+      continue
+    fi
+    if (( ${#rel} > 240 )); then
+      add_error "$label path exceeds the 240-character limit: $rel"
+      continue
+    fi
+    safe_project_path "$rel" "$label path"
+    resolved_path="$result"
+    if [[ -n "$resolved_path" ]]; then
+      if [[ "$must_exist" == "yes" && ! -e "$resolved_path" ]]; then
+        add_error "$label path does not exist: $rel"
+      fi
+      resolved_paths="${resolved_paths}${rel}"$'\n'
+    fi
+  done < <(printf '%s\n' "$trimmed" | tr ',' '\n')
+  duplicate="$(printf '%s' "$resolved_paths" | sed '/^$/d' | sort | uniq -d)"
+  if [[ -n "$duplicate" ]]; then
+    add_error "$label contains duplicate paths: $(printf '%s' "$duplicate" | tr '\n' ' ')"
+  fi
+  result="$(printf '%s' "$resolved_paths" | sed '/^$/d')"
+}
+
+tool_manifest() {
+  local value="$1"
+  local label="$2"
+  local trimmed
+  local lowered
+  local tools=""
+  local duplicate
+  trimmed="$(printf '%s' "$value" |
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  lowered="$(printf '%s' "$trimmed" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
+    none|'')
+      result=""
+      return
+      ;;
+  esac
+  if [[ "$trimmed" == ,* || "$trimmed" == *, ||
+      "$trimmed" =~ ,[[:space:]]*, ]]; then
+    add_error "$label contains an empty tool entry."
+    result=""
+    return
+  fi
+  while IFS= read -r tool; do
+    tool="$(printf '%s' "$tool" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$tool" in
+      git|gh|rg|node|python|powershell|imagemagick|ffmpeg|pandoc|libreoffice|poppler|rclone)
+        tools="${tools}${tool}"$'\n'
+        ;;
+      *)
+        add_error "$label contains unsupported tool '$tool'."
+        ;;
+    esac
+  done < <(printf '%s\n' "$trimmed" | tr ',' '\n')
+  duplicate="$(printf '%s' "$tools" | sed '/^$/d' | sort | uniq -d)"
+  if [[ -n "$duplicate" ]]; then
+    add_error "$label contains duplicate tools: $(printf '%s' "$duplicate" | tr '\n' ' ')"
+  fi
+  result="$(printf '%s' "$tools" | sed '/^$/d')"
+}
+
 required=(
   README.md
   AGENTS.md
@@ -219,6 +312,12 @@ if [[ ! -f "$state" || ! -f "$decisions" || ! -f "$context" ]]; then
   for message in "${errors[@]}"; do echo "ERROR: $message"; done
   exit 1
 fi
+state_bytes="$(wc -c < "$state" | tr -d ' ')"
+context_bytes="$(wc -c < "$context" | tr -d ' ')"
+(( state_bytes <= 32768 )) ||
+  add_error "PROJECT_STATE.md has $state_bytes bytes; hard limit is 32768."
+(( context_bytes <= 32768 )) ||
+  add_error "CONTEXT.md has $context_bytes bytes; hard limit is 32768."
 
 require_single_section "$state" "Hot State"; hot_state="$result"
 require_section_field "$hot_state" "$state" "Hot State" Protocol; protocol="$result"
@@ -235,9 +334,26 @@ require_section_field "$hot_state" "$state" "Hot State" Updated; updated="$resul
 device_value="$(printf '%s\n' "$hot_state" |
   sed -n 's/^-[[:space:]]*Device:[[:space:]]*//p' | head -n 1)"
 
-[[ "$protocol" == "PPS/1.0" ]] || add_error "Protocol must be PPS/1.0, found '$protocol'."
+[[ "$protocol" == "PPS/1.0" || "$protocol" == "PPS/1.1" ]] ||
+  add_error "Protocol must be PPS/1.0 or PPS/1.1, found '$protocol'."
 [[ "$profile" == "standard" || "$profile" == "evidence" ]] ||
   add_error "Profile must be standard or evidence, found '$profile'."
+
+mode=""
+map_rel=""
+environment_rel=""
+if [[ "$protocol" == "PPS/1.1" ]]; then
+  require_section_field "$hot_state" "$state" "Hot State" Mode; mode="$result"
+  require_section_field "$hot_state" "$state" "Hot State" Map; map_rel="$result"
+  require_section_field "$hot_state" "$state" "Hot State" Environment; environment_rel="$result"
+  [[ "$mode" == "document" || "$mode" == "software" || "$mode" == "hybrid" ]] ||
+    add_error "Mode must be document, software, or hybrid, found '$mode'."
+  for rel in \
+    scripts/environment_doctor.ps1 scripts/environment_doctor.sh \
+    scripts/resume_packet.ps1 scripts/resume_packet.sh; do
+    [[ -f "$root/$rel" ]] || add_error "PPS/1.1 is missing required file: $rel"
+  done
+fi
 case "$status" in
   active|review_pending|blocked|complete) ;;
   *) add_error "Unsupported Status '$status'." ;;
@@ -256,11 +372,15 @@ valid_utc_timestamp "$updated" ||
 safe_project_path "$main_rel" Main; main_path="$result"
 safe_project_path "$capsule_rel" Capsule; capsule_path="$result"
 safe_project_path "$coverage_rel" Coverage; coverage_path="$result"
-[[ -n "$main_path" && -f "$main_path" ]] || add_error "Main file does not exist: $main_rel"
+if [[ "$protocol" == "PPS/1.1" && "$mode" != "document" ]]; then
+  [[ -n "$main_path" && -e "$main_path" ]] || add_error "Main path does not exist: $main_rel"
+else
+  [[ -n "$main_path" && -f "$main_path" ]] || add_error "Main file does not exist: $main_rel"
+fi
 [[ -n "$capsule_path" && -f "$capsule_path" ]] || add_error "Capsule file does not exist: $capsule_rel"
 [[ -n "$coverage_path" && -f "$coverage_path" ]] || add_error "Coverage file does not exist: $coverage_rel"
 
-[[ "$capsule_rel" == "CONTEXT.md" ]] || add_error "PPS/1.0 requires Capsule: CONTEXT.md."
+[[ "$capsule_rel" == "CONTEXT.md" ]] || add_error "$protocol requires Capsule: CONTEXT.md."
 if [[ "$profile" == "standard" ]]; then
   [[ "$coverage_rel" == "CONTEXT.md" ]] ||
     add_error "The standard profile requires Coverage: CONTEXT.md."
@@ -291,6 +411,18 @@ require_section_field "$workset" "$context" "Workset Manifest" Methods; methods_
 require_section_field "$workset" "$context" "Workset Manifest" Facts; facts_value="$result"
 require_section_field "$workset" "$context" "Workset Manifest" Decisions; decisions_value="$result"
 require_section_field "$workset" "$context" "Workset Manifest" Sources; sources_value="$result"
+assets_field_count="$(printf '%s\n' "$workset" | grep -Ec '^-[[:space:]]*Assets:[[:space:]]*' || true)"
+if [[ "$assets_field_count" == "0" ]]; then
+  assets_value="none"
+  if [[ "$protocol" == "PPS/1.1" ]]; then
+    add_warning "Workset Manifest has no Assets field; treating it as 'none' for PPS/1.1 compatibility."
+  fi
+elif [[ "$assets_field_count" == "1" ]]; then
+  require_section_field "$workset" "$context" "Workset Manifest" Assets; assets_value="$result"
+else
+  add_error "Expected at most one 'Assets' field in 'Workset Manifest', found $assets_field_count."
+  assets_value="none"
+fi
 require_section_field "$workset" "$context" "Workset Manifest" Excluded; excluded_value="$result"
 require_section_field "$workset" "$context" "Workset Manifest" Coverage; manifest_coverage="$result"
 require_single_section "$context" "Current Package"; current_package="$result"
@@ -300,13 +432,164 @@ manifest_ids "$methods_value" M Methods; methods="$result"
 manifest_ids "$facts_value" F Facts; facts="$result"
 manifest_ids "$decisions_value" D Decisions; decision_ids="$result"
 manifest_ids "$sources_value" SRC Sources; source_ids="$result"
+manifest_ids "$assets_value" A Assets; asset_ids="$result"
 required_ids="$(printf '%s\n%s\n%s\n' "$methods" "$facts" "$decision_ids" | sed '/^$/d' | awk '!seen[$0]++')"
+
+components=""
+read_paths=""
+write_paths=""
+if [[ "$protocol" == "PPS/1.1" ]]; then
+  require_section_field "$workset" "$context" "Workset Manifest" Components; components_value="$result"
+  require_section_field "$workset" "$context" "Workset Manifest" Read; read_value="$result"
+  require_section_field "$workset" "$context" "Workset Manifest" Write; write_value="$result"
+  require_section_field "$workset" "$context" "Workset Manifest" Verify; verify_value="$result"
+  manifest_ids "$components_value" C Components; components="$result"
+  path_manifest "$read_value" Read yes; read_paths="$result"
+  path_manifest "$write_value" Write no; write_paths="$result"
+  [[ -n "$components" ]] || add_error "Components cannot be empty; name at least one C-* boundary."
+  [[ -n "$read_paths" ]] || add_error "Read cannot be empty; declare the bounded input paths."
+  [[ -n "$write_paths" ]] || add_error "Write cannot be empty; declare the bounded output paths."
+  [[ -n "$verify_value" && "$verify_value" != "none" ]] ||
+    add_error "Verify cannot be empty or 'none'."
+  component_count="$(printf '%s\n' "$components" | sed '/^$/d' | wc -l | tr -d ' ')"
+  authority_count="$(printf '%s\n%s\n%s\n' "$methods" "$facts" "$decision_ids" |
+    sed '/^$/d' | wc -l | tr -d ' ')"
+  source_id_count="$(printf '%s\n' "$source_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+  asset_id_count="$(printf '%s\n' "$asset_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+  path_count="$(printf '%s\n%s\n' "$read_paths" "$write_paths" | sed '/^$/d' | wc -l | tr -d ' ')"
+  (( component_count <= 30 )) ||
+    add_error "Components contains $component_count IDs; hard limit is 30."
+  (( authority_count <= 60 )) ||
+    add_error "Methods, Facts, and Decisions contain $authority_count IDs; hard limit is 60."
+  (( source_id_count <= 30 )) ||
+    add_error "Sources contains $source_id_count IDs; hard limit is 30."
+  (( asset_id_count <= 30 )) ||
+    add_error "Assets contains $asset_id_count IDs; hard limit is 30."
+  if (( path_count > 30 )); then
+    add_error "Read and Write contain $path_count paths; hard limit is 30."
+  elif (( path_count > 12 )); then
+    add_warning "Read and Write contain $path_count paths; compact target is 12."
+  fi
+fi
+
+if [[ -n "$asset_ids" || -f "$root/ASSETS.md" ]]; then
+  [[ -f "$root/ASSETS.md" ]] || add_error "Workset lists assets but ASSETS.md is missing."
+  [[ -f "$root/scripts/asset_check.sh" ]] ||
+    add_error "Asset registry requires scripts/asset_check.sh."
+  [[ -f "$root/scripts/asset_check.ps1" ]] ||
+    add_error "Asset registry requires scripts/asset_check.ps1."
+  if [[ -f "$root/ASSETS.md" && -f "$root/scripts/asset_check.sh" ]]; then
+    asset_structure_output=""
+    if ! asset_structure_output="$(bash "$root/scripts/asset_check.sh" "$root" --structure 2>&1)"; then
+      while IFS= read -r message; do
+        [[ "$message" == ERROR:* ]] &&
+          add_error "Asset registry: ${message#ERROR: }"
+      done <<< "$asset_structure_output"
+      [[ "$asset_structure_output" == *"ERROR:"* ]] ||
+        add_error "Asset registry structural validation failed."
+    fi
+  fi
+fi
 
 [[ "$manifest_coverage" == "$coverage_rel" ]] ||
   add_error "CONTEXT Coverage '$manifest_coverage' does not match PROJECT_STATE Coverage '$coverage_rel'."
 [[ "$context_package" == "$package" ]] ||
   add_error "CONTEXT package '$context_package' does not match PROJECT_STATE Package '$package'."
 [[ -n "$excluded_value" ]] || add_error "Excluded cannot be empty; use 'none' when nothing is excluded."
+
+if [[ "$protocol" == "PPS/1.1" ]]; then
+  safe_project_path "$map_rel" Map; map_path="$result"
+  safe_project_path "$environment_rel" Environment; environment_path="$result"
+  [[ -n "$map_path" && -f "$map_path" ]] || add_error "Project map file does not exist: $map_rel"
+  [[ -n "$environment_path" && -f "$environment_path" ]] ||
+    add_error "Environment manifest does not exist: $environment_rel"
+
+  if [[ -n "$map_path" && -f "$map_path" ]]; then
+    map_bytes="$(wc -c < "$map_path" | tr -d ' ')"
+    (( map_bytes <= 65536 )) ||
+      add_error "$map_rel has $map_bytes bytes; hard limit is 65536."
+    map_lines="$(wc -l < "$map_path" | tr -d ' ')"
+    if (( map_lines > 240 )); then
+      add_error "$map_rel has $map_lines lines; hard limit is 240."
+    elif (( map_lines > 160 )); then
+      add_warning "$map_rel has $map_lines lines; compact target is 160."
+    fi
+    while IFS=: read -r line_number component_line; do
+      [[ -n "$line_number" ]] || continue
+      if ! printf '%s\n' "$component_line" |
+          grep -Eq '^\|[[:space:]]*C-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?[[:space:]]*\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|[[:space:]]*$' ||
+          ! printf '%s\n' "$component_line" | awk -F'|' '
+            function trim(value) {
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+              return value
+            }
+            { exit !(NF == 7 && trim($3) != "" && trim($4) != "" && trim($5) != "" && trim($6) != "") }
+          '; then
+        add_error "Malformed component row in $map_rel at line $line_number: $component_line"
+      fi
+    done < <(grep -En '^\|[[:space:]]*C-' "$map_path" || true)
+    all_component_ids="$(grep -E '^\|[[:space:]]*C-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?[[:space:]]*\|' "$map_path" |
+      sed -E 's/^\|[[:space:]]*(C-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?)[[:space:]]*\|.*/\1/' || true)"
+    duplicate_component_ids="$(printf '%s\n' "$all_component_ids" | sed '/^$/d' | sort | uniq -d)"
+    while IFS= read -r id; do
+      [[ -z "$id" ]] && continue
+      matching_lines "$map_path" "^\\|[[:space:]]*${id}[[:space:]]*\\|"
+      add_error "$map_rel contains duplicate component rows for $id (lines $result)."
+    done <<< "$duplicate_component_ids"
+    while IFS=$'\t' read -r component_id component_root; do
+      [[ -n "$component_id" ]] || continue
+      safe_project_path "$component_root" "Component $component_id Root"; component_root_path="$result"
+      [[ -n "$component_root_path" && -e "$component_root_path" ]] ||
+        add_error "Component $component_id Root does not exist: $component_root"
+    done < <(awk -F'|' '
+      function trim(value) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        return value
+      }
+      /^\|[[:space:]]*C-/ && trim($2) ~ /^C-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$/ {
+        print trim($2) "\t" trim($3)
+      }
+    ' "$map_path")
+    while IFS= read -r id; do
+      [[ -z "$id" ]] && continue
+      component_row_count="$(grep -Ec "^\\|[[:space:]]*${id}[[:space:]]*\\|" "$map_path" || true)"
+      [[ "$component_row_count" == "1" ]] ||
+        add_error "Component ID $id must have exactly one row in $map_rel, found $component_row_count."
+    done <<< "$components"
+  fi
+
+  if [[ -n "$environment_path" && -f "$environment_path" ]]; then
+    environment_bytes="$(wc -c < "$environment_path" | tr -d ' ')"
+    (( environment_bytes <= 16384 )) ||
+      add_error "$environment_rel has $environment_bytes bytes; hard limit is 16384."
+    require_single_section "$environment_path" "Toolchain Manifest"; toolchain="$result"
+    require_section_field "$toolchain" "$environment_path" "Toolchain Manifest" Required; required_tools_value="$result"
+    require_section_field "$toolchain" "$environment_path" "Toolchain Manifest" Optional; optional_tools_value="$result"
+    dependency_field_count="$(printf '%s\n' "$toolchain" | grep -Ec '^-[[:space:]]*Dependency manifests:[[:space:]]*' || true)"
+    if [[ "$dependency_field_count" == "0" ]]; then
+      dependency_manifests_value="none"
+    elif [[ "$dependency_field_count" == "1" ]]; then
+      require_section_field "$toolchain" "$environment_path" "Toolchain Manifest" "Dependency manifests"; dependency_manifests_value="$result"
+    else
+      add_error "Expected at most one 'Dependency manifests' field in 'Toolchain Manifest', found $dependency_field_count."
+      dependency_manifests_value="none"
+    fi
+    require_section_field "$toolchain" "$environment_path" "Toolchain Manifest" "Package manager"; manager_value="$result"
+    require_section_field "$toolchain" "$environment_path" "Toolchain Manifest" "Install policy"; install_policy="$result"
+    tool_manifest "$required_tools_value" "Required tools"; required_tools="$result"
+    tool_manifest "$optional_tools_value" "Optional tools"; optional_tools="$result"
+    path_manifest "$dependency_manifests_value" "Dependency manifest" yes; dependency_manifests="$result"
+    [[ -n "$required_tools" ]] || add_error "Required tools cannot be empty; include at least git."
+    printf '%s\n' "$required_tools" | grep -Fxq git ||
+      add_error "Required tools must include git."
+    case "$manager_value" in
+      auto|brew|winget|apt|dnf|pacman|manual) ;;
+      *) add_error "Unsupported package manager policy '$manager_value'." ;;
+    esac
+    [[ "$install_policy" == "project-local-first" ]] ||
+      add_error "Install policy must be project-local-first."
+  fi
+fi
 
 if [[ "$profile" == "evidence" && -f "$root/docs/CURRENT_REVIEW_EVIDENCE.md" ]]; then
   evidence_file="$root/docs/CURRENT_REVIEW_EVIDENCE.md"
@@ -465,9 +748,13 @@ fi
 if [[ "$quiet" != "--quiet" ]]; then
   required_count="$(printf '%s\n' "$required_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
   source_count="$(printf '%s\n' "$source_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+  asset_count="$(printf '%s\n' "$asset_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
   echo "PPS validation: OK"
+  echo "Protocol: $protocol"
+  [[ -z "$mode" ]] || echo "Mode: $mode"
   echo "Profile: $profile"
   echo "Package: $package"
   echo "Required authority IDs: $required_count"
   echo "Required source IDs: $source_count"
+  echo "Required asset IDs: $asset_count"
 fi

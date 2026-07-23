@@ -23,12 +23,16 @@ function Get-FileStatus([string]$RelativePath) {
 function Get-ProjectFiles {
     $files = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     $pending = [System.Collections.Generic.Stack[System.IO.DirectoryInfo]]::new()
+    $ignoredDirectories = @(
+        '.git', 'node_modules', '.venv', 'venv', 'vendor',
+        'dist', 'build', '.next', 'coverage'
+    )
     $pending.Push((Get-Item -LiteralPath $rootFull -Force))
     while ($pending.Count -gt 0) {
         $directory = $pending.Pop()
         foreach ($item in @(Get-ChildItem -LiteralPath $directory.FullName -Force)) {
             if ($item.PSIsContainer) {
-                if ($item.Name -eq '.git' -or
+                if ($item.Name -in $ignoredDirectories -or
                     ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
                     continue
                 }
@@ -66,6 +70,7 @@ function Get-StateField([string]$Name) {
 
 $protocol = Get-StateField 'Protocol'
 $profile = Get-StateField 'Profile'
+$declaredMode = Get-StateField 'Mode'
 $mainArtifact = Get-StateField 'Main'
 
 $hasState = Test-RelativeFile 'PROJECT_STATE.md'
@@ -73,7 +78,7 @@ $hasDecisions = Test-RelativeFile 'DECISIONS.md'
 $hasContext = Test-RelativeFile 'CONTEXT.md'
 $hasAgents = Test-RelativeFile 'AGENTS.md'
 $hasPlanControl = $hasState -and $hasDecisions -and $hasAgents
-$hasPpsProtocol = $protocol -eq 'PPS/1.0' -and $hasPlanControl -and $hasContext
+$hasPpsProtocol = $protocol -in @('PPS/1.0', 'PPS/1.1') -and $hasPlanControl -and $hasContext
 
 $projectFiles = @(Get-ProjectFiles)
 $stateCandidateNames = @('STATE.md', 'CURRENT_STATE.md', 'WORKFLOW_STATE.md')
@@ -103,6 +108,66 @@ $recommendedProfile = if (
     'standard (provisional)'
 }
 
+$implementationCodeExtensions = @(
+    '.html', '.css', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx',
+    '.vue', '.svelte', '.py', '.rb', '.php', '.go', '.rs', '.java',
+    '.kt', '.swift', '.cs', '.c', '.cc', '.cpp', '.h', '.lua', '.sh', '.ps1'
+)
+$implementationCodeFiles = @(
+    $projectFiles | Where-Object {
+        -not $_.FullName.StartsWith(
+            (Join-Path $rootFull 'scripts') + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        ) -and $implementationCodeExtensions -contains $_.Extension.ToLowerInvariant()
+    }
+)
+$softwareSignalNames = @('package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod')
+$softwareSignals = @(
+    $projectFiles | Where-Object {
+        $softwareSignalNames -contains $_.Name -and
+        -not $_.FullName.StartsWith(
+            (Join-Path $rootFull 'scripts') + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    }
+)
+$documentSignals = @(
+    $projectFiles | Where-Object {
+        $_.Extension -eq '.md' -and
+        $_.FullName.StartsWith(
+            (Join-Path $rootFull 'docs') + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    }
+)
+$dependencyManifestNames = @(
+    'pyproject.toml', 'package-lock.json', 'pnpm-lock.yaml',
+    'yarn.lock', 'uv.lock', 'poetry.lock'
+)
+$dependencyManifests = @(
+    $projectFiles | Where-Object {
+        $dependencyManifestNames -contains $_.Name -or $_.Name -like 'requirements*.txt'
+    }
+)
+$binaryExtensions = @(
+    '.mp4', '.mov', '.mkv', '.gif', '.png', '.jpg', '.jpeg',
+    '.xlsx', '.docx', '.pptx', '.pdf', '.zip'
+)
+$binaryCandidates = @(
+    $projectFiles | Where-Object {
+        $binaryExtensions -contains $_.Extension.ToLowerInvariant()
+    }
+)
+$recommendedMode = if ($declaredMode -in @('document', 'software', 'hybrid')) {
+    "$declaredMode (declared)"
+} elseif ($implementationCodeFiles.Count -gt 0 -and $documentSignals.Count -gt 0) {
+    'hybrid'
+} elseif ($implementationCodeFiles.Count -gt 0 -or $softwareSignals.Count -gt 0) {
+    'software'
+} else {
+    'document'
+}
+
 $markdownFiles = @(
     $projectFiles | Where-Object { $_.Extension -eq '.md' }
 )
@@ -115,9 +180,54 @@ foreach ($file in $markdownFiles) {
     } catch {
         continue
     }
-    foreach ($match in [regex]::Matches($text, '[MFD]-[A-Za-z0-9][A-Za-z0-9_-]*')) {
+    foreach ($match in [regex]::Matches(
+        $text,
+        '(?<![A-Za-z0-9_])[MFD]-[0-9]+[a-z]*(?![A-Za-z0-9_-])'
+    )) {
         $null = $authorityIds.Add($match.Value)
     }
+}
+
+$decisionPath = Join-Path $rootFull 'DECISIONS.md'
+$decisionText = if (Test-Path -LiteralPath $decisionPath -PathType Leaf) {
+    [System.IO.File]::ReadAllText($decisionPath, [System.Text.Encoding]::UTF8)
+} else {
+    ''
+}
+$decisionSections = [regex]::Matches($decisionText, '(?m)^##\s+').Count
+$decisionBytes = if (Test-Path -LiteralPath $decisionPath -PathType Leaf) {
+    (Get-Item -LiteralPath $decisionPath).Length
+} else {
+    0
+}
+$canonicalRecordCount = [regex]::Matches(
+    $decisionText,
+    '(?m)^###\s+[MFD]-[0-9]+[a-z]*\s+\[(active|superseded|rejected|frozen)\]\s*$'
+).Count
+
+$controlText = [System.Text.StringBuilder]::new()
+foreach ($relative in @('README.md', 'AGENTS.md', 'PROJECT_STATE.md', 'DECISIONS.md')) {
+    $path = Join-Path $rootFull $relative
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        $null = $controlText.AppendLine(
+            [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+        )
+    }
+}
+$toolingTermHits = [regex]::Matches(
+    $controlText.ToString(),
+    '(?i)plan-project-sync|\bskill\b|github cli|gh cli|winget|workbuddy|powershell'
+).Count
+$machineSpecificHits = [regex]::Matches(
+    $controlText.ToString(),
+    '(?i)127\.0\.0\.1:[0-9]+|[A-Za-z]:\\|/Users/|/home/|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY'
+).Count
+$authorityReviewRisk = if ($authorityIds.Count -gt 100 -or $decisionBytes -gt 100000) {
+    'high'
+} elseif ($decisionSections -gt 0 -and $canonicalRecordCount -lt $decisionSections) {
+    'medium'
+} else {
+    'low'
 }
 
 $gitStatus = 'not detected'
@@ -140,6 +250,7 @@ Add-ReportLine "- Target: ``$rootFull``"
 Add-ReportLine "- Generated: ``$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))``"
 Add-ReportLine '- Audit mode: read-only'
 Add-ReportLine "- Detected system: ``$detected``"
+Add-ReportLine "- Recommended mode: ``$recommendedMode``"
 Add-ReportLine "- Recommended profile: ``$recommendedProfile``"
 Add-ReportLine
 Add-ReportLine '## Inventory'
@@ -155,20 +266,40 @@ Add-ReportLine "| CONTEXT.md | $(Get-FileStatus 'CONTEXT.md') |"
 Add-ReportLine "| SOURCE_INDEX.md | $(Get-FileStatus 'SOURCE_INDEX.md') |"
 Add-ReportLine "| Other state candidates | $($otherStateCandidates.Count) |"
 Add-ReportLine "| Markdown files | $($markdownFiles.Count) |"
-Add-ReportLine "| Unique M/F/D-shaped IDs | $($authorityIds.Count) |"
+Add-ReportLine "| Strict M/F/D IDs | $($authorityIds.Count) |"
+Add-ReportLine "| Free-form decision sections | $decisionSections |"
+Add-ReportLine "| Canonical PPS decision records | $canonicalRecordCount |"
+Add-ReportLine "| Implementation/prototype code files | $($implementationCodeFiles.Count) |"
 Add-ReportLine
 Add-ReportLine '## Existing declarations'
 Add-ReportLine
 Add-ReportLine "- Protocol: ``$(if ($protocol) { $protocol } else { 'not declared' })``"
 Add-ReportLine "- Profile: ``$(if ($profile) { $profile } else { 'not declared' })``"
+Add-ReportLine "- Mode: ``$(if ($declaredMode) { $declaredMode } else { 'not declared' })``"
 Add-ReportLine "- Main artifact: ``$(if ($mainArtifact) { $mainArtifact } else { 'not declared' })``"
+Add-ReportLine
+Add-ReportLine '## Migration review signals'
+Add-ReportLine
+Add-ReportLine '| Signal | Result |'
+Add-ReportLine '|---|---|'
+Add-ReportLine "| Authority canonicalization risk | $authorityReviewRisk |"
+Add-ReportLine "| Tooling/environment term hits in control files | $toolingTermHits |"
+Add-ReportLine "| Machine-specific path/proxy hits in control files | $machineSpecificHits |"
+Add-ReportLine "| CONTEXT workset | $(Get-FileStatus 'CONTEXT.md') |"
+Add-ReportLine "| PROJECT_MAP navigation | $(Get-FileStatus 'PROJECT_MAP.md') |"
+Add-ReportLine "| ENVIRONMENT contract | $(Get-FileStatus 'ENVIRONMENT.md') |"
+Add-ReportLine "| Dependency manifests detected | $($dependencyManifests.Count) |"
+Add-ReportLine "| Binary asset candidates | $($binaryCandidates.Count) |"
+Add-ReportLine "| External asset registry | $(Get-FileStatus 'ASSETS.md') |"
+Add-ReportLine
+Add-ReportLine 'These signals are migration triage only. Tooling terms, paths, and free-form sections require human classification before any M/F/D authority is activated.'
 Add-ReportLine
 Add-ReportLine '## Proposed migration'
 Add-ReportLine
 
 switch ($detected) {
     'pps' {
-        Add-ReportLine 'This repository already declares PPS/1.0 and has the core control files.'
+        Add-ReportLine 'This repository already declares a supported PPS protocol and has the core control files.'
         Add-ReportLine
         Add-ReportLine '1. Run the project-local validator.'
         Add-ReportLine '2. Resolve every reported mismatch without weakening validation.'

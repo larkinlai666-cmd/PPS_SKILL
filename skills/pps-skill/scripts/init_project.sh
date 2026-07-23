@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: init_project.sh <project-name> [--profile standard|evidence] [--parent DIR] [--git-name NAME --git-email EMAIL] [--install-hook] [--no-git]"
+  echo "Usage: init_project.sh <project-name> [--mode document|software|hybrid] [--profile standard|evidence] [--parent DIR] [--git-name NAME --git-email EMAIL] [--install-hook] [--no-git]"
 }
 
 if [[ $# -lt 1 ]]; then
@@ -13,6 +13,7 @@ fi
 project_name="$1"
 shift
 profile="standard"
+mode="document"
 parent="${PPS_PROJECT_HOME:-${PLAN_PROJECT_HOME:-$HOME/Projects}}"
 no_git=0
 install_hook=0
@@ -21,6 +22,14 @@ git_email=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --mode)
+      [[ $# -ge 2 ]] || {
+        usage >&2
+        exit 2
+      }
+      mode="$2"
+      shift 2
+      ;;
     --profile)
       [[ $# -ge 2 ]] || {
         usage >&2
@@ -108,6 +117,10 @@ esac
   echo "Profile must be standard or evidence." >&2
   exit 1
 }
+[[ "$mode" == "document" || "$mode" == "software" || "$mode" == "hybrid" ]] || {
+  echo "Mode must be document, software, or hybrid." >&2
+  exit 1
+}
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 skill_root="$(cd "$script_dir/.." && pwd -P)"
@@ -132,7 +145,26 @@ timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 date_value="$(date -u '+%Y-%m-%d')"
 device="$(hostname 2>/dev/null | tr -cd 'A-Za-z0-9._-' || true)"
 device="${device:-unknown-device}"
-main_artifact="docs/MAIN.md"
+case "$mode" in
+  document)
+    main_artifact="docs/MAIN.md"
+    read_set="PROJECT_STATE.md,CONTEXT.md,docs/MAIN.md"
+    write_set="PROJECT_STATE.md,CONTEXT.md,docs/MAIN.md"
+    optional_tools="gh,pandoc,imagemagick"
+    ;;
+  software)
+    main_artifact="."
+    read_set="PROJECT_STATE.md,CONTEXT.md,PROJECT_MAP.md"
+    write_set="PROJECT_STATE.md,CONTEXT.md,PROJECT_MAP.md"
+    optional_tools="gh,rg,node,python"
+    ;;
+  hybrid)
+    main_artifact="."
+    read_set="PROJECT_STATE.md,CONTEXT.md,PROJECT_MAP.md,docs/MAIN.md"
+    write_set="PROJECT_STATE.md,CONTEXT.md,PROJECT_MAP.md,docs/MAIN.md"
+    optional_tools="gh,rg,node,python,pandoc,imagemagick"
+    ;;
+esac
 if [[ "$profile" == "evidence" ]]; then
   coverage_artifact="docs/CURRENT_REVIEW_EVIDENCE.md"
 else
@@ -145,11 +177,15 @@ render() {
   sed \
     -e "s|{{PROJECT_NAME}}|$project_name|g" \
     -e "s|{{PROFILE}}|$profile|g" \
+    -e "s|{{MODE}}|$mode|g" \
     -e "s|{{TIMESTAMP}}|$timestamp|g" \
     -e "s|{{DATE}}|$date_value|g" \
     -e "s|{{DEVICE}}|$device|g" \
     -e "s|{{MAIN_ARTIFACT}}|$main_artifact|g" \
     -e "s|{{COVERAGE_ARTIFACT}}|$coverage_artifact|g" \
+    -e "s|{{READ_SET}}|$read_set|g" \
+    -e "s|{{WRITE_SET}}|$write_set|g" \
+    -e "s|{{OPTIONAL_TOOLS}}|$optional_tools|g" \
     "$template_root/$source" > "$destination"
 }
 
@@ -158,7 +194,11 @@ render AGENTS.md "$target/AGENTS.md"
 render PROJECT_STATE.md "$target/PROJECT_STATE.md"
 render DECISIONS.md "$target/DECISIONS.md"
 render CONTEXT.md "$target/CONTEXT.md"
-render MAIN.md "$target/docs/MAIN.md"
+render PROJECT_MAP.md "$target/PROJECT_MAP.md"
+render ENVIRONMENT.md "$target/ENVIRONMENT.md"
+if [[ "$mode" != "software" ]]; then
+  render MAIN.md "$target/docs/MAIN.md"
+fi
 render gitignore.template "$target/.gitignore"
 render gitattributes.template "$target/.gitattributes"
 
@@ -170,6 +210,10 @@ fi
 for script_name in \
   status_check.ps1 status_check.sh \
   validate_project.ps1 validate_project.sh \
+  environment_doctor.ps1 environment_doctor.sh \
+  resume_packet.ps1 resume_packet.sh \
+  asset_check.ps1 asset_check.sh \
+  readiness_check.ps1 readiness_check.sh \
   pre-commit pre-commit.ps1; do
   cp "$script_dir/$script_name" "$target/scripts/$script_name"
 done
@@ -206,6 +250,7 @@ fi
 
 bash "$target/scripts/validate_project.sh" "$target"
 echo "PPS project initialized: $target"
+echo "Mode: $mode"
 echo "Profile: $profile"
 echo "Branch: $(git -C "$target" branch --show-current 2>/dev/null || printf 'not initialized')"
 echo "Next: replace the bootstrap objective and prepare PKG-001."

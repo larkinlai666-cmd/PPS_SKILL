@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $fetchFailed = $false
+$assetFailed = $false
 $rootFull = [System.IO.Path]::GetFullPath($Root)
 $statePath = Join-Path $rootFull 'PROJECT_STATE.md'
 if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
@@ -33,7 +34,7 @@ function Get-StateField([string]$Name) {
 }
 
 foreach ($name in @(
-    'Protocol', 'Profile', 'Stage', 'Main', 'Package', 'Status',
+    'Protocol', 'Profile', 'Mode', 'Stage', 'Main', 'Map', 'Environment', 'Package', 'Status',
     'Capsule', 'Coverage', 'Blockers', 'Next', 'Updated', 'Device'
 )) {
     Write-Host "${name}: $(Get-StateField $name)"
@@ -94,19 +95,28 @@ if ($Full -and (Test-Path -LiteralPath $contextPath -PathType Leaf)) {
     Get-Content -LiteralPath $contextPath -Encoding UTF8
 }
 
+$engine = Get-Command pwsh -ErrorAction SilentlyContinue
+if ($null -eq $engine) {
+    $engine = Get-Command powershell -ErrorAction Stop
+}
+$assetChecker = Join-Path $rootFull 'scripts/asset_check.ps1'
+if (Test-Path -LiteralPath $assetChecker -PathType Leaf) {
+    Write-Host ''
+    Write-Host '=== Asset Readiness (quick) ==='
+    & $engine.Source -NoProfile -ExecutionPolicy Bypass -File `
+        $assetChecker -Root $rootFull -Quick
+    if ($LASTEXITCODE -ne 0) { $assetFailed = $true }
+}
+
 $validator = Join-Path $rootFull 'scripts/validate_project.ps1'
 if (-not (Test-Path -LiteralPath $validator -PathType Leaf)) {
     Write-Host "PPS validation: validator missing"
     exit 1
 }
 
-$engine = Get-Command pwsh -ErrorAction SilentlyContinue
-if ($null -eq $engine) {
-    $engine = Get-Command powershell -ErrorAction Stop
-}
 & $engine.Source -NoProfile -ExecutionPolicy Bypass -File $validator -Root $rootFull -Quiet
 $validationStatus = $LASTEXITCODE
-if ($validationStatus -ne 0 -or $fetchFailed) {
+if ($validationStatus -ne 0 -or $fetchFailed -or $assetFailed) {
     exit 1
 }
 exit 0

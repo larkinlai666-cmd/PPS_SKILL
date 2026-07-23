@@ -5,6 +5,7 @@ root="$(pwd)"
 full=0
 fetch=0
 fetch_failed=0
+asset_failed=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root)
@@ -49,7 +50,7 @@ value() {
     sed -n "s/^-[[:space:]]*$1:[[:space:]]*//p"
 }
 
-for name in Protocol Profile Stage Main Package Status Capsule Coverage Blockers Next Updated Device; do
+for name in Protocol Profile Mode Stage Main Map Environment Package Status Capsule Coverage Blockers Next Updated Device; do
   current="$(value "$name")"
   [[ -n "$current" ]] || current="<missing>"
   echo "$name: $current"
@@ -99,10 +100,17 @@ if (( full == 1 )) && [[ -f "$root/CONTEXT.md" ]]; then
   cat "$root/CONTEXT.md"
 fi
 
+if [[ -f "$root/scripts/asset_check.sh" ]]; then
+  echo
+  echo "=== Asset Readiness (quick) ==="
+  bash "$root/scripts/asset_check.sh" "$root" --quick ||
+    asset_failed=1
+fi
+
 validation_status=0
 bash "$root/scripts/validate_project.sh" "$root" --quiet ||
   validation_status=$?
-if (( validation_status != 0 || fetch_failed == 1 )); then
+if (( validation_status != 0 || fetch_failed == 1 || asset_failed == 1 )); then
   exit 1
 fi
 exit 0
