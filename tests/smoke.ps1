@@ -183,28 +183,28 @@ try {
     if ($largeValidation.Code -ne 0) {
         throw "Software project with a 200,001-line source failed validation: $($largeValidation.Text)"
     }
-    $resumeOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $software 'scripts/resume_packet.ps1') -Root $software 2>&1)
-    $resumeExitCode = $LASTEXITCODE
-    $resumeText = ConvertTo-NormalizedOutputText $resumeOutput
-    if ($resumeExitCode -ne 0) {
-        throw "PowerShell resume packet exited with code ${resumeExitCode}: $resumeText"
+    $resumeResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $software 'scripts/resume_packet.ps1') -Root $software 2>&1
     }
-    if ($resumeOutput.Count -gt 240) {
-        throw "PowerShell resume packet exceeded 240 lines: $($resumeOutput.Count)"
+    if ($resumeResult.Code -ne 0) {
+        throw "PowerShell resume packet exited with code $($resumeResult.Code): $($resumeResult.Text)"
     }
-    if ($resumeText -notmatch '(?m)^### M-001 \[active\]$') {
+    if ($resumeResult.Output.Count -gt 240) {
+        throw "PowerShell resume packet exceeded 240 lines: $($resumeResult.Output.Count)"
+    }
+    if ($resumeResult.Text -notmatch '(?m)^### M-001 \[active\]$') {
         throw 'PowerShell resume packet omitted the active M-001 authority summary.'
     }
-    if ($resumeText -match 'PPS_BULK_SOURCE_SENTINEL') {
+    if ($resumeResult.Text -match 'PPS_BULK_SOURCE_SENTINEL') {
         throw 'PowerShell resume packet leaked bulk source content.'
     }
-    $environmentOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $software 'scripts/environment_doctor.ps1') -Root $software 2>&1)
-    $environmentExitCode = $LASTEXITCODE
-    $environmentText = ConvertTo-NormalizedOutputText $environmentOutput
-    if ($environmentExitCode -ne 0 -or
-        $environmentText -notmatch '(?m)^PASS required: git$') {
+    $environmentResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $software 'scripts/environment_doctor.ps1') -Root $software 2>&1
+    }
+    if ($environmentResult.Code -ne 0 -or
+        $environmentResult.Text -notmatch '(?m)^PASS required: git$') {
         throw 'PowerShell environment doctor failed a valid required-tool check.'
     }
     $coreEnvironmentResult = Invoke-NativeCapture {
@@ -427,11 +427,13 @@ try {
     if ($assetValidation.Code -ne 0) {
         throw "Valid tiered assets were rejected: $($assetValidation.Text)"
     }
-    $assetQuick = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $assetCase 'scripts/asset_check.ps1') `
-        -Root $assetCase -Quick 2>&1)
-    if ($LASTEXITCODE -ne 0 -or
-        ($assetQuick | Out-String) -notmatch 'Integrity level: existence-and-size \(quick\)') {
+    $assetQuickResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $assetCase 'scripts/asset_check.ps1') `
+            -Root $assetCase -Quick 2>&1
+    }
+    if ($assetQuickResult.Code -ne 0 -or
+        $assetQuickResult.Text -notmatch 'Integrity level: existence-and-size \(quick\)') {
         throw 'PowerShell quick asset check failed.'
     }
     $fakeRcloneBin = Join-Path $tempRoot 'fake-rclone-bin'
@@ -458,21 +460,23 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $env:PATH = $fakeRcloneBin + [System.IO.Path]::PathSeparator + $originalPath
     $env:PPS_FAKE_RCLONE_COUNT = '1'
     $env:PPS_FAKE_RCLONE_BYTES = $coreItem.Length.ToString()
-    $assetFull = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $assetCase 'scripts/asset_check.ps1') `
-        -Root $assetCase -All -Handoff 2>&1)
-    if ($LASTEXITCODE -ne 0 -or
-        ($assetFull | Out-String) -notmatch 'Reference asset A-REF-001 is not materialized' -or
-        ($assetFull | Out-String) -notmatch 'PASS cloud copy: A-CORE-001') {
+    $assetFullResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $assetCase 'scripts/asset_check.ps1') `
+            -Root $assetCase -All -Handoff 2>&1
+    }
+    if ($assetFullResult.Code -ne 0 -or
+        $assetFullResult.Text -notmatch 'Reference asset A-REF-001 is not materialized' -or
+        $assetFullResult.Text -notmatch 'PASS cloud copy: A-CORE-001') {
         throw 'PowerShell full asset check mishandled a marker-only reference.'
     }
-    $readiness = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $assetCase 'scripts/readiness_check.ps1') `
-        -Root $assetCase -Verified 2>&1)
-    $readinessExitCode = $LASTEXITCODE
-    $readinessText = ConvertTo-NormalizedOutputText $readiness
-    if ($readinessExitCode -ne 0 -or
-        $readinessText -notmatch '(?m)^PPS readiness: OK$') {
+    $readinessResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $assetCase 'scripts/readiness_check.ps1') `
+            -Root $assetCase -Verified 2>&1
+    }
+    if ($readinessResult.Code -ne 0 -or
+        $readinessResult.Text -notmatch '(?m)^PPS readiness: OK$') {
         throw 'PowerShell readiness gate rejected a verified valid package.'
     }
     $readinessPendingResult = Invoke-NativeCapture {
@@ -614,17 +618,21 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     & git -C $gitCase remote add origin $remoteCase
     & git -C $gitCase push --quiet -u origin main
     if ($LASTEXITCODE -ne 0) { throw "Could not push the initialized PPS project." }
-    $gitStatusOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $gitCase "scripts/status_check.ps1") `
-        -Root $gitCase -Fetch 2>&1
-    $gitStatusText = $gitStatusOutput | Out-String
+    $gitStatusResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitCase "scripts/status_check.ps1") `
+            -Root $gitCase -Fetch 2>&1
+    }
+    if ($gitStatusResult.Code -ne 0) {
+        throw "PowerShell status failed for a synchronized repository: $($gitStatusResult.Text)"
+    }
     foreach ($expected in @(
         'Git-Remotes: origin',
         'Git-Upstream: origin/main',
         'Git-Ahead: 0',
         'Git-Behind: 0'
     )) {
-        if ($gitStatusText -notmatch [regex]::Escape($expected)) {
+        if ($gitStatusResult.Text -notmatch [regex]::Escape($expected)) {
             throw "Git status output is missing '$expected'."
         }
     }
@@ -654,10 +662,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     & git -C $peer commit --quiet -m "test: remote checkpoint"
     & git -C $peer push --quiet
     if ($LASTEXITCODE -ne 0) { throw "Could not create the remote checkpoint." }
-    $gitBehindOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $gitCase "scripts/status_check.ps1") `
-        -Root $gitCase -Fetch 2>&1
-    if (($gitBehindOutput | Out-String) -notmatch 'Git-Behind: 1') {
+    $gitBehindResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitCase "scripts/status_check.ps1") `
+            -Root $gitCase -Fetch 2>&1
+    }
+    if ($gitBehindResult.Code -ne 0 -or
+        $gitBehindResult.Text -notmatch 'Git-Behind: 1') {
         throw "Git status did not report the remote commit as behind."
     }
     & git -C $gitCase pull --quiet --ff-only
@@ -671,10 +682,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     & git -C $gitCase add notes.txt
     & git -C $gitCase commit --quiet -m "test: local checkpoint"
     if ($LASTEXITCODE -ne 0) { throw "Valid commit was blocked by the installed hook." }
-    $gitAheadOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $gitCase "scripts/status_check.ps1") `
-        -Root $gitCase 2>&1
-    if (($gitAheadOutput | Out-String) -notmatch 'Git-Ahead: 1') {
+    $gitAheadResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitCase "scripts/status_check.ps1") `
+            -Root $gitCase 2>&1
+    }
+    if ($gitAheadResult.Code -ne 0 -or
+        $gitAheadResult.Text -notmatch 'Git-Ahead: 1') {
         throw "Git status did not report the local commit as ahead."
     }
 
@@ -694,11 +708,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     )
     & git -C $gitCase add ASSETS.md
     if ($LASTEXITCODE -ne 0) { throw 'Could not stage the hook asset registry.' }
-    $validAssetHook = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $gitCase 'scripts/pre-commit.ps1') `
-        -Root $gitCase 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        throw "PowerShell pre-commit rejected a valid staged asset registry: $($validAssetHook | Out-String)"
+    $validAssetHookResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitCase 'scripts/pre-commit.ps1') `
+            -Root $gitCase 2>&1
+    }
+    if ($validAssetHookResult.Code -ne 0) {
+        throw "PowerShell pre-commit rejected a valid staged asset registry: $($validAssetHookResult.Text)"
     }
     & git -C $gitCase restore --staged ASSETS.md
     if ($LASTEXITCODE -ne 0) { throw 'Could not restore the hook asset fixture.' }
@@ -1107,12 +1123,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         "<!doctype html><title>Game</title>`n",
         $utf8NoBom
     )
-    $lightweightOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill 'scripts/audit_legacy_project.ps1') `
-        -Root $lightweightCode 2>&1)
-    if ($LASTEXITCODE -ne 0 -or
-        ($lightweightOutput | Out-String) -notmatch 'Recommended mode: `hybrid`' -or
-        ($lightweightOutput | Out-String) -notmatch '\| Implementation/prototype code files \| 1 \|') {
+    $lightweightResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill 'scripts/audit_legacy_project.ps1') `
+            -Root $lightweightCode 2>&1
+    }
+    if ($lightweightResult.Code -ne 0 -or
+        $lightweightResult.Text -notmatch 'Recommended mode: `hybrid`' -or
+        $lightweightResult.Text -notmatch '\| Implementation/prototype code files \| 1 \|') {
         throw 'Legacy audit did not recognize a lightweight document/code project.'
     }
 
@@ -1135,12 +1153,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         "export default true;`n",
         $utf8NoBom
     )
-    $noiseOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill 'scripts/audit_legacy_project.ps1') `
-        -Root $generatedNoise 2>&1)
-    if ($LASTEXITCODE -ne 0 -or
-        ($noiseOutput | Out-String) -notmatch 'Recommended mode: `document`' -or
-        ($noiseOutput | Out-String) -notmatch '\| Implementation/prototype code files \| 0 \|') {
+    $noiseResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill 'scripts/audit_legacy_project.ps1') `
+            -Root $generatedNoise 2>&1
+    }
+    if ($noiseResult.Code -ne 0 -or
+        $noiseResult.Text -notmatch 'Recommended mode: `document`' -or
+        $noiseResult.Text -notmatch '\| Implementation/prototype code files \| 0 \|') {
         throw 'Legacy audit treated generated dependency code as project architecture.'
     }
 
@@ -1167,12 +1187,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         "# Legacy state`n",
         $utf8NoBom
     )
-    $mixedOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
-        -Root $mixed 2>&1
-    if ($LASTEXITCODE -ne 0 -or
-        ($mixedOutput | Out-String) -notmatch 'Detected system: `mixed`' -or
-        ($mixedOutput | Out-String) -notmatch "Do not write until one authority is selected") {
+    $mixedResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
+            -Root $mixed 2>&1
+    }
+    if ($mixedResult.Code -ne 0 -or
+        $mixedResult.Text -notmatch 'Detected system: `mixed`' -or
+        $mixedResult.Text -notmatch "Do not write until one authority is selected") {
         throw "Mixed state systems were not classified correctly."
     }
 
@@ -1185,11 +1207,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         "# Archived state`n",
         $utf8NoBom
     )
-    $ppsHistoryOutput = & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
-        -Root $ppsWithHistory 2>&1
-    if ($LASTEXITCODE -ne 0 -or
-        ($ppsHistoryOutput | Out-String) -notmatch 'Detected system: `pps`') {
+    $ppsHistoryResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
+            -Root $ppsWithHistory 2>&1
+    }
+    if ($ppsHistoryResult.Code -ne 0 -or
+        $ppsHistoryResult.Text -notmatch 'Detected system: `pps`') {
         throw "A valid PPS project with retained planning history was misclassified."
     }
 
