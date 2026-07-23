@@ -6,6 +6,11 @@
 - Facts: none
 - Decisions: none
 - Sources: none
+- Assets: none
+- Components: C-ROOT
+- Read: {{READ_SET}}
+- Write: {{WRITE_SET}}
+- Verify: Run project-local PPS validation; replace with stack-specific checks after bootstrap.
 - Excluded: none
 - Coverage: {{COVERAGE_ARTIFACT}}
 
@@ -27,7 +32,7 @@
 
 ## Working Assumptions
 
-- H-001: The first package can be defined without adding infrastructure. Expires when project-specific evidence shows otherwise.
+- H-001: The first package can be defined without global infrastructure. Expires when project-specific evidence shows otherwise.
 
 ## Current Risks
 

@@ -15,13 +15,14 @@
 至少运行：
 
 ```bash
-python tools/validate_skill.py
+python3 tools/validate_skill.py
 bash tests/smoke.sh
 ```
 
 涉及 PowerShell 时再运行：
 
 ```powershell
+python tools/validate_skill.py
 powershell -ExecutionPolicy Bypass -File tests/smoke.ps1
 ```
 

@@ -1,50 +1,68 @@
 # PPS Skill
 
-> Proposal Project State：面向长期方案型项目的上下文恢复、历史决策检索、证据追踪与约束覆盖协议。
+> Personal Project State：个人 AI 项目的有界上下文、稳定权威、组件导航、分级资产同步、环境冷启动与跨端恢复协议。
 
 [![Validate](https://github.com/larkinlai666-cmd/PPS_SKILL/actions/workflows/validate.yml/badge.svg)](https://github.com/larkinlai666-cmd/PPS_SKILL/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
 
-PPS 适用于世界观、产品方案、品牌与命名、研究报告、战略设计等需要长时间迭代、用户审批和跨设备接续的项目。它把 Git/Markdown 的透明性、全局稳定决策 ID、显式工作集和确定性覆盖校验组合在一起，重点防止两类错误：
+PPS 面向一个人使用不同设备或 AI Agent 串行推进的长期项目。它既能管理方案、报告和研究，也能管理轻量网页、小游戏、脚本、工具、原型及文档与代码并重的项目。
 
-1. 历史中存在正确决定，但当前 Agent 没有检索到；
-2. Agent 检索到了决定，但没有把它传播到最终成品。
+PPS 不把整个项目塞回上下文。它通过稳定组件 ID、精确读写路径和有界恢复包，重点抑制四类高成本错误：
 
-English summary: PPS is a Markdown-and-Git protocol for long-lived proposal projects. It provides durable context recovery, globally stable authority IDs, explicit workset manifests, evidence routing, and fail-loud decision coverage.
+1. 忘记仍然生效的事实或决定；
+2. 把已经否决或被取代的内容重新引入；
+3. 检索到了约束，却没有传播到真实成品；
+4. 为恢复进度而重读整个大型代码库。
+
+本仓库的自动测试用一个 200,001 行源文件验证：恢复包保持在 240 行和 32768 字节以内，并且不会泄漏未声明的源内容。这证明的是恢复成本有界，不是声称 PPS 能自动理解任意大型代码库。
+
+English summary: PPS is a Markdown-and-Git protocol for long-lived personal document, software, and hybrid projects. It provides bounded recovery, globally stable authority and component IDs, exact read/write worksets, environment checks, and fail-loud validation.
 
 ## 核心模型
 
 | 层 | 权威内容 |
 |---|---|
-| 当前成品 | `PROJECT_STATE.md` 指定的主稿 |
+| 当前内容入口 | `PROJECT_STATE.md` 的 `Main` |
 | 工作流位置 | `PROJECT_STATE.md` |
 | 生效权威 | `DECISIONS.md` 的 active block |
-| 当前工作集 | `CONTEXT.md` 的 Workset Manifest |
-| 外部证据 | `SOURCE_INDEX.md` 与原始资料 |
+| 架构导航 | `PROJECT_MAP.md` 的稳定 `C-*` 组件 |
+| 当前工作集 | `CONTEXT.md` 的 ID、组件、Read/Write/Verify |
+| 资产身份 | 可选 `ASSETS.md` 的 `A-*` 优先级、同步后端、大小与哈希 |
+| 设备物化 | Git/LFS/云端取得的本地字节；与 Git 同步状态分开 |
+| 环境需求 | `ENVIRONMENT.md` |
+| 外部证据 | `SOURCE_INDEX.md` 与原始资料（evidence profile） |
 | 传播证明 | 当前 coverage artifact |
 | 可恢复历史 | Git |
 
-PPS 使用全项目唯一 ID：
+权威 ID 全项目唯一：
 
 - `M-*`：方法与治理约束；
 - `F-*`：用户或权威来源提供的事实；
 - `P-*`：Agent 提案，不自动生效；
 - `H-*`：可逆局部假设，不进入权威索引；
-- `D-*`：用户明确批准的决定。
+- `D-*`：用户明确批准的决定；
+- `C-*`：稳定组件边界，不等同于逐文件清单。
+- `A-*`：稳定资产身份；区分核心、当前支撑与非阻断参考素材。
 
-当前包清单中的每个 `M/F/D` 必须同时满足：
+当前包中的每个 `M/F/D` 必须处于 active 状态、存在唯一规范记录并具有覆盖行。每个 `C-*` 必须解析到唯一组件行。Read/Write 合计目标不超过 12 个路径，硬上限为 30；仓库根 `.` 和 glob 不是合法工作集路径。
 
-- 位于 active authority；
-- 存在唯一的 `[active]` 规范记录；
-- 出现在当前约束覆盖表；
-- 语义上已经传播到真实成品章节。
+大型素材采用分级同步：`core` 必须通过 Git、Git LFS 或持久云端完整同步；`supporting` 仅在当前包引用时要求物化；`reference` 可以不跨设备复制，但必须保留标记且不能作为当前包的隐式事实。云端定位符统一为无凭据的 `rclone:REMOTE:path`，完整交接会检查远端对象存在且字节数一致。Git clean/push 不能替代资产完整性结论。
 
-## 与 GSD 的边界
+## 模式、Profile 与边界
 
-GSD 更适合以代码、测试和可并行执行计划为主的软件交付。PPS 更适合以用户审批、语义一致性和长期决策正确召回为主的方案交付。
+三种项目模式：
 
-混合项目可以让 PPS 管理产品事实和批准决策，让软件执行系统管理实现；实现需求通过稳定的 `D-*` ID 引用 PPS 权威。
+- `document`：主真相是方案、报告、设定或研究文档；
+- `software`：轻量网页、小游戏、脚本、工具、原型或既有代码库；
+- `hybrid`：维护中的规格文档和可执行产物同等重要。
+
+两种 profile：
+
+- `standard`：普通个人项目；
+- `evidence`：增加来源路由与显式证据覆盖。
+
+PPS 只适配个人串行推进。它不提供多人权限、任务分派、分布式锁、团队队列或合并所有权，也不替代项目自己的构建、测试、预览和发布工具。
 
 ## 安装
 
@@ -63,64 +81,115 @@ git clone https://github.com/larkinlai666-cmd/PPS_SKILL.git
 Copy-Item -Recurse .\PPS_SKILL\skills\pps-skill "$env:USERPROFILE\.codex\skills\"
 ```
 
-安装后，在新任务中使用：
+安装后可这样触发：
 
 ```text
-使用 $pps-skill 发起一个 evidence profile 的长期方案项目。
+使用 $pps-skill 发起一个 software 模式的个人小游戏项目。
 ```
 
-## 初始化项目
+先运行已安装 Skill 的健康检查：
+
+```bash
+bash ~/.codex/skills/pps-skill/scripts/validate_skill.sh
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File `
+  "$env:USERPROFILE\.codex\skills\pps-skill\scripts\validate_skill.ps1"
+```
+
+## 初始化与恢复
 
 PowerShell：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File `
   "$env:USERPROFILE\.codex\skills\pps-skill\scripts\init_project.ps1" `
-  -ProjectName my-plan -Profile standard -ParentDir C:\Projects
+  -ProjectName my-game -Mode software -Profile standard -ParentDir C:\Projects
 ```
 
 Bash：
 
 ```bash
 bash ~/.codex/skills/pps-skill/scripts/init_project.sh \
-  my-plan --profile standard --parent ~/Projects
+  my-game --mode software --profile standard --parent ~/Projects
 ```
 
-两种 profile：
+默认模式仍为 `document`。现有非空项目必须先审计，不能直接初始化。
 
-- `standard`：普通长期方案、世界观、产品设计和命名项目；
-- `evidence`：增加来源路由和对象×流程覆盖矩阵，适合研究、审计和强证据项目。
+每次换设备或 Agent 后，先生成恢复包：
 
-## 仓库结构
-
-```text
-skills/pps-skill/       可安装的 Codex Skill
-tools/                  分发结构校验
-tests/                  Windows / Bash 冒烟与失败注入测试
-.github/workflows/      CI 与 tag release
+```bash
+bash scripts/resume_packet.sh .
 ```
 
-Skill 的运行入口是 [`skills/pps-skill/SKILL.md`](skills/pps-skill/SKILL.md)。详细协议和设计取舍位于 [`references/`](skills/pps-skill/references/)。
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/resume_packet.ps1 -Root .
+```
+
+恢复包只包含热状态、当前包、工作集、相关组件行、权威标题和 Git 风险，不包含源文件正文。
+
+若项目包含受治理资产，恢复包还会执行快速存在性/大小检查。收口和交接使用完整 SHA-256 与二进制风险检查：
+
+```bash
+bash scripts/asset_check.sh . --handoff --risk
+# 在人工检查并执行 ENVIRONMENT/CONTEXT 声明的 Verify 后：
+bash scripts/readiness_check.sh . --verified
+```
+
+## 环境冷启动
+
+项目声明最小环境后，医生默认只检查：
+
+```bash
+bash scripts/environment_doctor.sh .
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/environment_doctor.ps1 -Root .
+```
+
+新设备尚未 clone 时，从已安装 Skill 运行 `environment_doctor.sh --core` 或 `environment_doctor.ps1 -Core`，先检查 Git 与 GitHub CLI；这个入口不依赖项目清单。
+
+可预览缺失必需工具的安装计划。系统安装必须同时传入 `--apply --yes` 或 `-Apply -Yes`。PPS 不会隐式安装包管理器、修改 shell 配置、执行 `curl | shell`、安装全局语言包或启动守护进程；可选工具也不会被自动安装。
+
+## 审计既有项目
+
+迁移前先生成只读报告：
+
+```bash
+bash skills/pps-skill/scripts/audit_legacy_project.sh \
+  --root /path/to/existing-project
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File `
+  skills/pps-skill/scripts/audit_legacy_project.ps1 `
+  -Root C:\path\to\existing-project
+```
+
+审计会识别 PPS/1.0、PPS/1.1、旧版 `plan-project-sync`、其他结构化状态系统、混合状态或无结构项目，并给出 provisional mode/profile、严格 ID 数、自由决策段、机器配置污染、依赖清单、实现代码和二进制资产信号。生成目录与依赖缓存会被排除，避免 `node_modules` 等内容制造模式误判或无界扫描。报告只能写到目标项目之外，避免审计本身制造第二套状态。
 
 ## 开发与验证
 
 ```bash
-python tools/validate_skill.py
+python3 tools/validate_skill.py
 bash tests/smoke.sh
+bash skills/pps-skill/scripts/validate_skill.sh
 ```
-
-Windows：
 
 ```powershell
 python tools/validate_skill.py
 powershell -ExecutionPolicy Bypass -File tests/smoke.ps1
+powershell -ExecutionPolicy Bypass -File `
+  skills/pps-skill/scripts/validate_skill.ps1
 ```
 
-贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。版本策略和后续方向见 [CHANGELOG.md](CHANGELOG.md) 与 [ROADMAP.md](ROADMAP.md)。
+CI 在 Linux、macOS 和 Windows 上运行相关套件。旧版能力对照见 [COMPATIBILITY.md](COMPATIBILITY.md)，本轮第一性原则审查见 [ADVERSARIAL_REVIEW.md](ADVERSARIAL_REVIEW.md)，后续方向见 [ROADMAP.md](ROADMAP.md)。
 
 ## 项目声明
 
-PPS Skill 是独立社区项目，不代表 OpenAI，也不隶属于 open-gsd/gsd-core。GSD 只作为工作流设计研究与思想来源之一。
+PPS Skill 是独立社区项目，不代表 OpenAI。其运行时不依赖其他状态管理流程、线上模板或托管状态服务。
 
 ## License
 

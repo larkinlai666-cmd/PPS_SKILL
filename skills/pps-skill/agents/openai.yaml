@@ -1,4 +1,4 @@
 interface:
   display_name: "PPS Skill"
-  short_description: "面向长期方案项目的跨端记忆、决策检索、证据追踪与覆盖校验"
-  default_prompt: "Use $pps-skill to bootstrap or continue a proposal project with durable context and decision coverage."
+  short_description: "个人 AI 项目的有界上下文、稳定决策、分级资产与跨端恢复"
+  default_prompt: "Use $pps-skill to bootstrap or continue this personal document, software, or hybrid project with bounded context, durable authority, explicit paths, tiered large-asset materialization, environment checks, and deterministic validation."
