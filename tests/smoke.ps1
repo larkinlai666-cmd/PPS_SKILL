@@ -12,12 +12,16 @@ $tempRoot = Join-Path $tempBase ("pps-skill-smoke-" + [guid]::NewGuid().ToString
 $engine = (Get-Process -Id $PID).Path
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+function ConvertTo-NormalizedOutputText([object[]]$Items) {
+    return (@($Items | ForEach-Object { "$_" }) -join "`n")
+}
+
 function Run-Validator([string]$ProjectRoot) {
     $validator = Join-Path $ProjectRoot "scripts/validate_project.ps1"
     $output = & $engine -NoProfile -ExecutionPolicy Bypass -File $validator -Root $ProjectRoot 2>&1
     return @{
         Code = $LASTEXITCODE
-        Text = ($output | Out-String)
+        Text = ConvertTo-NormalizedOutputText @($output)
     }
 }
 
@@ -157,23 +161,35 @@ try {
     }
     $resumeOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $software 'scripts/resume_packet.ps1') -Root $software 2>&1)
-    $resumeText = $resumeOutput | Out-String
-    if ($LASTEXITCODE -ne 0 -or $resumeOutput.Count -gt 240 -or
-        $resumeText -notmatch '(?m)^### M-001 \[active\]$' -or
-        $resumeText -match 'PPS_BULK_SOURCE_SENTINEL') {
-        throw 'PowerShell resume packet was unbounded, incomplete, or leaked source content.'
+    $resumeExitCode = $LASTEXITCODE
+    $resumeText = ConvertTo-NormalizedOutputText $resumeOutput
+    if ($resumeExitCode -ne 0) {
+        throw "PowerShell resume packet exited with code ${resumeExitCode}: $resumeText"
+    }
+    if ($resumeOutput.Count -gt 240) {
+        throw "PowerShell resume packet exceeded 240 lines: $($resumeOutput.Count)"
+    }
+    if ($resumeText -notmatch '(?m)^### M-001 \[active\]$') {
+        throw 'PowerShell resume packet omitted the active M-001 authority summary.'
+    }
+    if ($resumeText -match 'PPS_BULK_SOURCE_SENTINEL') {
+        throw 'PowerShell resume packet leaked bulk source content.'
     }
     $environmentOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $software 'scripts/environment_doctor.ps1') -Root $software 2>&1)
-    if ($LASTEXITCODE -ne 0 -or
-        ($environmentOutput | Out-String) -notmatch '(?m)^PASS required: git$') {
+    $environmentExitCode = $LASTEXITCODE
+    $environmentText = ConvertTo-NormalizedOutputText $environmentOutput
+    if ($environmentExitCode -ne 0 -or
+        $environmentText -notmatch '(?m)^PASS required: git$') {
         throw 'PowerShell environment doctor failed a valid required-tool check.'
     }
     $coreEnvironmentOutput = @(& $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill 'scripts/environment_doctor.ps1') -Core 2>&1)
-    if ($LASTEXITCODE -notin @(0, 1) -or
-        ($coreEnvironmentOutput | Out-String) -notmatch '(?m)^(PASS|MISSING) required: git$' -or
-        ($coreEnvironmentOutput | Out-String) -notmatch '(?m)^(PASS|MISSING) required: gh$') {
+    $coreEnvironmentExitCode = $LASTEXITCODE
+    $coreEnvironmentText = ConvertTo-NormalizedOutputText $coreEnvironmentOutput
+    if ($coreEnvironmentExitCode -notin @(0, 1) -or
+        $coreEnvironmentText -notmatch '(?m)^(PASS|MISSING) required: git$' -or
+        $coreEnvironmentText -notmatch '(?m)^(PASS|MISSING) required: gh$') {
         throw 'PowerShell core environment check did not provide bounded pre-clone diagnostics.'
     }
 
@@ -427,15 +443,19 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $readiness = @(& $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $assetCase 'scripts/readiness_check.ps1') `
         -Root $assetCase -Verified 2>&1)
-    if ($LASTEXITCODE -ne 0 -or
-        ($readiness | Out-String) -notmatch '(?m)^PPS readiness: OK$') {
+    $readinessExitCode = $LASTEXITCODE
+    $readinessText = ConvertTo-NormalizedOutputText $readiness
+    if ($readinessExitCode -ne 0 -or
+        $readinessText -notmatch '(?m)^PPS readiness: OK$') {
         throw 'PowerShell readiness gate rejected a verified valid package.'
     }
     $readinessPending = @(& $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $assetCase 'scripts/readiness_check.ps1') `
         -Root $assetCase 2>&1)
-    if ($LASTEXITCODE -ne 3 -or
-        ($readinessPending | Out-String) -notmatch '(?m)^PPS readiness: VERIFY PENDING$') {
+    $readinessPendingExitCode = $LASTEXITCODE
+    $readinessPendingText = ConvertTo-NormalizedOutputText $readinessPending
+    if ($readinessPendingExitCode -ne 3 -or
+        $readinessPendingText -notmatch '(?m)^PPS readiness: VERIFY PENDING$') {
         throw 'PowerShell readiness gate accepted work without explicit verification attestation.'
     }
     $env:PPS_FAKE_RCLONE_COUNT = '0'
