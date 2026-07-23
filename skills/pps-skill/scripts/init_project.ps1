@@ -7,6 +7,7 @@ param(
     [string]$ParentDir,
     [string]$GitName,
     [string]$GitEmail,
+    [switch]$InstallHook,
     [switch]$NoGit
 )
 
@@ -14,13 +15,34 @@ $ErrorActionPreference = "Stop"
 if ($ProjectName -notmatch '^[A-Za-z0-9._-]+$') {
     throw "ProjectName may contain only letters, digits, dot, underscore, and hyphen."
 }
+if ($ProjectName -in @('.', '..')) {
+    throw "ProjectName cannot be '.' or '..'."
+}
+if ($ProjectName.Length -gt 100) {
+    throw "ProjectName cannot exceed 100 characters."
+}
+if ($ProjectName.EndsWith('.')) {
+    throw "ProjectName cannot end with a dot."
+}
+$portableBase = $ProjectName.Split('.')[0]
+if ($portableBase -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$') {
+    throw "ProjectName uses a Windows-reserved device name: $ProjectName"
+}
 if ([string]::IsNullOrWhiteSpace($GitName) -xor [string]::IsNullOrWhiteSpace($GitEmail)) {
     throw "Provide both GitName and GitEmail, or neither."
+}
+if ($NoGit -and $InstallHook) {
+    throw "-InstallHook cannot be used with -NoGit."
+}
+if ($NoGit -and -not [string]::IsNullOrWhiteSpace($GitName)) {
+    throw "-GitName/-GitEmail cannot be used with -NoGit."
 }
 
 if ([string]::IsNullOrWhiteSpace($ParentDir)) {
     if (-not [string]::IsNullOrWhiteSpace($env:PPS_PROJECT_HOME)) {
         $ParentDir = $env:PPS_PROJECT_HOME
+    } elseif (-not [string]::IsNullOrWhiteSpace($env:PLAN_PROJECT_HOME)) {
+        $ParentDir = $env:PLAN_PROJECT_HOME
     } else {
         $ParentDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Projects'
     }
@@ -42,8 +64,12 @@ if (Test-Path -LiteralPath $target) {
 $skillRoot = Split-Path -Parent $PSScriptRoot
 $templateRoot = Join-Path $skillRoot 'assets/templates'
 $docsDir = Join-Path $target 'docs'
+$assetsDir = Join-Path $target 'assets'
+$prototypesDir = Join-Path $target 'prototypes'
 $scriptsDir = Join-Path $target 'scripts'
 New-Item -ItemType Directory -Path $docsDir -Force | Out-Null
+New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
+New-Item -ItemType Directory -Path $prototypesDir -Force | Out-Null
 New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
 
 $now = [DateTime]::UtcNow
@@ -96,7 +122,9 @@ foreach ($scriptName in @(
     'status_check.ps1',
     'status_check.sh',
     'validate_project.ps1',
-    'validate_project.sh'
+    'validate_project.sh',
+    'pre-commit',
+    'pre-commit.ps1'
 )) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $scriptName) -Destination (Join-Path $scriptsDir $scriptName)
 }
@@ -106,8 +134,16 @@ if (-not $NoGit) {
     if ($null -eq $git) {
         Write-Warning "Git was not found; project files were created without a repository."
     } else {
-        & $git.Source -C $target init --quiet
-        if ($LASTEXITCODE -ne 0) { throw "git init failed." }
+        & $git.Source -C $target init --quiet -b main 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            & $git.Source -C $target init --quiet
+            if ($LASTEXITCODE -ne 0) { throw "git init failed." }
+            & $git.Source -C $target checkout -q -b main 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                & $git.Source -C $target branch -M main
+                if ($LASTEXITCODE -ne 0) { throw "Could not create the main branch." }
+            }
+        }
         & $git.Source -C $target add --all
         if ($LASTEXITCODE -ne 0) { throw "git add failed." }
         if (-not [string]::IsNullOrWhiteSpace($GitName)) {
@@ -126,6 +162,19 @@ if (-not $NoGit) {
                 Write-Warning "Initial commit was not created. Inspect Git output and commit manually."
             }
         }
+        if ($InstallHook) {
+            $hookSource = Join-Path $PSScriptRoot 'pre-commit'
+            $hookTarget = Join-Path $target '.git/hooks/pre-commit'
+            Copy-Item -LiteralPath $hookSource -Destination $hookTarget -Force
+            if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+                $chmod = Get-Command chmod -ErrorAction SilentlyContinue
+                if ($null -ne $chmod) {
+                    & $chmod.Source '+x' $hookTarget
+                    if ($LASTEXITCODE -ne 0) { throw "Could not make the pre-commit hook executable." }
+                }
+            }
+            Write-Host "PPS pre-commit validation hook installed."
+        }
     }
 }
 
@@ -141,4 +190,10 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "PPS project initialized: $target"
 Write-Host "Profile: $Profile"
+$branch = if ($NoGit -or $null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
+    'not initialized'
+} else {
+    ((& git -C $target branch --show-current 2>$null) | Out-String).Trim()
+}
+Write-Host "Branch: $branch"
 Write-Host "Next: replace the bootstrap objective and prepare PKG-001."

@@ -79,11 +79,16 @@ The dedicated evidence file holds the current object/source/constraint coverage 
 - Blockers: none
 - Next: ...
 - Updated: 2026-01-01T00:00:00Z
+- Device: workstation-name
 ```
 
 Allowed `Status` values are `active`, `review_pending`, `blocked`, and `complete`.
+All listed fields must occur exactly once inside `## Hot State`; copies elsewhere do not satisfy the grammar.
+`Package` must be a stable `PKG-*` ID. `Updated` must use UTC `YYYY-MM-DDTHH:MM:SSZ`.
 
 Paths must be project-relative and must not escape the repository.
+Use `/` separators. Canonical paths may not contain `..`, absolute prefixes, backslashes, or symbolic-link/reparse-point traversal.
+New projects record `Device`; migrated PPS/1.0 projects may add it on their next state update.
 
 ## Workset grammar
 
@@ -100,12 +105,16 @@ Paths must be project-relative and must not escape the repository.
 ```
 
 Use `none` for an empty class. The parser intentionally fails when a non-empty manifest field contains no valid IDs.
+Non-empty `Methods`, `Facts`, `Decisions`, and `Sources` fields must be strict comma-separated lists containing only IDs of the declared class; duplicates and extra text are errors. `Excluded` is required and must use `none` when empty.
+All six fields must occur exactly once inside `## Workset Manifest`; copies elsewhere do not satisfy the grammar.
+
+The package ID in `PROJECT_STATE.md`, `CONTEXT.md`, and the evidence artifact when present must match exactly.
 
 Keep the capsule at or below 60 lines when practical and never above 80 lines. Move detail to the main artifact, evidence table, or canonical records; leave exact pointers in the capsule.
 
 ## Active authority grammar
 
-`DECISIONS.md` contains exactly one machine-readable active block:
+`DECISIONS.md` contains exactly one machine-readable active block, with exactly one begin marker and one end marker:
 
 ```text
 <!-- PPS:ACTIVE:BEGIN -->
@@ -122,6 +131,9 @@ Every active ID has one canonical heading:
 ```
 
 Permitted record statuses are `active`, `superseded`, `rejected`, and `frozen`. The active block contains only records whose status is `active`.
+Every `M/F/D` ID has exactly one canonical record across all statuses. The active block and `[active]` records are a bijection: every block ID has one active record, and every active record appears exactly once in the block.
+
+Every manifest-listed authority ID and source ID has exactly one row in its required coverage or source table. Duplicate rows are errors because they can hide conflicting propagation results.
 
 ## Single-writer rule
 

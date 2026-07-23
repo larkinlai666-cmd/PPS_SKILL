@@ -10,6 +10,13 @@
 - 现行主稿：`{{MAIN_ARTIFACT}}`
 - 当前覆盖证明：`{{COVERAGE_ARTIFACT}}`
 
+## 目录
+
+- `docs/`：现行主稿及文档产物
+- `assets/`：适合 Git 同步的轻量素材
+- `prototypes/`：HTML 或其他可预览原型
+- `scripts/`：项目本地状态、验证与提交检查脚本
+
 ## 恢复工作
 
 Windows：
@@ -25,6 +32,13 @@ bash scripts/status_check.sh
 ```
 
 按状态输出读取 `CONTEXT.md` 的 Workset Manifest，再按精确 ID 定向读取 `DECISIONS.md`。不要靠聊天记忆或最近文件猜测生效决策。
+
+## 人话操作
+
+- “同步并继续”：检查本地改动与远端差异，安全同步后恢复当前工作集。
+- “保存并同步”：完成当前写入集、验证、提交、对齐远端并推送。
+- “这个定了”：把用户明确批准的内容记录为 `D-*`，更新主稿、active block、上下文和覆盖。
+- “冷启动接入项目”：配置 Git/GitHub、克隆仓库并从项目文件恢复，不从聊天记忆重建。
 
 ## 收口规则
 

@@ -8,3 +8,8 @@ Thumbs.db
 .vscode/
 exports/
 tmp/
+
+# Large binary assets stay external unless the project explicitly adopts Git LFS
+*.mp4
+*.mov
+*.zip

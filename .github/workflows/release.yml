@@ -9,14 +9,56 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  validate-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify tag matches VERSION
+        run: test "v$(cat VERSION)" = "$GITHUB_REF_NAME"
+      - name: Validate Bash distribution
         run: |
           python tools/validate_skill.py
           bash tests/smoke.sh
+      - name: Validate PowerShell on Linux
+        shell: pwsh
+        run: ./tests/smoke.ps1
+
+  validate-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate macOS distribution
+        run: |
+          python3 tools/validate_skill.py
+          bash tests/smoke.sh
+
+  validate-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate Windows distribution
+        shell: powershell
+        run: |
+          python tools/validate_skill.py
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests/smoke.ps1
+
+  release:
+    needs:
+      - validate-linux
+      - validate-macos
+      - validate-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - name: Package skill
         run: |
           mkdir -p dist

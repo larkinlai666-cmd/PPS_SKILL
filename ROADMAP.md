@@ -11,10 +11,10 @@
 
 ## 0.2 — Migration and diagnostics
 
-- [ ] Add a non-destructive legacy project audit command
-- [ ] Generate a proposed migration report without editing the target
-- [ ] Improve conflict diagnostics and exact source locations
-- [ ] Add fixture-based tests for superseded and frozen authority
+- [x] Add a non-destructive legacy project audit command
+- [x] Generate a proposed migration report without editing the target
+- [x] Improve conflict diagnostics and exact source locations
+- [x] Add fixture-based tests for superseded and frozen authority
 
 ## 0.3 — Interoperability
 

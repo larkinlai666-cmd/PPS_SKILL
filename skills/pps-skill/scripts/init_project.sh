@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: init_project.sh <project-name> [--profile standard|evidence] [--parent DIR] [--git-name NAME --git-email EMAIL] [--no-git]"
+  echo "Usage: init_project.sh <project-name> [--profile standard|evidence] [--parent DIR] [--git-name NAME --git-email EMAIL] [--install-hook] [--no-git]"
 }
 
 if [[ $# -lt 1 ]]; then
@@ -13,18 +13,27 @@ fi
 project_name="$1"
 shift
 profile="standard"
-parent="${PPS_PROJECT_HOME:-$HOME/Projects}"
+parent="${PPS_PROJECT_HOME:-${PLAN_PROJECT_HOME:-$HOME/Projects}}"
 no_git=0
+install_hook=0
 git_name=""
 git_email=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile)
+      [[ $# -ge 2 ]] || {
+        usage >&2
+        exit 2
+      }
       profile="$2"
       shift 2
       ;;
     --parent)
+      [[ $# -ge 2 ]] || {
+        usage >&2
+        exit 2
+      }
       parent="$2"
       shift 2
       ;;
@@ -32,11 +41,23 @@ while [[ $# -gt 0 ]]; do
       no_git=1
       shift
       ;;
+    --install-hook)
+      install_hook=1
+      shift
+      ;;
     --git-name)
+      [[ $# -ge 2 ]] || {
+        usage >&2
+        exit 2
+      }
       git_name="$2"
       shift 2
       ;;
     --git-email)
+      [[ $# -ge 2 ]] || {
+        usage >&2
+        exit 2
+      }
       git_email="$2"
       shift 2
       ;;
@@ -51,11 +72,38 @@ if [[ -n "$git_name" && -z "$git_email" ]] || [[ -z "$git_name" && -n "$git_emai
   echo "Provide both --git-name and --git-email, or neither." >&2
   exit 1
 fi
+if (( no_git == 1 && install_hook == 1 )); then
+  echo "--install-hook cannot be used with --no-git." >&2
+  exit 1
+fi
+if (( no_git == 1 )) && [[ -n "$git_name" ]]; then
+  echo "--git-name/--git-email cannot be used with --no-git." >&2
+  exit 1
+fi
 
 [[ "$project_name" =~ ^[A-Za-z0-9._-]+$ ]] || {
   echo "Project name may contain only letters, digits, dot, underscore, and hyphen." >&2
   exit 1
 }
+[[ "$project_name" != "." && "$project_name" != ".." ]] || {
+  echo "Project name cannot be '.' or '..'." >&2
+  exit 1
+}
+(( ${#project_name} <= 100 )) || {
+  echo "Project name cannot exceed 100 characters." >&2
+  exit 1
+}
+[[ "$project_name" != *. ]] || {
+  echo "Project name cannot end with a dot." >&2
+  exit 1
+}
+portable_base="$(printf '%s' "${project_name%%.*}" | tr '[:lower:]' '[:upper:]')"
+case "$portable_base" in
+  CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])
+    echo "Project name uses a Windows-reserved device name: $project_name" >&2
+    exit 1
+    ;;
+esac
 [[ "$profile" == "standard" || "$profile" == "evidence" ]] || {
   echo "Profile must be standard or evidence." >&2
   exit 1
@@ -78,7 +126,7 @@ if [[ -e "$target" ]]; then
 else
   mkdir -p "$target"
 fi
-mkdir -p "$target/docs" "$target/scripts"
+mkdir -p "$target/docs" "$target/assets" "$target/prototypes" "$target/scripts"
 
 timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 date_value="$(date -u '+%Y-%m-%d')"
@@ -119,14 +167,21 @@ if [[ "$profile" == "evidence" ]]; then
   render CURRENT_REVIEW_EVIDENCE.md "$target/docs/CURRENT_REVIEW_EVIDENCE.md"
 fi
 
-for script_name in status_check.ps1 status_check.sh validate_project.ps1 validate_project.sh; do
+for script_name in \
+  status_check.ps1 status_check.sh \
+  validate_project.ps1 validate_project.sh \
+  pre-commit pre-commit.ps1; do
   cp "$script_dir/$script_name" "$target/scripts/$script_name"
 done
-chmod +x "$target/scripts/"*.sh
+chmod +x "$target/scripts/"*.sh "$target/scripts/pre-commit"
 
 if (( no_git == 0 )); then
   if command -v git >/dev/null 2>&1; then
-    git -C "$target" init --quiet
+    if ! git -C "$target" init --quiet -b main 2>/dev/null; then
+      git -C "$target" init --quiet
+      git -C "$target" checkout -q -b main 2>/dev/null ||
+        git -C "$target" branch -M main
+    fi
     git -C "$target" add --all
     if [[ -n "$git_name" ]]; then
       git -C "$target" config user.name "$git_name"
@@ -139,6 +194,11 @@ if (( no_git == 0 )); then
     elif ! git -C "$target" commit --quiet -m "chore: initialize PPS project"; then
       echo "WARNING: initial commit was not created; inspect Git output and commit manually." >&2
     fi
+    if (( install_hook == 1 )); then
+      cp "$script_dir/pre-commit" "$target/.git/hooks/pre-commit"
+      chmod +x "$target/.git/hooks/pre-commit"
+      echo "PPS pre-commit validation hook installed."
+    fi
   else
     echo "WARNING: Git was not found; project files were created without a repository." >&2
   fi
@@ -147,4 +207,5 @@ fi
 bash "$target/scripts/validate_project.sh" "$target"
 echo "PPS project initialized: $target"
 echo "Profile: $profile"
+echo "Branch: $(git -C "$target" branch --show-current 2>/dev/null || printf 'not initialized')"
 echo "Next: replace the bootstrap objective and prepare PKG-001."

@@ -40,11 +40,11 @@ PPS 使用全项目唯一 ID：
 - 出现在当前约束覆盖表；
 - 语义上已经传播到真实成品章节。
 
-## 与 GSD 的边界
+## 适用边界
 
-GSD 更适合以代码、测试和可并行执行计划为主的软件交付。PPS 更适合以用户审批、语义一致性和长期决策正确召回为主的方案交付。
+PPS 适合以用户审批、语义一致性和长期决策正确召回为主的方案交付。
 
-混合项目可以让 PPS 管理产品事实和批准决策，让软件执行系统管理实现；实现需求通过稳定的 `D-*` ID 引用 PPS 权威。
+当主要产物是代码、自动化测试是事实来源且计划可独立执行时，应使用软件交付工作流。混合项目可让 PPS 管理产品事实和批准决策，实现需求通过稳定的 `D-*` ID 引用 PPS 权威。
 
 ## 安装
 
@@ -69,6 +69,17 @@ Copy-Item -Recurse .\PPS_SKILL\skills\pps-skill "$env:USERPROFILE\.codex\skills\
 使用 $pps-skill 发起一个 evidence profile 的长期方案项目。
 ```
 
+可先运行随 Skill 分发的健康检查：
+
+```bash
+bash ~/.codex/skills/pps-skill/scripts/validate_skill.sh
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File `
+  "$env:USERPROFILE\.codex\skills\pps-skill\scripts\validate_skill.ps1"
+```
+
 ## 初始化项目
 
 PowerShell：
@@ -91,6 +102,25 @@ bash ~/.codex/skills/pps-skill/scripts/init_project.sh \
 - `standard`：普通长期方案、世界观、产品设计和命名项目；
 - `evidence`：增加来源路由和对象×流程覆盖矩阵，适合研究、审计和强证据项目。
 
+## 审计既有项目
+
+迁移前先生成只读报告，不要直接在非空仓库中运行初始化：
+
+```bash
+bash skills/pps-skill/scripts/audit_legacy_project.sh \
+  --root /path/to/existing-project
+```
+
+PowerShell：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File `
+  skills/pps-skill/scripts/audit_legacy_project.ps1 `
+  -Root C:\path\to\existing-project
+```
+
+命令会识别现有 PPS、plan-project-sync、其他结构化状态系统、混合状态或无结构项目，并输出建议迁移路径。默认只输出到终端；保存报告时，输出位置必须在被审计项目之外。
+
 ## 仓库结构
 
 ```text
@@ -107,6 +137,7 @@ Skill 的运行入口是 [`skills/pps-skill/SKILL.md`](skills/pps-skill/SKILL.md
 ```bash
 python tools/validate_skill.py
 bash tests/smoke.sh
+bash skills/pps-skill/scripts/validate_skill.sh
 ```
 
 Windows：
@@ -114,13 +145,15 @@ Windows：
 ```powershell
 python tools/validate_skill.py
 powershell -ExecutionPolicy Bypass -File tests/smoke.ps1
+powershell -ExecutionPolicy Bypass -File `
+  skills/pps-skill/scripts/validate_skill.ps1
 ```
 
-贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。版本策略和后续方向见 [CHANGELOG.md](CHANGELOG.md) 与 [ROADMAP.md](ROADMAP.md)。
+贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。旧版能力对照见 [COMPATIBILITY.md](COMPATIBILITY.md)，本轮审查证据见 [ADVERSARIAL_REVIEW.md](ADVERSARIAL_REVIEW.md)，版本策略和后续方向见 [CHANGELOG.md](CHANGELOG.md) 与 [ROADMAP.md](ROADMAP.md)。
 
 ## 项目声明
 
-PPS Skill 是独立社区项目，不代表 OpenAI，也不隶属于 open-gsd/gsd-core。GSD 只作为工作流设计研究与思想来源之一。
+PPS Skill 是独立社区项目，不代表 OpenAI。它不依赖任何外部状态管理系统或托管服务。
 
 ## License
 

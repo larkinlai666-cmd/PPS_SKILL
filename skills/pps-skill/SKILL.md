@@ -1,11 +1,11 @@
 ---
 name: pps-skill
-description: Bootstrap, resume, audit, migrate, and synchronize long-lived proposal or plan projects with durable Markdown context, globally stable authority IDs, explicit workset manifests, decision-coverage gates, evidence routing, and Git handoff. Use when the user asks to start or continue a 方案型项目, preserve context across devices or AI agents, retrieve historical decisions correctly, prevent approved constraints from being dropped, upgrade plan-project-sync, or adopt useful GSD-style validation without turning the project into a software execution framework.
+description: Bootstrap, resume, audit, migrate, and synchronize long-lived proposal or plan projects with durable Markdown context, globally stable authority IDs, explicit workset manifests, decision-coverage gates, evidence routing, and Git handoff. Use when the user asks to start or continue a 方案型项目, preserve context across devices or AI agents, retrieve historical decisions correctly, prevent approved constraints from being dropped, upgrade plan-project-sync, or says “发起项目”, “跨设备同步项目”, “多端推进同一任务”, “换设备继续”, “同步并继续”, “保存并同步”, “接入GitHub”, “新设备冷启动”, “冷启动接入项目”, “新设备接入并继续”, “clone并继续”, “从GitHub接入并继续”, “跨agent协作”, or “这个定了”.
 ---
 
 # PPS Skill
 
-PPS is a proposal-project state protocol. It keeps the user's authority model and long-range recall explicit, then adds deterministic parsing and fail-loud coverage checks inspired by GSD.
+PPS is a proposal-project state protocol. It keeps the user's authority model and long-range recall explicit, then adds deterministic parsing and fail-loud coverage checks.
 
 ## Choose the operation
 
@@ -13,14 +13,16 @@ PPS is a proposal-project state protocol. It keeps the user's authority model an
 2. **Resume a PPS project**: run `status_check`, read the manifest-listed IDs and artifacts, then work only on the current package.
 3. **Close a review decision**: update the main artifact, authority record, active index, workset capsule, coverage map, and hot state in one write set; run validation.
 4. **Audit or repair**: run `validate_project`; fix semantic state rather than weakening the validator.
-5. **Migrate an existing project**: read [migration.md](references/migration.md) before writing. Never create a second competing state system.
+5. **Migrate an existing project**: run the read-only `audit_legacy_project` command, then read [migration.md](references/migration.md) before writing. Never create a second competing state system.
 6. **Synchronize across devices**: read [git-sync.md](references/git-sync.md). Pull before work and push only when the user asks to sync.
+
+Map the user's short commands consistently: “同步并继续” means inspect and safely pull before resuming; “保存并同步” means close the package, validate, commit, reconcile, and push; “这个定了” means record an explicitly approved `D-*` decision and propagate it through the active write set.
 
 ## Select a profile
 
 - Use `standard` for product plans, worldbuilding, naming, strategy, design documents, and other projects where approved decisions must survive long iteration.
 - Use `evidence` when claims must be traced to external sources, audits span many documents, or review requires an explicit constraint-to-output matrix.
-- Do not use PPS for a small one-session task. Prefer GSD or a software workflow when the primary output is code, plans can be independently executed, and automated tests are the main truth mechanism.
+- Do not use PPS for a small one-session task. Prefer a software delivery workflow when the primary output is code, plans can be independently executed, and automated tests are the main truth mechanism.
 
 Read [protocol.md](references/protocol.md) for the authority and artifact contract. For context recovery or validation behavior, also read [retrieval-and-gates.md](references/retrieval-and-gates.md).
 
@@ -86,8 +88,11 @@ Run the project-local validator before claiming closure. A clean prose summary i
 
 - [protocol.md](references/protocol.md): truth layers, authority classes, profiles, artifact roles.
 - [retrieval-and-gates.md](references/retrieval-and-gates.md): exact retrieval, coverage gates, failure semantics.
-- [migration.md](references/migration.md): attach legacy PPS or GSD repositories without dual state.
+- [migration.md](references/migration.md): attach legacy plan-project-sync or other existing repositories without dual state.
 - [git-sync.md](references/git-sync.md): safe cross-device Git workflow.
+- [asset-management.md](references/asset-management.md): Git, LFS, and external-asset thresholds.
 - [design-rationale.md](references/design-rationale.md): what PPS keeps, borrows, and intentionally rejects.
 - `assets/templates/`: files rendered by the initializer.
-- `scripts/`: cross-platform initializer, status check, and validator.
+- `scripts/audit_legacy_project.ps1` and `.sh`: inspect an existing project and propose migration without modifying the target.
+- `scripts/validate_skill.ps1` and `.sh`: verify an installed skill bundle without repository tooling.
+- `scripts/`: cross-platform initializer, status check, audit, project validator, skill validator, and pre-commit gate.

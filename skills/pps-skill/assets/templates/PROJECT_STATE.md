@@ -13,6 +13,7 @@
 - Blockers: none
 - Next: Confirm the project objective and replace the bootstrap package with the first real review package.
 - Updated: {{TIMESTAMP}}
+- Device: {{DEVICE}}
 
 ## Objective
 

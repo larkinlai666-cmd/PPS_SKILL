@@ -39,16 +39,23 @@ required = [
     "assets/templates/gitattributes.template",
     "assets/templates/gitignore.template",
     "references/design-rationale.md",
+    "references/asset-management.md",
     "references/git-sync.md",
     "references/migration.md",
     "references/protocol.md",
     "references/retrieval-and-gates.md",
+    "scripts/audit_legacy_project.ps1",
+    "scripts/audit_legacy_project.sh",
     "scripts/init_project.ps1",
     "scripts/init_project.sh",
+    "scripts/pre-commit",
+    "scripts/pre-commit.ps1",
     "scripts/status_check.ps1",
     "scripts/status_check.sh",
     "scripts/validate_project.ps1",
     "scripts/validate_project.sh",
+    "scripts/validate_skill.ps1",
+    "scripts/validate_skill.sh",
 ]
 
 for relative in required:
@@ -83,13 +90,39 @@ else:
     description = fields.get("description", "")
     if len(description) < 80 or "方案型项目" not in description:
         error("SKILL.md description must explain capability and Chinese trigger context.")
+    for trigger in (
+        "发起项目",
+        "跨设备同步项目",
+        "多端推进同一任务",
+        "换设备继续",
+        "同步并继续",
+        "保存并同步",
+        "接入GitHub",
+        "新设备冷启动",
+        "冷启动接入项目",
+        "新设备接入并继续",
+        "clone并继续",
+        "从GitHub接入并继续",
+        "跨agent协作",
+        "这个定了",
+    ):
+        if trigger not in description:
+            error(f"SKILL.md description is missing compatibility trigger: {trigger}")
 
-for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", skill_md):
-    if "://" in link or link.startswith("#"):
-        continue
-    target = (SKILL / link.split("#", 1)[0]).resolve()
-    if not target.exists():
-        error(f"Broken local link in SKILL.md: {link}")
+for markdown_path in SKILL.rglob("*.md"):
+    markdown_text = read(markdown_path)
+    for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", markdown_text):
+        if "://" in link or link.startswith("#") or link.startswith("mailto:"):
+            continue
+        relative_target = link.split("#", 1)[0]
+        target = (markdown_path.parent / relative_target).resolve()
+        source = markdown_path.relative_to(REPO)
+        try:
+            target.relative_to(SKILL.resolve())
+        except ValueError:
+            error(f"Local link escapes the distributable skill in {source}: {link}")
+        if not target.exists():
+            error(f"Broken local link in {source}: {link}")
 
 openai_yaml = read(SKILL / "agents" / "openai.yaml")
 for key in ("display_name:", "short_description:", "default_prompt:"):
@@ -100,10 +133,32 @@ if "$pps-skill" not in openai_yaml:
 
 all_skill_text = ""
 for path in SKILL.rglob("*"):
-    if path.is_file() and path.suffix.lower() in {".md", ".ps1", ".sh", ".yaml", ".template"}:
+    if path.is_file() and (
+        path.suffix.lower() in {".md", ".ps1", ".sh", ".yaml", ".template"}
+        or path.name == "pre-commit"
+    ):
         all_skill_text += read(path)
 if re.search(r"\bTODO\b|\[TODO", all_skill_text, re.IGNORECASE):
     error("Skill distribution contains TODO markers.")
+external_token = "g" + "sd"
+state_dir_token = "." + "planning"
+external_patterns = (
+    rf"\b{external_token}\b",
+    f"open-{external_token}",
+    f"{external_token}-core",
+    re.escape(state_dir_token),
+)
+if re.search("|".join(external_patterns), all_skill_text, re.IGNORECASE):
+    error("PPS core contains an external state-system name or dedicated state-directory coupling.")
+
+if not (REPO / "COMPATIBILITY.md").is_file():
+    error("Repository is missing COMPATIBILITY.md for legacy capability tracking.")
+if not (REPO / "ADVERSARIAL_REVIEW.md").is_file():
+    error("Repository is missing ADVERSARIAL_REVIEW.md for hardening evidence.")
+validate_workflow = read(REPO / ".github" / "workflows" / "validate.yml")
+for runner in ("ubuntu-latest", "macos-latest", "windows-latest"):
+    if runner not in validate_workflow:
+        error(f"Validation workflow is missing runner: {runner}")
 
 version = read(REPO / "VERSION").strip()
 if not re.fullmatch(r"\d+\.\d+\.\d+", version):

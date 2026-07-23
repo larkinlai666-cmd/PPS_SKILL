@@ -1,10 +1,12 @@
 [CmdletBinding()]
 param(
     [string]$Root = (Get-Location).Path,
-    [switch]$Full
+    [switch]$Full,
+    [switch]$Fetch
 )
 
 $ErrorActionPreference = "Stop"
+$fetchFailed = $false
 $rootFull = [System.IO.Path]::GetFullPath($Root)
 $statePath = Join-Path $rootFull 'PROJECT_STATE.md'
 if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
@@ -13,15 +15,27 @@ if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
 }
 
 $stateText = [System.IO.File]::ReadAllText($statePath, [System.Text.Encoding]::UTF8)
+$hotStateMatch = [regex]::Match(
+    $stateText,
+    '(?ms)^##\s+Hot State\s*\r?\n(?<body>.*?)(?=^##\s+|\z)'
+)
+$hotStateText = if ($hotStateMatch.Success) {
+    $hotStateMatch.Groups['body'].Value
+} else {
+    ''
+}
 
 function Get-StateField([string]$Name) {
     $pattern = '(?m)^-\s+' + [regex]::Escape($Name) + ':\s*(.*?)\s*$'
-    $match = [regex]::Match($stateText, $pattern)
+    $match = [regex]::Match($hotStateText, $pattern)
     if ($match.Success) { return $match.Groups[1].Value.Trim() }
     return '<missing>'
 }
 
-foreach ($name in @('Protocol', 'Profile', 'Stage', 'Main', 'Package', 'Status', 'Blockers', 'Next')) {
+foreach ($name in @(
+    'Protocol', 'Profile', 'Stage', 'Main', 'Package', 'Status',
+    'Capsule', 'Coverage', 'Blockers', 'Next', 'Updated', 'Device'
+)) {
     Write-Host "${name}: $(Get-StateField $name)"
 }
 
@@ -31,19 +45,47 @@ if (Test-Path -LiteralPath $contextPath -PathType Leaf) {
     Write-Host "Context-Lines: $contextLines"
 }
 
-if (Get-Command git -ErrorAction SilentlyContinue) {
-    $gitMarker = Join-Path $rootFull '.git'
-    if (Test-Path -LiteralPath $gitMarker) {
-        $branch = & git -C $rootFull branch --show-current 2>$null
-        $dirty = @(& git -C $rootFull status --porcelain 2>$null).Count
+$git = Get-Command git -ErrorAction SilentlyContinue
+if ($null -ne $git) {
+    & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $branch = ((& $git.Source -C $rootFull branch --show-current 2>$null) | Out-String).Trim()
+        $remotes = @(& $git.Source -C $rootFull remote 2>$null)
+        if ($remotes.Count -gt 0) {
+            Write-Host "Git-Remotes: $($remotes -join ' ')"
+            if ($Fetch) {
+                & $git.Source -C $rootFull fetch --all --prune
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "Git-Fetch: OK"
+                } else {
+                    Write-Host "Git-Fetch: FAILED"
+                    $fetchFailed = $true
+                }
+            }
+        } else {
+            Write-Host "Git-Remotes: none"
+        }
+        $dirty = @(& $git.Source -C $rootFull status --porcelain 2>$null).Count
         Write-Host "Git-Branch: $branch"
         Write-Host "Git-Dirty: $dirty"
+        $upstream = ((& $git.Source -C $rootFull rev-parse --abbrev-ref '@{upstream}' 2>$null) | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($upstream)) {
+            $ahead = ((& $git.Source -C $rootFull rev-list --count '@{upstream}..HEAD') | Out-String).Trim()
+            $behind = ((& $git.Source -C $rootFull rev-list --count 'HEAD..@{upstream}') | Out-String).Trim()
+            Write-Host "Git-Upstream: $upstream"
+            Write-Host "Git-Ahead: $ahead"
+            Write-Host "Git-Behind: $behind"
+        } else {
+            Write-Host "Git-Upstream: none"
+        }
         if ($Full) {
-            & git -C $rootFull status --short
+            & $git.Source -C $rootFull status --short
         }
     } else {
         Write-Host "Git: not initialized"
     }
+} else {
+    Write-Host "Git: unavailable"
 }
 
 if ($Full -and (Test-Path -LiteralPath $contextPath -PathType Leaf)) {
@@ -63,4 +105,8 @@ if ($null -eq $engine) {
     $engine = Get-Command powershell -ErrorAction Stop
 }
 & $engine.Source -NoProfile -ExecutionPolicy Bypass -File $validator -Root $rootFull -Quiet
-exit $LASTEXITCODE
+$validationStatus = $LASTEXITCODE
+if ($validationStatus -ne 0 -or $fetchFailed) {
+    exit 1
+}
+exit 0

@@ -77,11 +77,17 @@ User feedback is not closed until all applicable writes are complete:
 Treat these as errors:
 
 - a non-empty manifest line that yields no valid IDs;
+- a required hot-state or workset field outside its canonical section, or a duplicate canonical section;
+- a manifest containing a duplicate ID, an ID of the wrong class, or extra text;
 - duplicate or missing active-block entries for required IDs;
+- more or fewer than one active-block marker pair;
+- an active record outside the active block, or more than one canonical record for an ID;
 - required record missing or not `[active]`;
-- required coverage row absent;
+- required coverage or source row absent or duplicated;
+- package IDs disagree across state, context, and evidence;
+- malformed `PKG-*` package IDs or non-UTC `Updated` timestamps;
 - evidence profile without source/evidence files;
-- project-relative path escaping the repository;
+- project-relative path escaping the repository or traversing a symbolic link/reparse point;
 - capsule over 80 lines;
 - malformed content inside the machine-readable active block.
 
