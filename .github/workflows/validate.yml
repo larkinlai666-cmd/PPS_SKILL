@@ -1,0 +1,39 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux / Bash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate distribution
+        run: python tools/validate_skill.py
+      - name: Run Bash smoke tests
+        run: bash tests/smoke.sh
+
+  windows:
+    name: Windows / PowerShell
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate distribution
+        run: python tools/validate_skill.py
+      - name: Run PowerShell smoke tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/smoke.ps1
