@@ -9,6 +9,22 @@ $ErrorActionPreference = "Stop"
 $fetchFailed = $false
 $assetFailed = $false
 $rootFull = [System.IO.Path]::GetFullPath($Root)
+
+function Invoke-NativeProbe([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+    }
+}
+
 $statePath = Join-Path $rootFull 'PROJECT_STATE.md'
 if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
     Write-Host "PPS status: PROJECT_STATE.md not found in $rootFull"
@@ -48,8 +64,10 @@ if (Test-Path -LiteralPath $contextPath -PathType Leaf) {
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if ($null -ne $git) {
-    & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
-    if ($LASTEXITCODE -eq 0) {
+    $repositoryProbe = Invoke-NativeProbe {
+        & $git.Source -C $rootFull rev-parse --is-inside-work-tree 2>$null
+    }
+    if ($repositoryProbe.Code -eq 0 -and $repositoryProbe.Text -eq 'true') {
         $branch = ((& $git.Source -C $rootFull branch --show-current 2>$null) | Out-String).Trim()
         $remotes = @(& $git.Source -C $rootFull remote 2>$null)
         if ($remotes.Count -gt 0) {
@@ -69,8 +87,11 @@ if ($null -ne $git) {
         $dirty = @(& $git.Source -C $rootFull status --porcelain 2>$null).Count
         Write-Host "Git-Branch: $branch"
         Write-Host "Git-Dirty: $dirty"
-        $upstream = ((& $git.Source -C $rootFull rev-parse --abbrev-ref '@{upstream}' 2>$null) | Out-String).Trim()
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($upstream)) {
+        $upstreamProbe = Invoke-NativeProbe {
+            & $git.Source -C $rootFull rev-parse --abbrev-ref '@{upstream}' 2>$null
+        }
+        $upstream = $upstreamProbe.Text
+        if ($upstreamProbe.Code -eq 0 -and -not [string]::IsNullOrWhiteSpace($upstream)) {
             $ahead = ((& $git.Source -C $rootFull rev-list --count '@{upstream}..HEAD') | Out-String).Trim()
             $behind = ((& $git.Source -C $rootFull rev-list --count 'HEAD..@{upstream}') | Out-String).Trim()
             Write-Host "Git-Upstream: $upstream"

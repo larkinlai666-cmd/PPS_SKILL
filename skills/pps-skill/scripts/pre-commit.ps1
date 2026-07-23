@@ -11,8 +11,26 @@ if ($null -eq $git) {
     exit 1
 }
 
-$topLevel = ((& $git.Source -C $rootFull rev-parse --show-toplevel 2>$null) | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel)) {
+function Invoke-NativeProbe([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+    }
+}
+
+$repositoryProbe = Invoke-NativeProbe {
+    & $git.Source -C $rootFull rev-parse --show-toplevel 2>$null
+}
+$topLevel = $repositoryProbe.Text
+if ($repositoryProbe.Code -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel)) {
     Write-Error "PPS pre-commit: not inside a Git repository."
     exit 1
 }
@@ -33,8 +51,10 @@ try {
         if (Test-Path -LiteralPath (Join-Path $snapshot $RelativePath)) {
             return
         }
-        & $git.Source -C $topLevel cat-file -e ":$RelativePath" 2>$null
-        if ($LASTEXITCODE -ne 0) {
+        $pathProbe = Invoke-NativeProbe {
+            & $git.Source -C $topLevel cat-file -e ":$RelativePath" 2>$null
+        }
+        if ($pathProbe.Code -ne 0) {
             return
         }
         & $git.Source -C $topLevel checkout-index "--prefix=$prefix" -- $RelativePath
@@ -50,8 +70,11 @@ try {
         if (Test-Path -LiteralPath (Join-Path $snapshot $RelativePath)) {
             return
         }
-        $objectType = ((& $git.Source -C $topLevel cat-file -t ":$RelativePath" 2>$null) | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($objectType)) {
+        $objectProbe = Invoke-NativeProbe {
+            & $git.Source -C $topLevel cat-file -t ":$RelativePath" 2>$null
+        }
+        $objectType = $objectProbe.Text
+        if ($objectProbe.Code -ne 0 -or [string]::IsNullOrWhiteSpace($objectType)) {
             return
         }
         if ($objectType -eq 'tree') {

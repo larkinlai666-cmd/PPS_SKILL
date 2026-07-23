@@ -14,6 +14,22 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Invoke-NativeProbe([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+    }
+}
+
 if ($ProjectName -notmatch '^[A-Za-z0-9._-]+$') {
     throw "ProjectName may contain only letters, digits, dot, underscore, and hyphen."
 }
@@ -171,12 +187,16 @@ if (-not $NoGit) {
     if ($null -eq $git) {
         Write-Warning "Git was not found; project files were created without a repository."
     } else {
-        & $git.Source -C $target init --quiet -b main 2>$null
-        if ($LASTEXITCODE -ne 0) {
+        $initializationProbe = Invoke-NativeProbe {
+            & $git.Source -C $target init --quiet -b main 2>$null
+        }
+        if ($initializationProbe.Code -ne 0) {
             & $git.Source -C $target init --quiet
             if ($LASTEXITCODE -ne 0) { throw "git init failed." }
-            & $git.Source -C $target checkout -q -b main 2>$null
-            if ($LASTEXITCODE -ne 0) {
+            $checkoutProbe = Invoke-NativeProbe {
+                & $git.Source -C $target checkout -q -b main 2>$null
+            }
+            if ($checkoutProbe.Code -ne 0) {
                 & $git.Source -C $target branch -M main
                 if ($LASTEXITCODE -ne 0) { throw "Could not create the main branch." }
             }
@@ -189,8 +209,14 @@ if (-not $NoGit) {
             & $git.Source -C $target config user.email $GitEmail
             if ($LASTEXITCODE -ne 0) { throw "Could not set repository-local Git user.email." }
         }
-        $effectiveName = ((& $git.Source -C $target config --get user.name 2>$null) | Out-String).Trim()
-        $effectiveEmail = ((& $git.Source -C $target config --get user.email 2>$null) | Out-String).Trim()
+        $nameProbe = Invoke-NativeProbe {
+            & $git.Source -C $target config --get user.name 2>$null
+        }
+        $emailProbe = Invoke-NativeProbe {
+            & $git.Source -C $target config --get user.email 2>$null
+        }
+        $effectiveName = $nameProbe.Text
+        $effectiveEmail = $emailProbe.Text
         if ([string]::IsNullOrWhiteSpace($effectiveName) -or [string]::IsNullOrWhiteSpace($effectiveEmail)) {
             Write-Warning "Initial files are staged but not committed because Git identity is missing. Pass -GitName and -GitEmail for repository-local identity, or configure Git yourself."
         } else {

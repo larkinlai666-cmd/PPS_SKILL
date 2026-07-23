@@ -25,6 +25,21 @@ $errors = [System.Collections.Generic.List[string]]::new()
 $warnings = [System.Collections.Generic.List[string]]::new()
 $rows = [System.Collections.Generic.List[object]]::new()
 
+function Invoke-NativeProbe([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+    }
+}
+
 function Add-AssetError([string]$Message) {
     $script:errors.Add($Message)
 }
@@ -219,11 +234,16 @@ foreach ($row in $rows) {
         if ($null -eq $git) {
             Add-AssetError "Asset $($row.Id) declares $($row.Sync) but Git is unavailable."
         } else {
-            & $git.Source -C $rootFull ls-files --error-unmatch -- $row.Materialize *> $null
-            if ($LASTEXITCODE -ne 0) {
+            $trackedProbe = Invoke-NativeProbe {
+                & $git.Source -C $rootFull ls-files --error-unmatch -- $row.Materialize 2>$null
+            }
+            if ($trackedProbe.Code -ne 0) {
                 Add-AssetError "Asset $($row.Id) declares $($row.Sync) but Materialize is not Git tracked: $($row.Materialize)"
             } elseif ($row.Sync -eq 'git-lfs') {
-                $attr = (& $git.Source -C $rootFull check-attr filter -- $row.Materialize 2>$null) -join "`n"
+                $attributeProbe = Invoke-NativeProbe {
+                    & $git.Source -C $rootFull check-attr filter -- $row.Materialize 2>$null
+                }
+                $attr = $attributeProbe.Text
                 if ($attr -notmatch ':\s+lfs\s*$') {
                     Add-AssetError "Asset $($row.Id) declares git-lfs but Git attributes do not select LFS: $($row.Materialize)"
                 }
@@ -236,14 +256,14 @@ foreach ($row in $rows) {
         if ($null -eq $rclone) {
             Add-AssetError "Cloud asset $($row.Id) cannot prove its durable copy because rclone is unavailable."
         } else {
-            $remoteRaw = @(
+            $remoteProbe = Invoke-NativeProbe {
                 & $rclone.Source size $remoteSpec --json --max-depth 1 2>$null
-            )
-            if ($LASTEXITCODE -ne 0) {
+            }
+            if ($remoteProbe.Code -ne 0) {
                 Add-AssetError "Cloud asset $($row.Id) durable Locator is unreachable: $($row.Locator)"
             } else {
                 try {
-                    $remoteInfo = ($remoteRaw -join "`n") | ConvertFrom-Json
+                    $remoteInfo = $remoteProbe.Text | ConvertFrom-Json
                     $remoteCount = [long]$remoteInfo.count
                     $remoteBytes = [long]$remoteInfo.bytes
                     if ($remoteCount -ne 1 -or $remoteBytes -ne [long]$row.Bytes) {
@@ -267,14 +287,19 @@ foreach ($row in $rows) {
 $trackedBinaryBytes = 0L
 $trackedBinaryCount = 0
 if ($Risk -and $null -ne $git) {
-    & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
-    if ($LASTEXITCODE -eq 0) {
+    $repositoryProbe = Invoke-NativeProbe {
+        & $git.Source -C $rootFull rev-parse --is-inside-work-tree 2>$null
+    }
+    if ($repositoryProbe.Code -eq 0 -and $repositoryProbe.Text -eq 'true') {
         $binaryPattern = '\.(mp4|mov|mkv|avi|gif|png|jpe?g|webp|wav|psd|ai|xlsx?|docx|pptx|pdf|zip|7z|rar)$'
         foreach ($relative in @(& $git.Source -C $rootFull ls-files)) {
             if ($relative -notmatch $binaryPattern) { continue }
             $path = Join-Path $rootFull $relative
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-            $attr = (& $git.Source -C $rootFull check-attr filter -- $relative 2>$null) -join "`n"
+            $attributeProbe = Invoke-NativeProbe {
+                & $git.Source -C $rootFull check-attr filter -- $relative 2>$null
+            }
+            $attr = $attributeProbe.Text
             if ($attr -match ':\s+lfs\s*$') { continue }
             $size = (Get-Item -LiteralPath $path).Length
             $trackedBinaryBytes += $size

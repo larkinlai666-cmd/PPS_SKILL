@@ -11,6 +11,21 @@ if (-not (Test-Path -LiteralPath $rootFull -PathType Container)) {
 }
 $rootFull = (Resolve-Path -LiteralPath $rootFull).Path
 
+function Invoke-NativeProbe([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+    }
+}
+
 function Test-RelativeFile([string]$RelativePath) {
     return Test-Path -LiteralPath (Join-Path $rootFull $RelativePath) -PathType Leaf
 }
@@ -233,8 +248,10 @@ $authorityReviewRisk = if ($authorityIds.Count -gt 100 -or $decisionBytes -gt 10
 $gitStatus = 'not detected'
 $git = Get-Command git -ErrorAction SilentlyContinue
 if ($null -ne $git) {
-    & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
-    if ($LASTEXITCODE -eq 0) {
+    $repositoryProbe = Invoke-NativeProbe {
+        & $git.Source -C $rootFull rev-parse --is-inside-work-tree 2>$null
+    }
+    if ($repositoryProbe.Code -eq 0 -and $repositoryProbe.Text -eq 'true') {
         $gitStatus = 'present'
     }
 }
