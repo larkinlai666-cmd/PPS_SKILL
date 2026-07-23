@@ -1,0 +1,39 @@
+name: Bug report
+description: Report reproducible PPS behavior that is incorrect
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Scenario
+      description: What kind of project and operation were you running?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Remove secrets, private source material, and user project content.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: Windows PowerShell 5.1, PowerShell 7, macOS Bash, Ubuntu Bash
+    validations:
+      required: true

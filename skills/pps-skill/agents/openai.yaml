@@ -1,0 +1,4 @@
+interface:
+  display_name: "PPS Skill"
+  short_description: "面向长期方案项目的跨端记忆、决策检索、证据追踪与覆盖校验"
+  default_prompt: "Use $pps-skill to bootstrap or continue a proposal project with durable context and decision coverage."
