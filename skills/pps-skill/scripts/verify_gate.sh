@@ -110,11 +110,37 @@ sha256_of_text() {
 
 entry_sha="$(sha256_of "$entry")"
 capsule_sha="$(sha256_of "$root/CONTEXT.md")"
+
+worktree_content_id() {
+  # Content-level fingerprint: HEAD plus, for every changed path, its status
+  # AND the SHA-256 of its current bytes. Porcelain text alone is blind to an
+  # already-dirty file changing again; this is not.
+  local head_sha entries status_line entry_status entry_path content_hash
+  head_sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || echo 'no-commit')"
+  entries=""
+  while IFS= read -r status_line; do
+    [[ -n "$status_line" ]] || continue
+    entry_status="${status_line:0:2}"
+    entry_path="${status_line:3}"
+    entry_path="${entry_path#\"}"
+    entry_path="${entry_path%\"}"
+    case "$entry_path" in
+      *" -> "*) entry_path="${entry_path##* -> }" ;;
+    esac
+    if [[ -f "$root/$entry_path" ]]; then
+      content_hash="$(sha256_of "$root/$entry_path")"
+    else
+      content_hash="absent"
+    fi
+    entries="${entries}${entry_status}"$'\t'"${entry_path}"$'\t'"${content_hash}"$'\n'
+  done < <(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null)
+  entries="$(printf '%s' "$entries" | LC_ALL=C sort)"
+  printf '%s+%s' "$head_sha" "$(sha256_of_text "$entries")"
+}
+
 if command -v git >/dev/null 2>&1 &&
   git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  head_sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || echo 'no-commit')"
-  porcelain="$(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null || true)"
-  worktree_id="${head_sha}+$(sha256_of_text "$porcelain")"
+  worktree_id="$(worktree_content_id)"
 else
   worktree_id="no-git"
 fi

@@ -122,6 +122,7 @@ function Invoke-NativeProbe([scriptblock]$Command) {
     }
     return @{
         Code = $exitCode
+        Output = $output
         Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
     }
 }
@@ -137,8 +138,33 @@ if ($null -ne $git) {
         } else {
             'no-commit'
         }
+        # Content-level fingerprint: HEAD plus, for every changed path, its
+        # status AND the SHA-256 of its current bytes. Porcelain text alone is
+        # blind to an already-dirty file changing again; this is not.
         $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
-        $worktreeId = $headSha + '+' + (Get-TextSha256 $statusProbe.Text)
+        $entryLines = @()
+        foreach ($statusLine in $statusProbe.Output) {
+            $line = "$statusLine"
+            if ($line.Length -le 3) { continue }
+            $entryStatus = $line.Substring(0, 2)
+            $entryPath = $line.Substring(3).Trim('"')
+            if ($entryPath.Contains(' -> ')) {
+                $entryPath = $entryPath.Split(' -> ')[-1]
+            }
+            $entryFile = Join-Path $rootFull $entryPath
+            $contentHash = if (Test-Path -LiteralPath $entryFile -PathType Leaf) {
+                Get-FileSha256 $entryFile
+            } else {
+                'absent'
+            }
+            $entryLines += "$entryStatus`t$entryPath`t$contentHash"
+        }
+        $entryText = ''
+        if ($entryLines.Count -gt 0) {
+            [System.Array]::Sort($entryLines, [System.StringComparer]::Ordinal)
+            $entryText = $entryLines -join "`n"
+        }
+        $worktreeId = $headSha + '+' + (Get-TextSha256 $entryText)
     }
 }
 

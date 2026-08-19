@@ -91,20 +91,48 @@ if ($protocol -eq 'PPS/1.2') {
         Write-Output 'Rerun scripts/verify_gate.* on this device.'
         exit 4
     }
+    function Get-StampFileSha256([string]$Path) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    function Get-StampTextSha256([string]$Text) {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+        } finally {
+            $sha.Dispose()
+        }
+    }
+    foreach ($requiredField in @(
+        'package', 'entry', 'entry_sha256', 'capsule_sha256',
+        'platform', 'result', 'worktree', 'verified_at'
+    )) {
+        if (-not $stamp.ContainsKey($requiredField) -or
+            [string]::IsNullOrWhiteSpace($stamp[$requiredField])) {
+            Deny-StaleStamp "Verify stamp is missing the '$requiredField' field; only the current gate writes complete stamps."
+        }
+    }
     if ($stamp['package'] -ne $packageId) {
         Deny-StaleStamp "Verify stamp names '$($stamp['package'])' but the current package is '$packageId'."
     }
     if ($stamp['result'] -ne 'pass') {
         Deny-StaleStamp "Verify stamp records result '$($stamp['result'])', not 'pass'."
     }
+    if ($stamp['platform'] -notin @('bash', 'powershell')) {
+        Deny-StaleStamp "Verify stamp records unknown platform '$($stamp['platform'])'."
+    }
     $entryRel = $stamp['entry']
     $entryPath = if ([string]::IsNullOrWhiteSpace($entryRel)) { $null } else { Join-Path $rootFull $entryRel }
     if ($null -eq $entryPath -or -not (Test-Path -LiteralPath $entryPath -PathType Leaf)) {
         Deny-StaleStamp "Verify stamp names entry '$entryRel' which does not exist."
     }
-    $currentEntrySha = (Get-FileHash -LiteralPath $entryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $currentEntrySha = Get-StampFileSha256 $entryPath
     if ($stamp['entry_sha256'] -ne $currentEntrySha) {
         Deny-StaleStamp "Verification entry '$entryRel' changed after the stamp was written."
+    }
+    $currentCapsuleSha = Get-StampFileSha256 (Join-Path $rootFull 'CONTEXT.md')
+    if ($stamp['capsule_sha256'] -ne $currentCapsuleSha) {
+        Deny-StaleStamp 'CONTEXT.md changed after the stamp was written; the verified capsule is not the current capsule.'
     }
     $git = Get-Command git -ErrorAction SilentlyContinue
     if ($null -ne $git) {
@@ -119,6 +147,7 @@ if ($protocol -eq 'PPS/1.2') {
             }
             return @{
                 Code = $exitCode
+                Output = $output
                 Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
             }
         }
@@ -131,17 +160,31 @@ if ($protocol -eq 'PPS/1.2') {
                 'no-commit'
             }
             $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
-            $shaObj = [System.Security.Cryptography.SHA256]::Create()
-            try {
-                $porcelainSha = ([System.BitConverter]::ToString(
-                    $shaObj.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($statusProbe.Text))
-                ) -replace '-', '').ToLowerInvariant()
-            } finally {
-                $shaObj.Dispose()
+            $entryLines = @()
+            foreach ($statusLine in $statusProbe.Output) {
+                $line = "$statusLine"
+                if ($line.Length -le 3) { continue }
+                $entryStatus = $line.Substring(0, 2)
+                $changedPath = $line.Substring(3).Trim('"')
+                if ($changedPath.Contains(' -> ')) {
+                    $changedPath = $changedPath.Split(' -> ')[-1]
+                }
+                $changedFile = Join-Path $rootFull $changedPath
+                $contentHash = if (Test-Path -LiteralPath $changedFile -PathType Leaf) {
+                    Get-StampFileSha256 $changedFile
+                } else {
+                    'absent'
+                }
+                $entryLines += "$entryStatus`t$changedPath`t$contentHash"
             }
-            $currentWorktree = $headSha + '+' + $porcelainSha
+            $entryText = ''
+            if ($entryLines.Count -gt 0) {
+                [System.Array]::Sort($entryLines, [System.StringComparer]::Ordinal)
+                $entryText = $entryLines -join "`n"
+            }
+            $currentWorktree = $headSha + '+' + (Get-StampTextSha256 $entryText)
             if ($stamp['worktree'] -ne $currentWorktree) {
-                Deny-StaleStamp 'The worktree changed after the stamp was written; the verified state is not the current state.'
+                Deny-StaleStamp 'The worktree content changed after the stamp was written; the verified state is not the current state.'
             }
         }
     }

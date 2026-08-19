@@ -48,17 +48,45 @@ git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
 
 baseline_file="$root/.pps/boundary-baseline"
 
+sha256_of_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+
+changed_entries() {
+  # Emits one record per change: "<status>\t<path>\t<content-hash>". A path is
+  # only "the same preexisting change" if status AND content still match.
+  local status_line entry_status entry_path content_hash
+  while IFS= read -r status_line; do
+    [[ -n "$status_line" ]] || continue
+    entry_status="${status_line:0:2}"
+    entry_path="${status_line:3}"
+    entry_path="${entry_path#\"}"
+    entry_path="${entry_path%\"}"
+    case "$entry_path" in
+      *" -> "*) entry_path="${entry_path##* -> }" ;;
+    esac
+    if [[ -f "$root/$entry_path" ]]; then
+      content_hash="$(sha256_of_file "$root/$entry_path")"
+    else
+      content_hash="absent"
+    fi
+    printf '%s\t%s\t%s\n' "$entry_status" "$entry_path" "$content_hash"
+  done < <(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null)
+}
+
 changed_paths() {
-  git -C "$root" status --porcelain --untracked-files=all 2>/dev/null |
-    sed 's/^...//' | sed 's/^"//;s/"$//' |
-    awk '{ if (index($0, " -> ") > 0) { sub(/^.* -> /, "") } print }'
+  changed_entries | awk -F'\t' '{ print $2 }'
 }
 
 if (( record_baseline == 1 )); then
   mkdir -p "$root/.pps"
-  changed_paths > "$baseline_file"
+  changed_entries > "$baseline_file"
   baseline_count="$(sed -n '$=' "$baseline_file" 2>/dev/null || echo 0)"
-  echo "Boundary baseline recorded: ${baseline_count:-0} pre-existing dirty path(s)."
+  echo "Boundary baseline recorded: ${baseline_count:-0} pre-existing dirty path(s) with content fingerprints."
   echo "PPS boundary check: BASELINE RECORDED"
   exit 0
 fi
@@ -143,7 +171,27 @@ add_claims() {
 }
 
 if [[ -n "$subject_capsule" && "$subject_capsule" != "none" && -f "$root/$subject_capsule" ]]; then
-  add_claims "$(section_field "$root/$subject_capsule" "Workset Manifest" Write)"
+  if [[ "$subject_role" == "worker" || "$subject_role" == "consumer" ]]; then
+    # worker/consumer claims must live inside their own Output Root; a Write
+    # declaration outside it is not a grant, it is a violation.
+    while IFS= read -r declared_write; do
+      declared_write="$(printf '%s' "$declared_write" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      [[ -n "$declared_write" && "$declared_write" != "none" ]] || continue
+      if [[ -n "$subject_output_root" && "$subject_output_root" != "none" ]]; then
+        case "$declared_write" in
+          "$subject_output_root" | "$subject_output_root"/*)
+            claims="${claims}${declared_write}"$'\n'
+            ;;
+          *)
+            echo "ERROR: acting task '$subject' ($subject_role) declares Write '$declared_write' outside its Output Root '$subject_output_root'; worker and consumer tasks write only inside their own Output Root." >&2
+            exit 1
+            ;;
+        esac
+      fi
+    done < <(section_field "$root/$subject_capsule" "Workset Manifest" Write | tr ',' '\n')
+  else
+    add_claims "$(section_field "$root/$subject_capsule" "Workset Manifest" Write)"
+  fi
 fi
 if [[ -n "$subject_output_root" && "$subject_output_root" != "none" ]]; then
   claims="${claims}${subject_output_root}"$'\n'
@@ -172,30 +220,39 @@ is_claimed() {
 }
 
 in_baseline() {
-  local path="$1"
+  # A change is preexisting only if status, path, AND content hash all match
+  # the recorded baseline entry. Any later write to the same path changes the
+  # content hash and voids the exemption.
+  local record="$1"
   [[ -f "$baseline_file" ]] || return 1
-  grep -Fxq "$path" "$baseline_file"
+  grep -Fxq "$record" "$baseline_file"
 }
 
 unclaimed=0
-all_changes="$(changed_paths)"
+all_changes="$(changed_entries)"
 if [[ -z "$all_changes" ]]; then
   echo "Boundary check: worktree clean; nothing to classify."
   echo "PPS boundary check: OK"
   exit 0
 fi
-while IFS= read -r changed_path; do
-  [[ -n "$changed_path" ]] || continue
+while IFS= read -r change_record; do
+  [[ -n "$change_record" ]] || continue
+  changed_path="$(printf '%s' "$change_record" | awk -F'\t' '{ print $2 }')"
   if is_claimed "$changed_path"; then
     echo "claimed: $changed_path"
-  elif (( allow_preexisting == 1 )) && in_baseline "$changed_path"; then
+  elif (( allow_preexisting == 1 )) && in_baseline "$change_record"; then
     echo "preexisting (baseline): $changed_path"
   else
     if (( allow_preexisting == 1 )) && [[ ! -f "$baseline_file" ]]; then
       echo "ERROR: --allow-preexisting requires a recorded baseline; run --record-baseline at session start." >&2
       exit 1
     fi
-    echo "unclaimed_write: $changed_path" >&2
+    if (( allow_preexisting == 1 )) && [[ -f "$baseline_file" ]] &&
+      grep -q "	${changed_path}	" "$baseline_file"; then
+      echo "unclaimed_write: $changed_path (baselined path changed again after the baseline)" >&2
+    else
+      echo "unclaimed_write: $changed_path" >&2
+    fi
     unclaimed=$((unclaimed + 1))
   fi
 done <<< "$all_changes"

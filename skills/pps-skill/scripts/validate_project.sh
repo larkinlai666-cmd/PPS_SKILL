@@ -299,6 +299,11 @@ validate_task_capsule() {
   local capsule_bytes
   local capsule_lines
   task_capsule_write_paths=""
+  task_capsule_read_paths=""
+  task_capsule_authority_ids=""
+  task_capsule_source_ids=""
+  task_capsule_asset_ids=""
+  task_capsule_component_ids=""
 
   capsule_bytes="$(wc -c < "$capsule_file" | tr -d ' ')"
   (( capsule_bytes <= 32768 )) ||
@@ -328,14 +333,33 @@ validate_task_capsule() {
     capsule_field_value="$(printf '%s\n' "$capsule_section" |
       sed -n "s/^-[[:space:]]*${field_name}:[[:space:]]*//p" | head -n 1)"
     case "$field_name" in
-      Methods) manifest_ids "$capsule_field_value" M "Task $capsule_task_id Methods" >/dev/null ;;
-      Facts) manifest_ids "$capsule_field_value" F "Task $capsule_task_id Facts" >/dev/null ;;
-      Decisions) manifest_ids "$capsule_field_value" D "Task $capsule_task_id Decisions" >/dev/null ;;
-      Sources) manifest_ids "$capsule_field_value" SRC "Task $capsule_task_id Sources" >/dev/null ;;
-      Assets) manifest_ids "$capsule_field_value" A "Task $capsule_task_id Assets" >/dev/null ;;
-      Components) manifest_ids "$capsule_field_value" C "Task $capsule_task_id Components" >/dev/null ;;
+      Methods)
+        manifest_ids "$capsule_field_value" M "Task $capsule_task_id Methods"
+        task_capsule_authority_ids="${task_capsule_authority_ids}${result}"$'\n'
+        ;;
+      Facts)
+        manifest_ids "$capsule_field_value" F "Task $capsule_task_id Facts"
+        task_capsule_authority_ids="${task_capsule_authority_ids}${result}"$'\n'
+        ;;
+      Decisions)
+        manifest_ids "$capsule_field_value" D "Task $capsule_task_id Decisions"
+        task_capsule_authority_ids="${task_capsule_authority_ids}${result}"$'\n'
+        ;;
+      Sources)
+        manifest_ids "$capsule_field_value" SRC "Task $capsule_task_id Sources"
+        task_capsule_source_ids="${task_capsule_source_ids}${result}"$'\n'
+        ;;
+      Assets)
+        manifest_ids "$capsule_field_value" A "Task $capsule_task_id Assets"
+        task_capsule_asset_ids="${task_capsule_asset_ids}${result}"$'\n'
+        ;;
+      Components)
+        manifest_ids "$capsule_field_value" C "Task $capsule_task_id Components"
+        task_capsule_component_ids="${task_capsule_component_ids}${result}"$'\n'
+        ;;
       Read)
         path_manifest "$capsule_field_value" "Task $capsule_task_id Read" yes
+        task_capsule_read_paths="$result"
         ;;
       Write)
         path_manifest "$capsule_field_value" "Task $capsule_task_id Write" no
@@ -357,6 +381,16 @@ validate_task_capsule() {
         ;;
     esac
   done
+
+  local capsule_path_count
+  capsule_path_count="$(printf '%s\n%s\n' "$task_capsule_read_paths" "$task_capsule_write_paths" |
+    sed '/^$/d' | wc -l | tr -d ' ')"
+  (( capsule_path_count <= 30 )) ||
+    add_error "Task $capsule_task_id Read and Write contain $capsule_path_count paths; hard limit is 30."
+  local capsule_authority_count
+  capsule_authority_count="$(printf '%s' "$task_capsule_authority_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+  (( capsule_authority_count <= 60 )) ||
+    add_error "Task $capsule_task_id Methods, Facts, and Decisions contain $capsule_authority_count IDs; hard limit is 60."
 }
 
 checkpoint_ok() {
@@ -769,6 +803,19 @@ if (( is_pps12 == 1 )); then
     sed -n 's/^-[[:space:]]*Writer:[[:space:]]*//p' | head -n 1)"
   task_index="$root/TASK_INDEX.md"
   canonical_files="PROJECT_STATE.md DECISIONS.md CONTEXT.md EVENTS.md TASK_INDEX.md MERGES.md PROJECT_MAP.md ENVIRONMENT.md docs/coverage.md docs/CURRENT_REVIEW_EVIDENCE.md"
+  # Canonical is a semantic role, not a fixed filename list: the Hot State
+  # declarations decide where content truth actually lives.
+  for hot_canonical in "$main_rel" "$coverage_rel" "$map_rel" "$environment_rel"; do
+    [[ -n "$hot_canonical" && "$hot_canonical" != "none" ]] || continue
+    case " $canonical_files " in
+      *" $hot_canonical "*) ;;
+      *) canonical_files="$canonical_files $hot_canonical" ;;
+    esac
+  done
+  all_task_authority_refs=""
+  all_task_component_refs=""
+  all_task_source_refs=""
+  all_task_asset_refs=""
   task_ids=""
   terminal_tasks=""
   output_roots=""
@@ -820,6 +867,22 @@ if (( is_pps12 == 1 )); then
             add_error "Task $task_id capsule does not exist: $task_capsule"
           elif [[ "$task_role" != "integrator" ]]; then
             validate_task_capsule "$task_capsule_path" "$task_id" "$task_role"
+            all_task_authority_refs="${all_task_authority_refs}$(
+              printf '%s' "$task_capsule_authority_ids" | sed '/^$/d' |
+                awk -v task="$task_id" '{ print task ":" $0 }'
+            )"$'\n'
+            all_task_component_refs="${all_task_component_refs}$(
+              printf '%s' "$task_capsule_component_ids" | sed '/^$/d' |
+                awk -v task="$task_id" '{ print task ":" $0 }'
+            )"$'\n'
+            all_task_source_refs="${all_task_source_refs}$(
+              printf '%s' "$task_capsule_source_ids" | sed '/^$/d' |
+                awk -v task="$task_id" '{ print task ":" $0 }'
+            )"$'\n'
+            all_task_asset_refs="${all_task_asset_refs}$(
+              printf '%s' "$task_capsule_asset_ids" | sed '/^$/d' |
+                awk -v task="$task_id" '{ print task ":" $0 }'
+            )"$'\n'
             while IFS= read -r write_rel; do
               [[ -n "$write_rel" ]] || continue
               for canonical in $canonical_files; do
@@ -827,6 +890,16 @@ if (( is_pps12 == 1 )); then
                   add_error "Task $task_id ($task_role) declares canonical file '$canonical' in its Write set."
                 fi
               done
+              # worker/consumer writes land only inside the task's own Output
+              # Root; a Write declaration is not a second grant channel.
+              if [[ -n "$task_output_root" && "$task_output_root" != "none" ]]; then
+                case "$write_rel" in
+                  "$task_output_root" | "$task_output_root"/*) ;;
+                  *)
+                    add_error "Task $task_id ($task_role) Write path '$write_rel' is outside its Output Root '$task_output_root'; worker and consumer tasks write only inside their own Output Root."
+                    ;;
+                esac
+              fi
             done <<< "$task_capsule_write_paths"
           fi
         fi
@@ -922,8 +995,47 @@ if (( is_pps12 == 1 )); then
         pending|integrated|deferred|rejected) ;;
         *) add_error "Merge receipt $merge_id has invalid Status '$merge_status'." ;;
       esac
+      # Status and Relation must tell the same story.
+      case "$merge_status" in
+        integrated)
+          case "$merge_relation" in
+            absorbs|layers_on|consumes_only|supersedes|rollback_to) ;;
+            *) add_error "Merge receipt $merge_id Status 'integrated' is incompatible with Relation '$merge_relation'." ;;
+          esac
+          ;;
+        deferred)
+          [[ "$merge_relation" == "deferred" ]] ||
+            add_error "Merge receipt $merge_id Status 'deferred' requires Relation 'deferred', found '$merge_relation'."
+          ;;
+        rejected)
+          [[ "$merge_relation" == "rejected" ]] ||
+            add_error "Merge receipt $merge_id Status 'rejected' requires Relation 'rejected', found '$merge_relation'."
+          ;;
+      esac
       [[ "$merge_target" =~ ^PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$ ]] ||
         add_error "Merge receipt $merge_id Target Package must be a PKG-* ID, found '$merge_target'."
+      # The Target Package must be a real package: the current one or one
+      # recorded in the chronicle. A receipt into a phantom package is not
+      # evidence of integration.
+      if [[ "$merge_target" =~ ^PKG- && "$merge_target" != "$package" ]]; then
+        if [[ ! -f "$root/EVENTS.md" ]] ||
+          ! grep -Eq "\\[${merge_target}\\]" "$root/EVENTS.md"; then
+          add_error "Merge receipt $merge_id Target Package '$merge_target' is neither the current package '$package' nor recorded in EVENTS.md."
+        fi
+      fi
+      if [[ "$merge_status" == "integrated" ]]; then
+        # An integration without accepted content, approval, or verification
+        # is a claim, not a receipt.
+        if [[ -z "$merge_accepted" || "$merge_accepted" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'integrated' with an empty Accepted set; an integration that accepted nothing is not an integration."
+        fi
+        if [[ -z "$merge_approval" || "$merge_approval" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'integrated' without an Approval decision; name the D-* record that authorized this merge."
+        fi
+        if [[ -z "$merge_verification" || "$merge_verification" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'integrated' without Verification evidence; name the command, test, or inspection that checked the merged result."
+        fi
+      fi
       if [[ -n "$merge_sources" && "$merge_sources" != "none" ]]; then
         while IFS= read -r src_task; do
           src_task="$(printf '%s' "$src_task" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -966,6 +1078,14 @@ if (( is_pps12 == 1 )); then
           add_error "Merge receipt $merge_id Base Checkpoint '$merge_base' is not a resolvable Git object or the explicit lineage_incomplete marker."
         checkpoint_ok "$merge_result" ||
           add_error "Merge receipt $merge_id Result Checkpoint '$merge_result' is not a resolvable Git object or the explicit lineage_incomplete marker."
+        if [[ "$merge_base" == "lineage_incomplete" || "$merge_result" == "lineage_incomplete" ]]; then
+          # The migration escape hatch needs a reason on record; silent use
+          # on a project with normal Git history is forbidden.
+          merge_lineage_note="$(merge_field 'Lineage Note')"
+          if [[ -z "$merge_lineage_note" || "$merge_lineage_note" == "none" ]]; then
+            add_error "Merge receipt $merge_id uses lineage_incomplete without a 'Lineage Note' field explaining why pre-layer history is unavailable; new projects must use real checkpoints."
+          fi
+        fi
       fi
     done <<< "$(printf '%s\n' "$merge_ids" | awk '!seen[$0]++')"
   fi
@@ -1155,6 +1275,48 @@ if [[ -f "$root/SOURCE_INDEX.md" ]]; then
     matching_lines "$root/SOURCE_INDEX.md" "^\\|[[:space:]]*${id}[[:space:]]*\\|"
     add_error "SOURCE_INDEX.md contains duplicate source rows for $id (lines $result)."
   done <<< "$duplicate_source_ids"
+fi
+
+# Task capsule IDs must resolve against the same authorities as the main
+# Workset: a structurally valid task that references phantom records would
+# still drift at resume time.
+if (( is_pps12 == 1 )); then
+  while IFS= read -r ref; do
+    [[ -n "$ref" ]] || continue
+    ref_task="${ref%%:*}"
+    ref_id="${ref#*:}"
+    active_count="$(printf '%s\n' "$active_ids" | grep -Fxc "$ref_id" || true)"
+    [[ "$active_count" == "1" ]] ||
+      add_error "Task $ref_task references authority $ref_id which is not in the DECISIONS.md active block."
+  done <<< "$(printf '%s' "$all_task_authority_refs" | sed '/^$/d' | awk '!seen[$0]++')"
+  while IFS= read -r ref; do
+    [[ -n "$ref" ]] || continue
+    ref_task="${ref%%:*}"
+    ref_id="${ref#*:}"
+    if [[ -n "$map_path" && -f "$map_path" ]]; then
+      component_count="$(grep -Ec "^\\|[[:space:]]*${ref_id}[[:space:]]*\\|" "$map_path" || true)"
+      [[ "$component_count" == "1" ]] ||
+        add_error "Task $ref_task references component $ref_id which does not exist in $map_rel."
+    fi
+  done <<< "$(printf '%s' "$all_task_component_refs" | sed '/^$/d' | awk '!seen[$0]++')"
+  while IFS= read -r ref; do
+    [[ -n "$ref" ]] || continue
+    ref_task="${ref%%:*}"
+    ref_id="${ref#*:}"
+    if [[ ! -f "$root/SOURCE_INDEX.md" ]] ||
+      ! grep -Eq "^\\|[[:space:]]*${ref_id}[[:space:]]*\\|" "$root/SOURCE_INDEX.md"; then
+      add_error "Task $ref_task references source $ref_id which does not exist in SOURCE_INDEX.md."
+    fi
+  done <<< "$(printf '%s' "$all_task_source_refs" | sed '/^$/d' | awk '!seen[$0]++')"
+  while IFS= read -r ref; do
+    [[ -n "$ref" ]] || continue
+    ref_task="${ref%%:*}"
+    ref_id="${ref#*:}"
+    if [[ ! -f "$root/ASSETS.md" ]] ||
+      ! grep -Eq "^\\|[[:space:]]*${ref_id}[[:space:]]*\\|" "$root/ASSETS.md"; then
+      add_error "Task $ref_task references asset $ref_id which does not exist in ASSETS.md."
+    fi
+  done <<< "$(printf '%s' "$all_task_asset_refs" | sed '/^$/d' | awk '!seen[$0]++')"
 fi
 
 if [[ ${#warnings[@]} -gt 0 && "$quiet" != "--quiet" ]]; then

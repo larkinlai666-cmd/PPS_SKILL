@@ -48,19 +48,32 @@ if ($repoProbe.Code -ne 0 -or $repoProbe.Text -ne 'true') {
 
 $baselinePath = Join-Path $rootFull '.pps/boundary-baseline'
 
-function Get-ChangedPaths {
+function Get-PathSha256([string]$Path) {
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-ChangedEntries {
+    # One record per change: "<status>`t<path>`t<content-hash>". A path is only
+    # "the same preexisting change" if status AND content still match.
     $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
-    $paths = @()
+    $entries = @()
     foreach ($statusLine in $statusProbe.Output) {
         $line = "$statusLine"
         if ($line.Length -le 3) { continue }
+        $entryStatus = $line.Substring(0, 2)
         $changed = $line.Substring(3).Trim('"')
         if ($changed.Contains(' -> ')) {
             $changed = $changed.Split(' -> ')[-1]
         }
-        $paths += $changed
+        $changedFile = Join-Path $rootFull $changed
+        $contentHash = if (Test-Path -LiteralPath $changedFile -PathType Leaf) {
+            Get-PathSha256 $changedFile
+        } else {
+            'absent'
+        }
+        $entries += "$entryStatus`t$changed`t$contentHash"
     }
-    return $paths
+    return $entries
 }
 
 if ($RecordBaseline) {
@@ -68,12 +81,12 @@ if ($RecordBaseline) {
     if (-not (Test-Path -LiteralPath $baselineDir)) {
         New-Item -ItemType Directory -Path $baselineDir -Force | Out-Null
     }
-    $paths = Get-ChangedPaths
+    $entries = @(Get-ChangedEntries)
     [System.IO.File]::WriteAllText(
         $baselinePath,
-        (($paths -join "`n") + $(if ($paths.Count -gt 0) { "`n" } else { '' })),
+        (($entries -join "`n") + $(if ($entries.Count -gt 0) { "`n" } else { '' })),
         [System.Text.UTF8Encoding]::new($false))
-    Write-Host "Boundary baseline recorded: $($paths.Count) pre-existing dirty path(s)."
+    Write-Host "Boundary baseline recorded: $($entries.Count) pre-existing dirty path(s) with content fingerprints."
     Write-Host "PPS boundary check: BASELINE RECORDED"
     exit 0
 }
@@ -149,7 +162,26 @@ function Add-Claims([string]$Value) {
 if (-not [string]::IsNullOrWhiteSpace($subjectCapsule) -and $subjectCapsule -ne 'none') {
     $capsulePath = Join-Path $rootFull $subjectCapsule
     if (Test-Path -LiteralPath $capsulePath -PathType Leaf) {
-        Add-Claims (Get-SectionField $capsulePath 'Workset Manifest' 'Write')
+        $declaredWrite = Get-SectionField $capsulePath 'Workset Manifest' 'Write'
+        if ($subjectRole -in @('worker', 'consumer')) {
+            # worker/consumer claims must live inside their own Output Root; a
+            # Write declaration outside it is not a grant, it is a violation.
+            if (-not [string]::IsNullOrWhiteSpace($declaredWrite) -and $declaredWrite -ne 'none') {
+                foreach ($entry in @($declaredWrite.Split(',') | ForEach-Object { $_.Trim() })) {
+                    if ([string]::IsNullOrWhiteSpace($entry) -or $entry -eq 'none') { continue }
+                    if (-not [string]::IsNullOrWhiteSpace($subjectOutputRoot) -and $subjectOutputRoot -ne 'none') {
+                        if ($entry -eq $subjectOutputRoot -or $entry.StartsWith("$subjectOutputRoot/")) {
+                            $claims.Add($entry)
+                        } else {
+                            Write-Host "ERROR: acting task '$subject' ($subjectRole) declares Write '$entry' outside its Output Root '$subjectOutputRoot'; worker and consumer tasks write only inside their own Output Root."
+                            exit 1
+                        }
+                    }
+                }
+            }
+        } else {
+            Add-Claims $declaredWrite
+        }
     }
 }
 if (-not [string]::IsNullOrWhiteSpace($subjectOutputRoot) -and $subjectOutputRoot -ne 'none') {
@@ -174,31 +206,42 @@ function Test-Claimed([string]$Path) {
     return $false
 }
 
-$baselinePaths = @()
+$baselineRecords = @()
+$baselinePathsOnly = @()
 if (Test-Path -LiteralPath $baselinePath -PathType Leaf) {
-    $baselinePaths = @([System.IO.File]::ReadAllLines($baselinePath, [System.Text.Encoding]::UTF8) |
+    $baselineRecords = @([System.IO.File]::ReadAllLines($baselinePath, [System.Text.Encoding]::UTF8) |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    foreach ($record in $baselineRecords) {
+        $parts = $record.Split("`t")
+        if ($parts.Count -ge 2) { $baselinePathsOnly += $parts[1] }
+    }
 }
 
-$changedPaths = Get-ChangedPaths
-if ($changedPaths.Count -eq 0) {
+$changedEntries = @(Get-ChangedEntries)
+if ($changedEntries.Count -eq 0) {
     Write-Host "Boundary check: worktree clean; nothing to classify."
     Write-Host "PPS boundary check: OK"
     exit 0
 }
 
 $unclaimed = 0
-foreach ($changedPath in $changedPaths) {
+foreach ($changeRecord in $changedEntries) {
+    $changedPath = $changeRecord.Split("`t")[1]
     if (Test-Claimed $changedPath) {
         Write-Host "claimed: $changedPath"
-    } elseif ($AllowPreexisting -and ($changedPath -in $baselinePaths)) {
+    } elseif ($AllowPreexisting -and ($changeRecord -in $baselineRecords)) {
+        # Status, path, AND content hash all match the recorded baseline entry.
         Write-Host "preexisting (baseline): $changedPath"
     } else {
         if ($AllowPreexisting -and -not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) {
             Write-Host "ERROR: -AllowPreexisting requires a recorded baseline; run -RecordBaseline at session start."
             exit 1
         }
-        Write-Host "unclaimed_write: $changedPath"
+        if ($AllowPreexisting -and ($changedPath -in $baselinePathsOnly)) {
+            Write-Host "unclaimed_write: $changedPath (baselined path changed again after the baseline)"
+        } else {
+            Write-Host "unclaimed_write: $changedPath"
+        }
         $unclaimed++
     }
 }

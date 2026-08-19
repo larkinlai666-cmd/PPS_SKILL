@@ -1,9 +1,56 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-19 (updated for 0.4.1 hardening round)
-- Scope: skill 0.4.1, PPS/1.2 field distillation + external-review blocker fixes
-- Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of all five external-review bypass fixtures on both platforms, Bash/PowerShell parity, full regression
+- Review date: 2026-08-19 (updated for the 0.4.2 hardening round)
+- Scope: skill 0.4.2, PPS/1.2 field distillation + two external-review blocker rounds
+- Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of all ten external bypass fixtures (PKG-024 five + PKG-025 five) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
+
+## 0.4.2 hardening round
+
+A second external review (PKG-025) accepted that 0.4.1 closed all five original bypasses, then advanced the adversary one semantic level: from "does the path set change" to "does the content behind an unchanged path set change", from "does a receipt exist" to "does the receipt carry real disposition evidence", from "are listed canonical files protected" to "is the Main content truth protected by role rather than by filename". Five new bypasses resulted. 0.4.2 closes all five, each landed as a failing test first.
+
+Replay results of the five PKG-025 fixtures, both platforms, clean environments:
+
+| External fixture | 0.4.1 behavior (confirmed) | 0.4.2 behavior (verified Bash + PowerShell) |
+|---|---|---|
+| REVIEW2-P0-001: dirty file changes again after stamp | readiness 0 | readiness 4, "worktree content changed"; stamp also binds capsule_sha256 and platform, and CONTEXT.md drift alone voids it |
+| REVIEW2-P0-002: baselined path rewritten after baseline | boundary 0, preexisting | boundary 1, "baselined path changed again after the baseline" |
+| REVIEW2-P0-003: worker declares `docs/MAIN.md` in Write | validate 0, boundary claims it | validate 1 at registration; boundary refuses the subject outright; Main/Coverage/Map/Environment are canonical by role |
+| REVIEW2-P0-004: hollow integrated receipt (all evidence `none`, PKG-999, lineage_incomplete) | validate 0 | validate 1 with five distinct diagnostics: empty Accepted, missing Approval, missing Verification, phantom Target Package, lineage_incomplete without Lineage Note |
+| REVIEW2-P1-005: capsule references M-404 / C-404 | validate 0 | validate 1: authority must be in the active block, component must exist in the map; sources/assets likewise; task budgets enforced |
+
+A parity root cause surfaced during replay and is recorded deliberately: the PowerShell porcelain parser trimmed the leading status space, silently shifting the path slice so content hashes were computed for nonexistent files and never changed. The lesson generalizes the 0.4.1 one — an implementation can pass its own negative tests while measuring the wrong thing; fixtures must assert observable state transitions (same stamp accepted, then rejected after a content-only change), not just exit codes on static setups. Cross-platform stamp parity (Bash gate, PowerShell readiness) is now a tested invariant.
+
+## Superset acceptance claims
+
+Each claim was re-verified for 0.4.2:
+
+1. **No legacy capability removed**: both inherited smoke suites pass without deleting or weakening any assertion; all ten prior negative fixtures still fail correctly.
+2. **PPS/1.0 and PPS/1.1 projects validate unchanged**: the 1.0 downgrade fixture passes in both suites and a synthesized 1.1-era project validates and resumes with exit 0 on both platforms under the 0.4.2 validator.
+3. **Every new mechanism has a failing test**: the 0.4.2 families (content-stamp staleness, capsule drift, baseline rewrite, worker Write escape, hollow receipts, phantom references) run on both platforms with positive controls.
+4. **New requirements cost nothing when unused**: single-task 1.2 projects and untouched 1.0/1.1 projects pay nothing; the multitask layer still activates only via `TASK_INDEX.md`.
+5. **The no-auto-execution stance is preserved**: the structural validator never executes manifest commands; execution belongs to the verify gate's version-controlled entry only.
+6. **Bash and PowerShell expose one control surface**: every fixture replayed identically, and verify stamps are interchangeable across platforms.
+7. **Distribution integrity holds**: file lists, template tokens, links, VERSION/CHANGELOG agreement, and CI runner coverage all validate.
+
+## Boundary review
+
+Unchanged, deliberately:
+
+- one human owner; serial canonical writes; no distributed lock, team backlog, role model, or concurrent merge authority.
+- red-line *content* stays project-specific; the protocol fixes position and format only.
+- mechanisms not exercised by the field campaigns (asset tiers, L1-L3, stages, evidence profile) are retained unchanged.
+- the stamp proves the inspected gate ran on this device against these exact bytes; a malicious hand-edited stamp remains within the single-owner trust model.
+- boundary claims are subject-scoped and content-aware but still declaration-based; diffing against per-task base checkpoints remains future work (0.5).
+
+## Residual risks
+
+- `project_verify.*` ships with real minimal assertions but the project owner can still hollow it out; the gate enforces execution, not sincerity. The template states this explicitly.
+- Approval/Verification receipt fields must resolve and be non-`none`, but the truth of the named evidence is not re-executed at validation time.
+- Event grammar validation checks shape, not truth.
+
+Within the stated boundary, 0.4.2 is a strict capability superset of 0.4.1, 0.4.0, and 0.3.0/PPS/1.1: every legacy behavior is preserved and verified, and all ten externally proven bypasses across two review rounds are closed with regression coverage on both platforms.
+
 
 ## 0.4.1 hardening round
 
@@ -20,37 +67,6 @@ Replay results of the five original external bypass fixtures, both platforms, cl
 | REVIEW-P1-005: Red Lines exists but not first | validate 0 | validate 1 with distinct diagnostics for missing / duplicated / misplaced |
 
 Additional hardening verified by new negative tests: the verify stamp binds entry SHA-256, capsule SHA-256, and worktree identity, and readiness rejects a stamp whose entry or worktree changed afterwards; `append_event.*` inserts inside the `## Events` section even with trailing sections; proposal-aging warnings respect restatement in `Next`.
-
-## Superset acceptance claims
-
-Each claim was re-verified for 0.4.1:
-
-1. **No legacy capability removed**: the inherited Bash and PowerShell smoke suites pass without deleting or weakening any assertion.
-2. **PPS/1.0 and PPS/1.1 projects validate unchanged**: the PPS/1.0 downgrade fixture passes in both suites, and a synthesized PPS/1.1-era project (bare `Present` coverage, undated proposals, free-form Verify, no EVENTS/gate/red-lines files) validates and resumes cleanly under the 0.4.1 validator on both platforms. 1.2-only gates are keyed to the `Protocol:` declaration.
-3. **Every new mechanism has a failing test**: all 0.4.0 negative tests plus the new 0.4.1 families (failing verify, unrouted verify, stale worktree stamp, capsule grammar, output-root escape/overlap, terminal-task receipts, receipt reference integrity, unclaimed canonical, baseline-gated preexisting, event placement) run on both platforms.
-4. **New requirements cost nothing when unused**: single-task 1.2 projects and untouched 1.0/1.1 projects pay nothing; the multitask layer still activates only via `TASK_INDEX.md`.
-5. **The no-auto-execution stance is preserved and now meaningful**: the structural validator still never executes manifest commands; execution belongs to the verify gate, which runs only the version-controlled `scripts/project_verify.*` entry, never free-form Markdown text.
-6. **Bash and PowerShell expose one control surface**: every fixture above was replayed on both platforms with identical outcomes.
-7. **Distribution integrity holds**: file lists, template tokens, links, VERSION/CHANGELOG agreement, and CI runner coverage all validate.
-
-## Boundary review
-
-Unchanged, deliberately:
-
-- one human owner; serial canonical writes; no distributed lock, team backlog, role model, or concurrent merge authority.
-- red-line *content* stays project-specific; the protocol fixes position and format only.
-- mechanisms not exercised by the field campaigns (asset tiers, L1-L3, stages, evidence profile) are retained unchanged.
-- the stamp proves the inspected gate ran on this device against this worktree state; a malicious hand-edited stamp remains within the single-owner trust model, though the worktree binding now makes accidental staleness detectable.
-- boundary claims are subject-scoped but still declaration-based; diffing against per-task base checkpoints remains future work (0.5).
-
-## Residual risks
-
-- `project_verify.*` ships with real minimal assertions but the project owner can still hollow it out; the gate can enforce execution, not sincerity. The template states this explicitly.
-- Event grammar validation checks shape, not truth.
-- Proposal aging depends on validation actually running; closing requires it, so the gap is bounded.
-
-Within the stated boundary, 0.4.1 is a strict capability superset of 0.4.0 and of 0.3.0/PPS/1.1: every legacy behavior is preserved and verified, every declared 1.2 protection is now machine-enforced with negative tests on both platforms, and all five externally proven bypasses are closed.
-
 
 ## Field-incident replay matrix
 

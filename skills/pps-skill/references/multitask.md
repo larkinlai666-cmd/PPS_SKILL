@@ -93,6 +93,10 @@ Receipt rules:
 
 - `MERGE-*` IDs are stable and unique; the same source/target pair may have several receipts, each with its own ID.
 - `Status: integrated` requires both a base checkpoint and a result checkpoint (Git commits, or an explicit `lineage_incomplete` marker when history predates the layer). Without checkpoints the receipt may exist but must not claim `integrated`.
+- `Status: integrated` also requires real disposition evidence: a non-empty `Accepted` set, an `Approval` naming the authorizing `D-*` decision, and `Verification` naming the command, test, or inspection that checked the merged result. A receipt whose evidence fields are all `none` is a claim, not a receipt, and fails validation.
+- The `Target Package` must be a real package: the current Hot State package or one recorded in `EVENTS.md`.
+- `lineage_incomplete` is a migration escape hatch only: the receipt must carry a `Lineage Note` field explaining why pre-layer history is unavailable. Projects with normal Git history must use real checkpoints.
+- Status and Relation must agree: `deferred` status requires the `deferred` relation, `rejected` requires `rejected`, and `integrated` is incompatible with both.
 - Fingerprints alone are not lineage: knowing the final bytes does not reconstruct who contributed what. Checkpoints do.
 - Receipts do not merge code. They record how a human-driven serial merge happened so it can be audited and selectively reconsidered later.
 
@@ -100,7 +104,7 @@ Receipt rules:
 
 The declared `Write` set becomes enforceable when the layer is active:
 
-- worker/consumer changes must land inside the task's `Output Root` or declared `Write` paths;
+- worker/consumer changes must land inside the task's `Output Root`; the task's declared `Write` paths must themselves sit inside that root — a Write declaration is never a second grant channel, and the validator and boundary check both reject Write paths outside the root;
 - run `scripts/boundary_check.*` before closing a task or package: it classifies every worktree change as claimed (by the canonical Write set, a task Write set, or a task output root) or flags it as an `unclaimed_write` failure;
 - pre-existing dirty files in a shared worktree belong to no current task and must not be claimed by one; classify them explicitly with `--allow-preexisting`/`-AllowPreexisting` instead of silently absorbing them;
 - derived-task scratch directories default under git-ignored `local-task-output/` so product linting and tests never scan them.

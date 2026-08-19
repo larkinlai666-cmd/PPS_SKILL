@@ -235,7 +235,11 @@ cp -R "$temp_root/standard-case" "$asset_case"
 mkdir -p "$asset_case/local-assets/source"
 printf 'canonical core bytes\n' >"$asset_case/local-assets/source/core.bin"
 asset_bytes="$(wc -c < "$asset_case/local-assets/source/core.bin" | tr -d ' ')"
-asset_sha="$(shasum -a 256 "$asset_case/local-assets/source/core.bin" | awk '{print $1}')"
+if command -v shasum >/dev/null 2>&1; then
+  asset_sha="$(shasum -a 256 "$asset_case/local-assets/source/core.bin" | awk '{print $1}')"
+else
+  asset_sha="$(sha256sum "$asset_case/local-assets/source/core.bin" | awk '{print $1}')"
+fi
 {
   printf '# Asset Registry\n\n## Asset Manifest\n\n'
   printf '| ID | Priority | Sync | Materialize | Locator | SHA-256 | Bytes | Purpose |\n'
@@ -858,6 +862,46 @@ expect_invalid "$temp_root/output-root-overlap" \
   "overlaps Task T-002 Output Root" \
   "Overlapping task output roots"
 
+cp -R "$multitask_case" "$temp_root/worker-writes-main"
+sed -i.bak 's|^- Write: local-task-output/T-002/out.md$|- Write: docs/MAIN.md|' \
+  "$temp_root/worker-writes-main/task-contexts/T-002.md"
+expect_invalid "$temp_root/worker-writes-main" \
+  "outside its Output Root" \
+  "Worker Write outside its Output Root"
+
+cp -R "$multitask_case" "$temp_root/hollow-receipt"
+perl -0pi -e 's/(### T-002\n- Title: Worker\n- Role: worker\n- Status: )active/${1}integrated/' \
+  "$temp_root/hollow-receipt/TASK_INDEX.md"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-999\n- Source Tasks: T-002\n- Relation: absorbs\n- Accepted: none\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: lineage_incomplete\n- Result Checkpoint: lineage_incomplete\n- Approval: none\n- Verification: none\n- Status: integrated\n'
+} >"$temp_root/hollow-receipt/MERGES.md"
+expect_invalid "$temp_root/hollow-receipt" \
+  "an integration that accepted nothing is not an integration" \
+  "Hollow integrated receipt"
+expect_invalid "$temp_root/hollow-receipt" \
+  "without an Approval decision" \
+  "Receipt without approval"
+expect_invalid "$temp_root/hollow-receipt" \
+  "without Verification evidence" \
+  "Receipt without verification"
+expect_invalid "$temp_root/hollow-receipt" \
+  "is neither the current package" \
+  "Receipt targeting phantom package"
+expect_invalid "$temp_root/hollow-receipt" \
+  "uses lineage_incomplete without a 'Lineage Note'" \
+  "lineage_incomplete without note"
+
+cp -R "$multitask_case" "$temp_root/phantom-refs"
+sed -i.bak 's|^- Methods: none$|- Methods: M-404|; s|^- Components: C-ROOT$|- Components: C-404|' \
+  "$temp_root/phantom-refs/task-contexts/T-002.md"
+expect_invalid "$temp_root/phantom-refs" \
+  "references authority M-404 which is not in the DECISIONS.md active block" \
+  "Task referencing phantom authority"
+expect_invalid "$temp_root/phantom-refs" \
+  "references component C-404 which does not exist" \
+  "Task referencing phantom component"
+
 stamp_case="$temp_root/stamp-case"
 cp -R "$temp_root/standard-case" "$stamp_case"
 set +e
@@ -924,7 +968,16 @@ if bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
   exit 1
 fi
 grep -q 'unclaimed_write: rogue2.txt' "$temp_root/boundary-newrogue.out"
-rm "$boundary_case/rogue.txt" "$boundary_case/rogue2.txt" \
+rm "$boundary_case/rogue2.txt"
+printf 'rogue content rewritten after baseline\n' >"$boundary_case/rogue.txt"
+if bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
+  --allow-preexisting >"$temp_root/boundary-rewritten.out" 2>&1; then
+  echo "Boundary check exempted a baselined path whose content changed." >&2
+  exit 1
+fi
+grep -q 'baselined path changed again after the baseline' \
+  "$temp_root/boundary-rewritten.out"
+rm "$boundary_case/rogue.txt" \
   "$boundary_case/.pps/boundary-baseline"
 printf 'update\n' >>"$boundary_case/docs/MAIN.md"
 bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
@@ -996,7 +1049,35 @@ bash "$stale_worktree_case/scripts/readiness_check.sh" "$stale_worktree_case" --
 stale_worktree_code=$?
 set -e
 [[ "$stale_worktree_code" == "4" ]]
-grep -q 'worktree changed after the stamp' "$temp_root/stale-worktree.out"
+grep -q 'worktree content changed after the stamp' "$temp_root/stale-worktree.out"
+
+dirty_content_case="$temp_root/dirty-content-case"
+bash "$skill/scripts/init_project.sh" dirty-content-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+printf 'dirty before gate\n' >>"$dirty_content_case/docs/MAIN.md"
+bash "$dirty_content_case/scripts/verify_gate.sh" "$dirty_content_case" >/dev/null
+printf 'dirty again after gate\n' >>"$dirty_content_case/docs/MAIN.md"
+set +e
+bash "$dirty_content_case/scripts/readiness_check.sh" "$dirty_content_case" --verified \
+  >"$temp_root/dirty-content.out" 2>&1
+dirty_content_code=$?
+set -e
+[[ "$dirty_content_code" == "4" ]]
+grep -q 'worktree content changed after the stamp' "$temp_root/dirty-content.out"
+
+capsule_drift_case="$temp_root/capsule-drift-case"
+bash "$skill/scripts/init_project.sh" capsule-drift-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+bash "$capsule_drift_case/scripts/verify_gate.sh" "$capsule_drift_case" >/dev/null
+printf '\n<!-- capsule drift -->\n' >>"$capsule_drift_case/CONTEXT.md"
+set +e
+bash "$capsule_drift_case/scripts/readiness_check.sh" "$capsule_drift_case" --verified \
+  >"$temp_root/capsule-drift.out" 2>&1
+capsule_drift_code=$?
+set -e
+[[ "$capsule_drift_code" == "4" ]]
 
 event_placement_case="$temp_root/event-placement-case"
 cp -R "$temp_root/standard-case" "$event_placement_case"

@@ -4,6 +4,24 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-19
+
+Second hardening round closing all five blockers from the external upgrade review of 0.4.1 (REVIEW2-P0-001..004, REVIEW2-P1-005) plus the portability finding P2-006. The review's framing: 0.4.1 enforced that gates exist and run; 0.4.2 enforces that their evidence binds to content, not to shapes.
+
+### Fixed
+
+- **REVIEW2-P0-001 — verify stamps bind content, not porcelain text**: the worktree identity in `.pps/verify-stamp` is now HEAD plus a sorted digest of every changed path's status AND current byte SHA-256. An already-dirty file that changes again after the gate now voids the stamp. `readiness_check.*` additionally verifies every stamp field including `capsule_sha256` (CONTEXT.md drift voids the stamp) and `platform`, and the fingerprint is byte-identical across Bash and PowerShell so a stamp written by one platform verifies on the other.
+- **REVIEW2-P0-002 — baselines bind content**: `--record-baseline`/`-RecordBaseline` records status + path + content SHA-256 per entry; `--allow-preexisting` exempts a change only when all three still match. A baselined path rewritten later fails with an explicit "baselined path changed again" diagnostic.
+- **REVIEW2-P0-003 — worker Write is not a second grant channel**: worker/consumer Write paths must sit inside the task's own Output Root; the validator rejects violations at registration and `boundary_check.*` refuses to run for a subject whose declarations escape its root. The canonical file list is now dynamic: Hot State `Main`, `Coverage`, `Map`, and `Environment` targets are canonical by role, not by filename. `references/multitask.md` no longer says "Output Root **or** declared Write paths".
+- **REVIEW2-P0-004 — hollow receipts fail**: `integrated` receipts require a non-empty `Accepted` set, an `Approval` naming a real `D-*` decision, and non-`none` `Verification`; the `Target Package` must be the current package or one recorded in `EVENTS.md`; Status and Relation must be compatible (deferred↔deferred, rejected↔rejected); and `lineage_incomplete` demands a `Lineage Note` explaining why pre-layer history is unavailable.
+- **REVIEW2-P1-005 — task capsule IDs resolve, budgets apply**: task capsule Methods/Facts/Decisions must be in the DECISIONS.md active block, Components must exist in the project map, Sources in SOURCE_INDEX.md, Assets in ASSETS.md; the 30-path and 60-authority budgets now apply to task capsules.
+- **REVIEW2-P2-006** — `tests/smoke.sh` uses the shasum/sha256sum fallback instead of hardcoding `shasum`.
+- Root-cause fix for a silent parity bug found while replaying the review fixtures: PowerShell porcelain parsing had been trimming the leading status space, shifting the path slice and making content hashes constant. Both gate and readiness now parse raw porcelain lines.
+
+### Added
+
+- New negative test families on both platforms: already-dirty file changing after the stamp, capsule drift after the stamp, baselined path rewritten after the baseline, worker declaring `docs/MAIN.md` in Write, hollow integrated receipts (five distinct diagnostics), and task capsules referencing phantom `M-*`/`C-*` records — plus positive controls.
+
 ## [0.4.1] - 2026-08-19
 
 Hardening release closing all five blockers from the external replacement review (REVIEW-P0-001..004, REVIEW-P1-005) plus the coupled secondary findings (P2-006..011). No protocol grammar changes; PPS/1.2 declarations gain enforcement.

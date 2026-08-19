@@ -615,6 +615,11 @@ if ($isPps11Plus) {
 
 function Test-TaskCapsule([string]$CapsulePath, [string]$TaskId, [string]$TaskRole) {
     $script:taskCapsuleWritePaths = @()
+    $script:taskCapsuleReadPaths = @()
+    $script:taskCapsuleAuthorityIds = @()
+    $script:taskCapsuleSourceIds = @()
+    $script:taskCapsuleAssetIds = @()
+    $script:taskCapsuleComponentIds = @()
     $capsuleRel = $CapsulePath.Substring($rootFull.Length).TrimStart('\', '/')
     $capsuleBytes = (Get-Item -LiteralPath $CapsulePath).Length
     if ($capsuleBytes -gt 32768) {
@@ -650,13 +655,13 @@ function Test-TaskCapsule([string]$CapsulePath, [string]$TaskId, [string]$TaskRo
         }
         $fieldValue = $fieldMatches[0].Groups[1].Value
         switch ($fieldName) {
-            'Methods' { $null = Get-ManifestIds $fieldValue 'M' "Task $TaskId Methods" }
-            'Facts' { $null = Get-ManifestIds $fieldValue 'F' "Task $TaskId Facts" }
-            'Decisions' { $null = Get-ManifestIds $fieldValue 'D' "Task $TaskId Decisions" }
-            'Sources' { $null = Get-ManifestIds $fieldValue 'SRC' "Task $TaskId Sources" }
-            'Assets' { $null = Get-ManifestIds $fieldValue 'A' "Task $TaskId Assets" }
-            'Components' { $null = Get-ManifestIds $fieldValue 'C' "Task $TaskId Components" }
-            'Read' { $null = Get-PathManifest $fieldValue "Task $TaskId Read" $true $rootFull }
+            'Methods' { $script:taskCapsuleAuthorityIds += @(Get-ManifestIds $fieldValue 'M' "Task $TaskId Methods") }
+            'Facts' { $script:taskCapsuleAuthorityIds += @(Get-ManifestIds $fieldValue 'F' "Task $TaskId Facts") }
+            'Decisions' { $script:taskCapsuleAuthorityIds += @(Get-ManifestIds $fieldValue 'D' "Task $TaskId Decisions") }
+            'Sources' { $script:taskCapsuleSourceIds += @(Get-ManifestIds $fieldValue 'SRC' "Task $TaskId Sources") }
+            'Assets' { $script:taskCapsuleAssetIds += @(Get-ManifestIds $fieldValue 'A' "Task $TaskId Assets") }
+            'Components' { $script:taskCapsuleComponentIds += @(Get-ManifestIds $fieldValue 'C' "Task $TaskId Components") }
+            'Read' { $script:taskCapsuleReadPaths = @(Get-PathManifest $fieldValue "Task $TaskId Read" $true $rootFull) }
             'Write' {
                 $script:taskCapsuleWritePaths = @(
                     Get-PathManifest $fieldValue "Task $TaskId Write" $false $rootFull)
@@ -680,6 +685,13 @@ function Test-TaskCapsule([string]$CapsulePath, [string]$TaskId, [string]$TaskRo
                 }
             }
         }
+    }
+    $capsulePathCount = $script:taskCapsuleReadPaths.Count + $script:taskCapsuleWritePaths.Count
+    if ($capsulePathCount -gt 30) {
+        Add-ValidationError "Task $TaskId Read and Write contain $capsulePathCount paths; hard limit is 30."
+    }
+    if ($script:taskCapsuleAuthorityIds.Count -gt 60) {
+        Add-ValidationError "Task $TaskId Methods, Facts, and Decisions contain $($script:taskCapsuleAuthorityIds.Count) IDs; hard limit is 60."
     }
 }
 
@@ -774,6 +786,19 @@ if ($isPps12) {
         'TASK_INDEX.md', 'MERGES.md', 'PROJECT_MAP.md', 'ENVIRONMENT.md',
         'docs/coverage.md', 'docs/CURRENT_REVIEW_EVIDENCE.md'
     )
+    # Canonical is a semantic role, not a fixed filename list: the Hot State
+    # declarations decide where content truth actually lives.
+    foreach ($hotCanonical in @($mainRelative, $coverageRelative, $mapRelative, $environmentRelative)) {
+        if (-not [string]::IsNullOrWhiteSpace($hotCanonical) -and
+            $hotCanonical -ne 'none' -and
+            $hotCanonical -notin $canonicalFiles) {
+            $canonicalFiles += $hotCanonical
+        }
+    }
+    $allTaskAuthorityRefs = @()
+    $allTaskComponentRefs = @()
+    $allTaskSourceRefs = @()
+    $allTaskAssetRefs = @()
     $taskIds = @()
     $terminalTasks = @()
     $outputRoots = @()
@@ -817,9 +842,29 @@ if ($isPps12) {
                         Add-ValidationError "Task $taskId capsule does not exist: $taskCapsule"
                     } elseif ($taskRole -ne 'integrator') {
                         Test-TaskCapsule $taskCapsulePath $taskId $taskRole
+                        foreach ($refId in $script:taskCapsuleAuthorityIds) {
+                            $allTaskAuthorityRefs += [pscustomobject]@{ Task = $taskId; Id = $refId }
+                        }
+                        foreach ($refId in $script:taskCapsuleComponentIds) {
+                            $allTaskComponentRefs += [pscustomobject]@{ Task = $taskId; Id = $refId }
+                        }
+                        foreach ($refId in $script:taskCapsuleSourceIds) {
+                            $allTaskSourceRefs += [pscustomobject]@{ Task = $taskId; Id = $refId }
+                        }
+                        foreach ($refId in $script:taskCapsuleAssetIds) {
+                            $allTaskAssetRefs += [pscustomobject]@{ Task = $taskId; Id = $refId }
+                        }
                         foreach ($writeRel in $script:taskCapsuleWritePaths) {
                             if ($writeRel -in $canonicalFiles) {
                                 Add-ValidationError "Task $taskId ($taskRole) declares canonical file '$writeRel' in its Write set."
+                            }
+                            # worker/consumer writes land only inside the task's
+                            # own Output Root; Write is not a second grant channel.
+                            if (-not [string]::IsNullOrWhiteSpace($taskOutputRoot) -and $taskOutputRoot -ne 'none') {
+                                if ($writeRel -ne $taskOutputRoot -and
+                                    -not $writeRel.StartsWith("$taskOutputRoot/")) {
+                                    Add-ValidationError "Task $taskId ($taskRole) Write path '$writeRel' is outside its Output Root '$taskOutputRoot'; worker and consumer tasks write only inside their own Output Root."
+                                }
                             }
                         }
                     }
@@ -896,8 +941,54 @@ if ($isPps12) {
             if ($fields['Status'] -notin @('pending', 'integrated', 'deferred', 'rejected')) {
                 Add-ValidationError "Merge receipt $mergeId has invalid Status '$($fields['Status'])'."
             }
+            # Status and Relation must tell the same story.
+            switch ($fields['Status']) {
+                'integrated' {
+                    if ($fields['Relation'] -notin @('absorbs', 'layers_on', 'consumes_only', 'supersedes', 'rollback_to')) {
+                        Add-ValidationError "Merge receipt $mergeId Status 'integrated' is incompatible with Relation '$($fields['Relation'])'."
+                    }
+                }
+                'deferred' {
+                    if ($fields['Relation'] -ne 'deferred') {
+                        Add-ValidationError "Merge receipt $mergeId Status 'deferred' requires Relation 'deferred', found '$($fields['Relation'])'."
+                    }
+                }
+                'rejected' {
+                    if ($fields['Relation'] -ne 'rejected') {
+                        Add-ValidationError "Merge receipt $mergeId Status 'rejected' requires Relation 'rejected', found '$($fields['Relation'])'."
+                    }
+                }
+            }
             if ($fields['Target Package'] -notmatch '^PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$') {
                 Add-ValidationError "Merge receipt $mergeId Target Package must be a PKG-* ID, found '$($fields['Target Package'])'."
+            }
+            # The Target Package must be a real package: the current one or
+            # one recorded in the chronicle.
+            if ($fields['Target Package'] -match '^PKG-' -and $fields['Target Package'] -ne $package) {
+                $eventsFile = Join-Path $rootFull 'EVENTS.md'
+                $targetKnown = $false
+                if (Test-Path -LiteralPath $eventsFile -PathType Leaf) {
+                    $eventsBody = Read-Utf8File $eventsFile
+                    if ($eventsBody -match [regex]::Escape('[' + $fields['Target Package'] + ']')) {
+                        $targetKnown = $true
+                    }
+                }
+                if (-not $targetKnown) {
+                    Add-ValidationError "Merge receipt $mergeId Target Package '$($fields['Target Package'])' is neither the current package '$package' nor recorded in EVENTS.md."
+                }
+            }
+            if ($fields['Status'] -eq 'integrated') {
+                # An integration without accepted content, approval, or
+                # verification is a claim, not a receipt.
+                if ([string]::IsNullOrWhiteSpace($fields['Accepted']) -or $fields['Accepted'] -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'integrated' with an empty Accepted set; an integration that accepted nothing is not an integration."
+                }
+                if ([string]::IsNullOrWhiteSpace($fields['Approval']) -or $fields['Approval'] -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'integrated' without an Approval decision; name the D-* record that authorized this merge."
+                }
+                if ([string]::IsNullOrWhiteSpace($fields['Verification']) -or $fields['Verification'] -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'integrated' without Verification evidence; name the command, test, or inspection that checked the merged result."
+                }
             }
             $sourceTasks = @()
             if (-not [string]::IsNullOrWhiteSpace($fields['Source Tasks']) -and $fields['Source Tasks'] -ne 'none') {
@@ -944,6 +1035,16 @@ if ($isPps12) {
                 if (-not (Test-CheckpointResolvable $fields['Result Checkpoint'])) {
                     Add-ValidationError "Merge receipt $mergeId Result Checkpoint '$($fields['Result Checkpoint'])' is not a resolvable Git object or the explicit lineage_incomplete marker."
                 }
+                if ($fields['Base Checkpoint'] -eq 'lineage_incomplete' -or
+                    $fields['Result Checkpoint'] -eq 'lineage_incomplete') {
+                    # The migration escape hatch needs a reason on record.
+                    $lineageNoteMatch = [regex]::Match(
+                        $body, '(?m)^-\s+Lineage Note:\s*(.*?)\s*$')
+                    $lineageNote = if ($lineageNoteMatch.Success) { $lineageNoteMatch.Groups[1].Value } else { '' }
+                    if ([string]::IsNullOrWhiteSpace($lineageNote) -or $lineageNote -eq 'none') {
+                        Add-ValidationError "Merge receipt $mergeId uses lineage_incomplete without a 'Lineage Note' field explaining why pre-layer history is unavailable; new projects must use real checkpoints."
+                    }
+                }
             }
             $mergeRecords += [pscustomobject]@{
                 Id = $mergeId
@@ -963,6 +1064,7 @@ if ($isPps12) {
             Add-ValidationError "Task $($terminal.Id) has $($matching.Count) '$($terminal.Status)' receipts; exactly one final disposition receipt is required."
         }
     }
+
 }
 if ($profile -eq 'evidence') {
     $evidencePath = Join-Path $rootFull 'docs/CURRENT_REVIEW_EVIDENCE.md'
@@ -1116,6 +1218,54 @@ if (Test-Path -LiteralPath $sourceIndexPath -PathType Leaf) {
             '^\|\s*' + [regex]::Escape($duplicate.Name) + '\s*\|'
         )
         Add-ValidationError "SOURCE_INDEX.md contains duplicate source rows for $($duplicate.Name) (lines $locations)."
+    }
+}
+
+
+if ($isPps12 -and (Test-Path -LiteralPath (Join-Path $rootFull 'TASK_INDEX.md') -PathType Leaf)) {
+    # Task capsule IDs must resolve against the same authorities as the main
+    # Workset: a structurally valid task that references phantom records
+    # would still drift at resume time.
+    foreach ($ref in @($allTaskAuthorityRefs | Sort-Object Task, Id -Unique)) {
+        if ($ref.Id -notin $activeIds) {
+            Add-ValidationError "Task $($ref.Task) references authority $($ref.Id) which is not in the DECISIONS.md active block."
+        }
+    }
+    if ($null -ne $mapPath -and (Test-Path -LiteralPath $mapPath -PathType Leaf)) {
+        $mapBody = Read-Utf8File $mapPath
+        foreach ($ref in @($allTaskComponentRefs | Sort-Object Task, Id -Unique)) {
+            $componentRows = [regex]::Matches(
+                $mapBody, '(?m)^\|\s*' + [regex]::Escape($ref.Id) + '\s*\|')
+            if ($componentRows.Count -ne 1) {
+                Add-ValidationError "Task $($ref.Task) references component $($ref.Id) which does not exist in $mapRelative."
+            }
+        }
+    }
+    $sourceIndexFile = Join-Path $rootFull 'SOURCE_INDEX.md'
+    foreach ($ref in @($allTaskSourceRefs | Sort-Object Task, Id -Unique)) {
+        $sourceKnown = $false
+        if (Test-Path -LiteralPath $sourceIndexFile -PathType Leaf) {
+            $sourceBody = Read-Utf8File $sourceIndexFile
+            if ($sourceBody -match ('(?m)^\|\s*' + [regex]::Escape($ref.Id) + '\s*\|')) {
+                $sourceKnown = $true
+            }
+        }
+        if (-not $sourceKnown) {
+            Add-ValidationError "Task $($ref.Task) references source $($ref.Id) which does not exist in SOURCE_INDEX.md."
+        }
+    }
+    $assetsFile = Join-Path $rootFull 'ASSETS.md'
+    foreach ($ref in @($allTaskAssetRefs | Sort-Object Task, Id -Unique)) {
+        $assetKnown = $false
+        if (Test-Path -LiteralPath $assetsFile -PathType Leaf) {
+            $assetsBody = Read-Utf8File $assetsFile
+            if ($assetsBody -match ('(?m)^\|\s*' + [regex]::Escape($ref.Id) + '\s*\|')) {
+                $assetKnown = $true
+            }
+        }
+        if (-not $assetKnown) {
+            Add-ValidationError "Task $($ref.Task) references asset $($ref.Id) which does not exist in ASSETS.md."
+        }
     }
 }
 
