@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$Root,
+    [string]$Task,
+    [switch]$RecordBaseline,
     [switch]$AllowPreexisting
 )
 
@@ -27,6 +29,38 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+$baselinePath = Join-Path $rootFull '.pps/boundary-baseline'
+
+function Get-ChangedPaths {
+    $lines = @(& $git.Source -C $rootFull status --porcelain --untracked-files=all 2>$null)
+    $paths = @()
+    foreach ($statusLine in $lines) {
+        $line = "$statusLine"
+        if ($line.Length -le 3) { continue }
+        $changed = $line.Substring(3).Trim('"')
+        if ($changed.Contains(' -> ')) {
+            $changed = $changed.Split(' -> ')[-1]
+        }
+        $paths += $changed
+    }
+    return $paths
+}
+
+if ($RecordBaseline) {
+    $baselineDir = Join-Path $rootFull '.pps'
+    if (-not (Test-Path -LiteralPath $baselineDir)) {
+        New-Item -ItemType Directory -Path $baselineDir -Force | Out-Null
+    }
+    $paths = Get-ChangedPaths
+    [System.IO.File]::WriteAllText(
+        $baselinePath,
+        (($paths -join "`n") + $(if ($paths.Count -gt 0) { "`n" } else { '' })),
+        [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Boundary baseline recorded: $($paths.Count) pre-existing dirty path(s)."
+    Write-Host "PPS boundary check: BASELINE RECORDED"
+    exit 0
+}
+
 function Get-SectionField([string]$Path, [string]$Section, [string]$Field) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     $inside = $false
@@ -40,6 +74,53 @@ function Get-SectionField([string]$Path, [string]$Section, [string]$Field) {
     return $null
 }
 
+function Get-TaskBlockField([string]$TaskIndexText, [string]$TaskId, [string]$Field) {
+    $blockMatch = [regex]::Match(
+        $TaskIndexText,
+        '(?ms)^###\s+' + [regex]::Escape($TaskId) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
+    if (-not $blockMatch.Success) { return $null }
+    $fieldMatch = [regex]::Match(
+        $blockMatch.Groups['body'].Value,
+        '(?m)^-\s+' + [regex]::Escape($Field) + ':\s*(.*?)\s*$')
+    if ($fieldMatch.Success) { return $fieldMatch.Groups[1].Value }
+    return $null
+}
+
+# Resolve the acting subject. Claims come only from that subject's own
+# declarations: canonical identity never grants automatic write permission.
+$taskIndexPath = Join-Path $rootFull 'TASK_INDEX.md'
+$subject = ''
+$subjectRole = ''
+$subjectCapsule = ''
+$subjectOutputRoot = ''
+if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
+    $taskIndexText = [System.IO.File]::ReadAllText($taskIndexPath, [System.Text.Encoding]::UTF8)
+    if (-not [string]::IsNullOrWhiteSpace($Task)) {
+        $subject = $Task
+    } else {
+        $subject = Get-SectionField (Join-Path $rootFull 'PROJECT_STATE.md') 'Hot State' 'Writer'
+    }
+    if ([string]::IsNullOrWhiteSpace($subject)) {
+        Write-Host "ERROR: multitask project but no acting task; pass -Task T-ID or set Hot State Writer."
+        exit 1
+    }
+    if ($taskIndexText -notmatch ('(?m)^###\s+' + [regex]::Escape($subject) + '\s*$')) {
+        Write-Host "ERROR: acting task '$subject' is not registered in TASK_INDEX.md."
+        exit 1
+    }
+    $subjectRole = Get-TaskBlockField $taskIndexText $subject 'Role'
+    $subjectCapsule = Get-TaskBlockField $taskIndexText $subject 'Capsule'
+    $subjectOutputRoot = Get-TaskBlockField $taskIndexText $subject 'Output Root'
+} else {
+    if (-not [string]::IsNullOrWhiteSpace($Task)) {
+        Write-Host "ERROR: -Task was given but TASK_INDEX.md does not exist."
+        exit 1
+    }
+    $subject = 'canonical'
+    $subjectRole = 'integrator'
+    $subjectCapsule = 'CONTEXT.md'
+}
+
 $claims = [System.Collections.Generic.List[string]]::new()
 function Add-Claims([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value -eq 'none') { return }
@@ -48,43 +129,25 @@ function Add-Claims([string]$Value) {
     }
 }
 
-Add-Claims (Get-SectionField (Join-Path $rootFull 'CONTEXT.md') 'Workset Manifest' 'Write')
-foreach ($canonical in @(
-    'PROJECT_STATE.md', 'DECISIONS.md', 'CONTEXT.md', 'EVENTS.md',
-    'PROJECT_MAP.md', 'ENVIRONMENT.md', 'ASSETS.md', 'SOURCE_INDEX.md',
-    'TASK_INDEX.md', 'MERGES.md', 'docs/coverage.md', 'docs/CURRENT_REVIEW_EVIDENCE.md'
-)) {
-    $claims.Add($canonical)
-}
-
-$taskIndexPath = Join-Path $rootFull 'TASK_INDEX.md'
-if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
-    $taskIndexText = [System.IO.File]::ReadAllText($taskIndexPath, [System.Text.Encoding]::UTF8)
-    foreach ($heading in [regex]::Matches(
-        $taskIndexText,
-        '(?m)^###\s+(?<id>T-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?)\s*$')) {
-        $taskId = $heading.Groups['id'].Value
-        $blockMatch = [regex]::Match(
-            $taskIndexText,
-            '(?ms)^###\s+' + [regex]::Escape($taskId) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
-        $body = if ($blockMatch.Success) { $blockMatch.Groups['body'].Value } else { '' }
-        $taskStatus = [regex]::Match($body, '(?m)^-\s+Status:\s*(.*?)\s*$').Groups[1].Value
-        if ($taskStatus -eq 'archived') { continue }
-        $outputRoot = [regex]::Match($body, '(?m)^-\s+Output Root:\s*(.*?)\s*$').Groups[1].Value
-        if (-not [string]::IsNullOrWhiteSpace($outputRoot) -and $outputRoot -ne 'none') {
-            $claims.Add($outputRoot)
-        }
-        $capsule = [regex]::Match($body, '(?m)^-\s+Capsule:\s*(.*?)\s*$').Groups[1].Value
-        if (-not [string]::IsNullOrWhiteSpace($capsule)) {
-            $capsulePath = Join-Path $rootFull $capsule
-            if (Test-Path -LiteralPath $capsulePath -PathType Leaf) {
-                $claims.Add($capsule)
-                Add-Claims (Get-SectionField $capsulePath 'Workset Manifest' 'Write')
-            }
-        }
+if (-not [string]::IsNullOrWhiteSpace($subjectCapsule) -and $subjectCapsule -ne 'none') {
+    $capsulePath = Join-Path $rootFull $subjectCapsule
+    if (Test-Path -LiteralPath $capsulePath -PathType Leaf) {
+        Add-Claims (Get-SectionField $capsulePath 'Workset Manifest' 'Write')
     }
 }
+if (-not [string]::IsNullOrWhiteSpace($subjectOutputRoot) -and $subjectOutputRoot -ne 'none') {
+    $claims.Add($subjectOutputRoot)
+}
+# The verify stamp and boundary baseline are tool-owned local artifacts.
+$claims.Add('.pps')
 $claims = [System.Collections.Generic.List[string]]@($claims | Select-Object -Unique)
+
+if ($claims.Count -le 1) {
+    Write-Host "ERROR: acting subject '$subject' has no usable Write claims; declare Write paths in its capsule first."
+    exit 1
+}
+
+Write-Host "Acting subject: $subject ($subjectRole)"
 
 function Test-Claimed([string]$Path) {
     foreach ($claim in $claims) {
@@ -94,26 +157,30 @@ function Test-Claimed([string]$Path) {
     return $false
 }
 
-$statusLines = @(& $git.Source -C $rootFull status --porcelain --untracked-files=all 2>$null)
-if ($statusLines.Count -eq 0) {
+$baselinePaths = @()
+if (Test-Path -LiteralPath $baselinePath -PathType Leaf) {
+    $baselinePaths = @([System.IO.File]::ReadAllLines($baselinePath, [System.Text.Encoding]::UTF8) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+$changedPaths = Get-ChangedPaths
+if ($changedPaths.Count -eq 0) {
     Write-Host "Boundary check: worktree clean; nothing to classify."
     Write-Host "PPS boundary check: OK"
     exit 0
 }
 
 $unclaimed = 0
-foreach ($statusLine in $statusLines) {
-    $line = "$statusLine"
-    if ($line.Length -le 3) { continue }
-    $changedPath = $line.Substring(3).Trim('"')
-    if ($changedPath.Contains(' -> ')) {
-        $changedPath = $changedPath.Split(' -> ')[-1]
-    }
+foreach ($changedPath in $changedPaths) {
     if (Test-Claimed $changedPath) {
         Write-Host "claimed: $changedPath"
-    } elseif ($AllowPreexisting) {
-        Write-Host "preexisting (unclassified): $changedPath"
+    } elseif ($AllowPreexisting -and ($changedPath -in $baselinePaths)) {
+        Write-Host "preexisting (baseline): $changedPath"
     } else {
+        if ($AllowPreexisting -and -not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) {
+            Write-Host "ERROR: -AllowPreexisting requires a recorded baseline; run -RecordBaseline at session start."
+            exit 1
+        }
         Write-Host "unclaimed_write: $changedPath"
         $unclaimed++
     }
@@ -121,7 +188,7 @@ foreach ($statusLine in $statusLines) {
 
 if ($unclaimed -gt 0) {
     Write-Host "PPS boundary check: FAILED ($unclaimed unclaimed change(s))"
-    Write-Host "Claim each path in a Write set or task Output Root, revert it, or classify it explicitly with -AllowPreexisting."
+    Write-Host "Claim each path in the acting subject's Write set or Output Root, revert it, or record it in the session baseline before starting work."
     exit 1
 }
 Write-Host "PPS boundary check: OK"

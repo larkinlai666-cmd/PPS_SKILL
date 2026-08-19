@@ -72,6 +72,8 @@ required=(
   scripts/append_event.sh
   scripts/boundary_check.ps1
   scripts/boundary_check.sh
+  scripts/project_verify.ps1
+  scripts/project_verify.sh
 )
 
 for relative in "${required[@]}"; do

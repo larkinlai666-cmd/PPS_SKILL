@@ -287,6 +287,8 @@ if ($isPps12) {
         'EVENTS.md',
         'scripts/verify_gate.ps1',
         'scripts/verify_gate.sh',
+        'scripts/project_verify.ps1',
+        'scripts/project_verify.sh',
         'scripts/append_event.ps1',
         'scripts/append_event.sh'
     )) {
@@ -611,12 +613,100 @@ if ($isPps11Plus) {
     }
 }
 
+function Test-TaskCapsule([string]$CapsulePath, [string]$TaskId, [string]$TaskRole) {
+    $script:taskCapsuleWritePaths = @()
+    $capsuleRel = $CapsulePath.Substring($rootFull.Length).TrimStart('\', '/')
+    $capsuleBytes = (Get-Item -LiteralPath $CapsulePath).Length
+    if ($capsuleBytes -gt 32768) {
+        Add-ValidationError "Task $TaskId capsule $capsuleRel has $capsuleBytes bytes; hard limit is 32768."
+    }
+    $capsuleText = Read-Utf8File $CapsulePath
+    $capsuleLines = @($capsuleText -split "`r?`n").Count
+    if ($capsuleLines -gt 80) {
+        Add-ValidationError "Task $TaskId capsule $capsuleRel has $capsuleLines lines; hard limit is 80."
+    } elseif ($capsuleLines -gt 60) {
+        Add-ValidationWarning "Task $TaskId capsule $capsuleRel has $capsuleLines lines; compact target is 60."
+    }
+    $sectionMatches = [regex]::Matches(
+        $capsuleText, '(?m)^##\s+Workset Manifest\s*$')
+    if ($sectionMatches.Count -ne 1) {
+        Add-ValidationError "Task $TaskId capsule $capsuleRel must contain exactly one 'Workset Manifest' section, found $($sectionMatches.Count)."
+        return
+    }
+    $sectionBody = [regex]::Match(
+        $capsuleText,
+        '(?ms)^##\s+Workset Manifest\s*\r?\n(?<body>.*?)(?=^##\s+|\z)'
+    ).Groups['body'].Value
+    foreach ($fieldName in @(
+        'Methods', 'Facts', 'Decisions', 'Sources', 'Assets',
+        'Components', 'Read', 'Write', 'Verify', 'Excluded', 'Coverage'
+    )) {
+        $fieldMatches = [regex]::Matches(
+            $sectionBody,
+            '(?m)^-\s*' + [regex]::Escape($fieldName) + ':\s*(.*?)\s*$')
+        if ($fieldMatches.Count -ne 1) {
+            Add-ValidationError "Task $TaskId capsule $capsuleRel must declare exactly one '$fieldName' field (use 'none' when empty), found $($fieldMatches.Count)."
+            continue
+        }
+        $fieldValue = $fieldMatches[0].Groups[1].Value
+        switch ($fieldName) {
+            'Methods' { $null = Get-ManifestIds $fieldValue 'M' "Task $TaskId Methods" }
+            'Facts' { $null = Get-ManifestIds $fieldValue 'F' "Task $TaskId Facts" }
+            'Decisions' { $null = Get-ManifestIds $fieldValue 'D' "Task $TaskId Decisions" }
+            'Sources' { $null = Get-ManifestIds $fieldValue 'SRC' "Task $TaskId Sources" }
+            'Assets' { $null = Get-ManifestIds $fieldValue 'A' "Task $TaskId Assets" }
+            'Components' { $null = Get-ManifestIds $fieldValue 'C' "Task $TaskId Components" }
+            'Read' { $null = Get-PathManifest $fieldValue "Task $TaskId Read" $true $rootFull }
+            'Write' {
+                $script:taskCapsuleWritePaths = @(
+                    Get-PathManifest $fieldValue "Task $TaskId Write" $false $rootFull)
+                if ($script:taskCapsuleWritePaths.Count -eq 0) {
+                    Add-ValidationError "Task $TaskId capsule Write cannot be empty or 'none'; declare the bounded output paths."
+                }
+            }
+            'Verify' {
+                if ([string]::IsNullOrWhiteSpace($fieldValue) -or $fieldValue -eq 'none') {
+                    Add-ValidationError "Task $TaskId capsule Verify cannot be empty or 'none'."
+                }
+            }
+            'Excluded' {
+                if ([string]::IsNullOrWhiteSpace($fieldValue)) {
+                    Add-ValidationError "Task $TaskId capsule Excluded cannot be empty; use 'none'."
+                }
+            }
+            'Coverage' {
+                if ([string]::IsNullOrWhiteSpace($fieldValue)) {
+                    Add-ValidationError "Task $TaskId capsule Coverage cannot be empty."
+                }
+            }
+        }
+    }
+}
+
+function Test-CheckpointResolvable([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value) -or $Value -eq 'none') { return $false }
+    if ($Value -eq 'lineage_incomplete') { return $true }
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($null -eq $git) { return $false }
+    & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    & $git.Source -C $rootFull cat-file -e "$Value^{commit}" *> $null
+    return $LASTEXITCODE -eq 0
+}
+
 if ($isPps12) {
     $agentsPath = Join-Path $rootFull 'AGENTS.md'
     if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
         $agentsText = Read-Utf8File $agentsPath
-        if ($agentsText -notmatch '(?m)^##\s+Red Lines\s*$') {
+        $redLineMatches = [regex]::Matches($agentsText, '(?m)^##\s+Red Lines\s*$')
+        $allH2 = [regex]::Matches($agentsText, '(?m)^##\s+(?<title>.+?)\s*$')
+        $firstH2 = if ($allH2.Count -gt 0) { $allH2[0].Groups['title'].Value } else { '' }
+        if ($redLineMatches.Count -eq 0) {
             Add-ValidationError "PPS/1.2 requires a '## Red Lines' section in AGENTS.md."
+        } elseif ($redLineMatches.Count -ne 1) {
+            Add-ValidationError "AGENTS.md must contain exactly one '## Red Lines' section, found $($redLineMatches.Count)."
+        } elseif ($firstH2 -ne 'Red Lines') {
+            Add-ValidationError "The '## Red Lines' section exists but is not the first H2 section of AGENTS.md (found '## $firstH2' first); L0 must meet red lines before any other rule."
         }
     }
 
@@ -660,7 +750,9 @@ if ($isPps12) {
                 $openedMatch.Groups[1].Value, 'yyyy-MM-dd',
                 [System.Globalization.CultureInfo]::InvariantCulture)
             if (([DateTime]::UtcNow.Date - $openedDate.Date).TotalDays -gt 7) {
-                Add-ValidationWarning "Proposal $proposalId has been pending for more than 7 days; restate it in Next as kept, closed, or split."
+                if ($next -notmatch [regex]::Escape($proposalId)) {
+                    Add-ValidationWarning "Proposal $proposalId has been pending for more than 7 days and is not restated in Next; state kept, closed, or split."
+                }
             }
         }
     }
@@ -669,9 +761,13 @@ if ($isPps12) {
     $writerValue = if ($writerMatch.Success) { $writerMatch.Groups[1].Value } else { '' }
     $taskIndexPath = Join-Path $rootFull 'TASK_INDEX.md'
     $canonicalFiles = @(
-        'PROJECT_STATE.md', 'DECISIONS.md', 'CONTEXT.md',
-        'EVENTS.md', 'TASK_INDEX.md', 'MERGES.md'
+        'PROJECT_STATE.md', 'DECISIONS.md', 'CONTEXT.md', 'EVENTS.md',
+        'TASK_INDEX.md', 'MERGES.md', 'PROJECT_MAP.md', 'ENVIRONMENT.md',
+        'docs/coverage.md', 'docs/CURRENT_REVIEW_EVIDENCE.md'
     )
+    $taskIds = @()
+    $terminalTasks = @()
+    $outputRoots = @()
     if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
         $taskIndexText = Read-Utf8File $taskIndexPath
         $taskHeadings = [regex]::Matches(
@@ -697,6 +793,9 @@ if ($isPps12) {
             if ($taskStatus -notin @('active', 'handoff_ready', 'integrated', 'rejected', 'deferred', 'archived')) {
                 Add-ValidationError "Task $taskId has invalid Status '$taskStatus'."
             }
+            if ($taskStatus -in @('integrated', 'deferred', 'rejected')) {
+                $terminalTasks += [pscustomobject]@{ Id = $taskId; Status = $taskStatus }
+            }
             if ($taskRole -eq 'integrator' -and $taskStatus -eq 'active') {
                 $activeIntegrators += $taskId
             }
@@ -708,24 +807,33 @@ if ($isPps12) {
                     if ($null -eq $taskCapsulePath -or -not (Test-Path -LiteralPath $taskCapsulePath -PathType Leaf)) {
                         Add-ValidationError "Task $taskId capsule does not exist: $taskCapsule"
                     } elseif ($taskRole -ne 'integrator') {
-                        $capsuleText = Read-Utf8File $taskCapsulePath
-                        $capsuleWorkset = [regex]::Match(
-                            $capsuleText,
-                            '(?ms)^##\s+Workset Manifest\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
-                        $writeValueLine = [regex]::Match(
-                            $capsuleWorkset.Groups['body'].Value,
-                            '(?m)^-\s+Write:\s*(.*?)\s*$').Groups[1].Value
-                        $writeEntries = @($writeValueLine -split ',' | ForEach-Object { $_.Trim() })
-                        foreach ($canonical in $canonicalFiles) {
-                            if ($canonical -in $writeEntries) {
-                                Add-ValidationError "Task $taskId ($taskRole) declares canonical file '$canonical' in its Write set."
+                        Test-TaskCapsule $taskCapsulePath $taskId $taskRole
+                        foreach ($writeRel in $script:taskCapsuleWritePaths) {
+                            if ($writeRel -in $canonicalFiles) {
+                                Add-ValidationError "Task $taskId ($taskRole) declares canonical file '$writeRel' in its Write set."
                             }
                         }
                     }
                 }
-                if ($taskRole -ne 'integrator' -and
-                    ([string]::IsNullOrWhiteSpace($taskOutputRoot) -or $taskOutputRoot -eq 'none')) {
-                    Add-ValidationError "Task $taskId ($taskRole) requires a bounded Output Root."
+                if ($taskRole -ne 'integrator') {
+                    if ([string]::IsNullOrWhiteSpace($taskOutputRoot) -or $taskOutputRoot -eq 'none') {
+                        Add-ValidationError "Task $taskId ($taskRole) requires a bounded Output Root."
+                    } else {
+                        $resolvedRoot = Resolve-ProjectFile $rootFull $taskOutputRoot "Task $taskId Output Root"
+                        if ($null -ne $resolvedRoot) {
+                            if ($taskOutputRoot -notmatch '^local-task-output/.+') {
+                                Add-ValidationError "Task $taskId Output Root must live under local-task-output/, found '$taskOutputRoot'."
+                            }
+                            foreach ($existing in $outputRoots) {
+                                if ($taskOutputRoot -eq $existing.Root -or
+                                    $taskOutputRoot.StartsWith($existing.Root + '/') -or
+                                    $existing.Root.StartsWith($taskOutputRoot + '/')) {
+                                    Add-ValidationError "Task $taskId Output Root '$taskOutputRoot' overlaps Task $($existing.Id) Output Root '$($existing.Root)'."
+                                }
+                            }
+                            $outputRoots += [pscustomobject]@{ Id = $taskId; Root = $taskOutputRoot }
+                        }
+                    }
                 }
             }
         }
@@ -742,6 +850,7 @@ if ($isPps12) {
     }
 
     $mergesPath = Join-Path $rootFull 'MERGES.md'
+    $mergeRecords = @()
     if (Test-Path -LiteralPath $mergesPath -PathType Leaf) {
         if (-not (Test-Path -LiteralPath $taskIndexPath -PathType Leaf)) {
             Add-ValidationError "MERGES.md exists but TASK_INDEX.md does not; merge receipts require the task registry."
@@ -759,23 +868,93 @@ if ($isPps12) {
                 $mergesText,
                 '(?ms)^###\s+' + [regex]::Escape($mergeId) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
             $body = if ($blockMatch.Success) { $blockMatch.Groups['body'].Value } else { '' }
-            $mergeRelation = [regex]::Match($body, '(?m)^-\s+Relation:\s*(.*?)\s*$').Groups[1].Value
-            $mergeStatus = [regex]::Match($body, '(?m)^-\s+Status:\s*(.*?)\s*$').Groups[1].Value
-            $mergeBase = [regex]::Match($body, '(?m)^-\s+Base Checkpoint:\s*(.*?)\s*$').Groups[1].Value
-            $mergeResult = [regex]::Match($body, '(?m)^-\s+Result Checkpoint:\s*(.*?)\s*$').Groups[1].Value
-            if ($mergeRelation -notin @('absorbs', 'layers_on', 'consumes_only', 'deferred', 'supersedes', 'rejected', 'rollback_to')) {
-                Add-ValidationError "Merge receipt $mergeId has invalid Relation '$mergeRelation'."
-            }
-            if ($mergeStatus -eq 'integrated') {
-                if ([string]::IsNullOrWhiteSpace($mergeBase) -or $mergeBase -eq 'none' -or
-                    [string]::IsNullOrWhiteSpace($mergeResult) -or $mergeResult -eq 'none') {
-                    Add-ValidationError "Merge receipt $mergeId is 'integrated' without both base and result checkpoints; use lineage_incomplete explicitly when history predates the layer."
+            $fields = @{}
+            foreach ($fieldName in @(
+                'Target Package', 'Source Tasks', 'Relation', 'Accepted',
+                'Rejected', 'Deferred', 'Base Checkpoint', 'Result Checkpoint',
+                'Approval', 'Verification', 'Status'
+            )) {
+                $fieldMatch = [regex]::Match(
+                    $body, '(?m)^-\s+' + [regex]::Escape($fieldName) + ':\s*(.*?)\s*$')
+                $fields[$fieldName] = if ($fieldMatch.Success) { $fieldMatch.Groups[1].Value } else { '' }
+                if ([string]::IsNullOrWhiteSpace($fields[$fieldName])) {
+                    Add-ValidationError "Merge receipt $mergeId is missing the '$fieldName' field."
                 }
+            }
+            if ($fields['Relation'] -notin @('absorbs', 'layers_on', 'consumes_only', 'deferred', 'supersedes', 'rejected', 'rollback_to')) {
+                Add-ValidationError "Merge receipt $mergeId has invalid Relation '$($fields['Relation'])'."
+            }
+            if ($fields['Status'] -notin @('pending', 'integrated', 'deferred', 'rejected')) {
+                Add-ValidationError "Merge receipt $mergeId has invalid Status '$($fields['Status'])'."
+            }
+            if ($fields['Target Package'] -notmatch '^PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$') {
+                Add-ValidationError "Merge receipt $mergeId Target Package must be a PKG-* ID, found '$($fields['Target Package'])'."
+            }
+            $sourceTasks = @()
+            if (-not [string]::IsNullOrWhiteSpace($fields['Source Tasks']) -and $fields['Source Tasks'] -ne 'none') {
+                foreach ($srcTask in @($fields['Source Tasks'].Split(',') | ForEach-Object { $_.Trim() })) {
+                    if ([string]::IsNullOrWhiteSpace($srcTask)) { continue }
+                    if ($srcTask -notmatch '^T-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$') {
+                        Add-ValidationError "Merge receipt $mergeId Source Tasks contains a non-T-* entry: '$srcTask'."
+                    } elseif ($srcTask -notin $taskIds) {
+                        Add-ValidationError "Merge receipt $mergeId references unknown Source Task '$srcTask'."
+                    } else {
+                        $sourceTasks += $srcTask
+                    }
+                }
+            } else {
+                Add-ValidationError "Merge receipt $mergeId must name at least one Source Task."
+            }
+            if (-not [string]::IsNullOrWhiteSpace($fields['Approval']) -and $fields['Approval'] -ne 'none') {
+                foreach ($approvalId in @($fields['Approval'].Split(',') | ForEach-Object { $_.Trim() })) {
+                    if ([string]::IsNullOrWhiteSpace($approvalId)) { continue }
+                    if ($approvalId -notmatch '^D-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$') {
+                        Add-ValidationError "Merge receipt $mergeId Approval contains a non-D-* entry: '$approvalId'."
+                    } elseif ($decisionText -notmatch ('(?m)^###\s+' + [regex]::Escape($approvalId) + '\s+\[')) {
+                        Add-ValidationError "Merge receipt $mergeId Approval references unknown decision '$approvalId'."
+                    }
+                }
+            }
+            $dispositionPaths = @{}
+            foreach ($setName in @('Accepted', 'Rejected', 'Deferred')) {
+                $setValue = $fields[$setName]
+                if ([string]::IsNullOrWhiteSpace($setValue) -or $setValue -eq 'none') { continue }
+                foreach ($pathEntry in @($setValue.Split(',') | ForEach-Object { $_.Trim() })) {
+                    if ([string]::IsNullOrWhiteSpace($pathEntry)) { continue }
+                    if ($dispositionPaths.ContainsKey($pathEntry)) {
+                        Add-ValidationError "Merge receipt $mergeId lists '$pathEntry' in more than one of Accepted/Rejected/Deferred."
+                    } else {
+                        $dispositionPaths[$pathEntry] = $setName
+                    }
+                }
+            }
+            if ($fields['Status'] -eq 'integrated') {
+                if (-not (Test-CheckpointResolvable $fields['Base Checkpoint'])) {
+                    Add-ValidationError "Merge receipt $mergeId Base Checkpoint '$($fields['Base Checkpoint'])' is not a resolvable Git object or the explicit lineage_incomplete marker."
+                }
+                if (-not (Test-CheckpointResolvable $fields['Result Checkpoint'])) {
+                    Add-ValidationError "Merge receipt $mergeId Result Checkpoint '$($fields['Result Checkpoint'])' is not a resolvable Git object or the explicit lineage_incomplete marker."
+                }
+            }
+            $mergeRecords += [pscustomobject]@{
+                Id = $mergeId
+                Status = $fields['Status']
+                SourceTasks = $sourceTasks
             }
         }
     }
-}
 
+    foreach ($terminal in $terminalTasks) {
+        $matching = @($mergeRecords | Where-Object {
+            $_.Status -eq $terminal.Status -and $terminal.Id -in $_.SourceTasks
+        })
+        if ($matching.Count -eq 0) {
+            Add-ValidationError "Task $($terminal.Id) is '$($terminal.Status)' but no merge receipt with matching status names it; only a receipt proves disposition."
+        } elseif ($matching.Count -ne 1) {
+            Add-ValidationError "Task $($terminal.Id) has $($matching.Count) '$($terminal.Status)' receipts; exactly one final disposition receipt is required."
+        }
+    }
+}
 if ($profile -eq 'evidence') {
     $evidencePath = Join-Path $rootFull 'docs/CURRENT_REVIEW_EVIDENCE.md'
     if (Test-Path -LiteralPath $evidencePath -PathType Leaf) {

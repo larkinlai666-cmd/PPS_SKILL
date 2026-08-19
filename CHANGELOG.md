@@ -4,6 +4,26 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-19
+
+Hardening release closing all five blockers from the external replacement review (REVIEW-P0-001..004, REVIEW-P1-005) plus the coupled secondary findings (P2-006..011). No protocol grammar changes; PPS/1.2 declarations gain enforcement.
+
+### Fixed
+
+- **REVIEW-P0-001 — verify gate now actually verifies**: `verify_gate.*` deletes any prior stamp first, requires the Workset `Verify` declaration to route through the gate, executes the mandatory non-placeholder `scripts/project_verify.*` entry, and writes a stamp only on success. The stamp now binds package, entry path, entry SHA-256, capsule SHA-256, platform, result, and worktree identity (HEAD + porcelain hash). `readiness_check.*` verifies every stamp field, rejects a changed entry or changed worktree, and never accepts attestation alone. Free-form Markdown is never passed to a shell; commands live in the version-controlled entry script.
+- **REVIEW-P0-002 — task capsules enforce the full Workset grammar**: task capsules are validated with the same field, ID-typing, path-safety, and budget rules as `CONTEXT.md` (all eleven fields required, `.`/globs/`..`/absolute paths rejected, byte and line budgets applied). Output Roots must resolve inside the repository, live under `local-task-output/`, and may not overlap another task's root.
+- **REVIEW-P0-003 — terminal task states require receipts**: `integrated`/`deferred`/`rejected` tasks must be named by exactly one merge receipt with a matching status. Receipts must carry all eleven fields; Source Tasks must resolve to registered `T-*` IDs, Approval to existing `D-*` records, Target Package to a `PKG-*` ID; Accepted/Rejected/Deferred sets may not overlap; `integrated` checkpoints must be resolvable Git commits or the explicit `lineage_incomplete` marker.
+- **REVIEW-P0-004 — canonical identity no longer grants write permission**: `boundary_check.*` derives claims only from the acting subject (Hot State `Writer`, `--task`/`-Task`, or the canonical capsule in single-task projects) — its declared Write set plus its own Output Root. Canonical files are claimed like any other path; tasks cannot borrow each other's claims.
+- **REVIEW-P1-005 — Red Lines must be the first H2**: the validator now distinguishes missing, duplicated, and misplaced `## Red Lines` sections in `AGENTS.md`.
+- **P2-008** — `--allow-preexisting`/`-AllowPreexisting` requires a session baseline recorded via `--record-baseline`/`-RecordBaseline`; only baselined paths downgrade, and post-baseline changes still fail.
+- **P2-009** — proposal-aging warnings are suppressed when the proposal is restated in hot-state `Next`, matching the documented discipline.
+- **P2-010** — `append_event.*` inserts into the `## Events` section instead of the end of the file, so trailing sections cannot absorb events.
+
+### Added
+
+- Required `scripts/project_verify.*` templates with real minimal assertions (main artifact exists, chronicle non-empty) and explicit extension points.
+- Negative tests on both platforms: failing project verification blocks stamp and readiness; unrouted Verify declarations are rejected; stale-worktree stamps are rejected; task capsules missing fields, root-escaping or overlapping Output Roots, terminal tasks without receipts, receipts referencing unknown tasks, unclaimed canonical writes, baseline-gated preexisting handling, and event placement with trailing sections.
+
 ## [0.4.0] - 2026-08-19
 
 PPS/1.2: a field-driven distillation from two real campaigns—a 13-day multi-agent relay project (5 recorded incidents) and a single-owner multi-task content platform (8 confirmed defects). PPS/1.0 and PPS/1.1 projects continue to validate unchanged.

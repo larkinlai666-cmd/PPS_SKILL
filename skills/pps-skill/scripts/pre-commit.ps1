@@ -111,6 +111,8 @@ try {
         'scripts/resume_packet.sh',
         'scripts/verify_gate.ps1',
         'scripts/verify_gate.sh',
+        'scripts/project_verify.ps1',
+        'scripts/project_verify.sh',
         'scripts/append_event.ps1',
         'scripts/append_event.sh'
     )) {

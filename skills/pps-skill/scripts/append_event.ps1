@@ -58,11 +58,28 @@ if ([string]::IsNullOrWhiteSpace($packageId)) {
 
 $dateValue = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
 $line = "- ${dateValue}: [$packageId] $Title | files: $Files | verify: $Verify | pending: $Pending"
-if (-not $eventsText.EndsWith("`n")) {
-    $line = "`n" + $line
+# Insert at the end of the '## Events' section, not the end of the file, so
+# trailing sections can never silently absorb new events.
+$eventsLines = [System.Collections.Generic.List[string]]@(
+    [System.IO.File]::ReadAllLines($eventsPath, [System.Text.Encoding]::UTF8))
+$insideEvents = $false
+$insertIndex = -1
+for ($i = 0; $i -lt $eventsLines.Count; $i++) {
+    if ($eventsLines[$i] -match '^##\s+Events\s*$') { $insideEvents = $true; continue }
+    if ($insideEvents -and $eventsLines[$i] -match '^##\s+') {
+        $insertIndex = $i
+        break
+    }
 }
-[System.IO.File]::AppendAllText(
-    $eventsPath, $line + "`n", [System.Text.UTF8Encoding]::new($false))
+if ($insertIndex -ge 0) {
+    $eventsLines.Insert($insertIndex, $line)
+} else {
+    $eventsLines.Add($line)
+}
+[System.IO.File]::WriteAllText(
+    $eventsPath,
+    (($eventsLines -join "`n") + "`n"),
+    [System.Text.UTF8Encoding]::new($false))
 
 $lineCount = @([System.IO.File]::ReadAllLines($eventsPath)).Count
 if ($lineCount -gt 200) {

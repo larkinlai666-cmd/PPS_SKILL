@@ -78,19 +78,56 @@ if ($protocol -eq 'PPS/1.2') {
         Write-Output 'No verify stamp found; run scripts/verify_gate.* on this device first.'
         exit 4
     }
-    $stampLines = [System.IO.File]::ReadAllLines($stampPath, [System.Text.Encoding]::UTF8)
-    $stampPackage = ''
-    $stampTime = ''
-    foreach ($line in $stampLines) {
-        if ($line.StartsWith('package:')) { $stampPackage = $line.Substring('package:'.Length).Trim() }
-        if ($line.StartsWith('verified_at:')) { $stampTime = $line.Substring('verified_at:'.Length).Trim() }
+    $stamp = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($stampPath, [System.Text.Encoding]::UTF8)) {
+        $sep = $line.IndexOf(':')
+        if ($sep -gt 0) {
+            $stamp[$line.Substring(0, $sep).Trim()] = $line.Substring($sep + 1).Trim()
+        }
     }
-    if ($stampPackage -ne $packageId) {
+    function Deny-StaleStamp([string]$Reason) {
         Write-Output 'PPS readiness: VERIFY EVIDENCE STALE'
-        Write-Output "Verify stamp names '$stampPackage' but the current package is '$packageId'; rerun scripts/verify_gate.*."
+        Write-Output $Reason
+        Write-Output 'Rerun scripts/verify_gate.* on this device.'
         exit 4
     }
-    Write-Output "Verify stamp: $stampPackage ($stampTime)"
+    if ($stamp['package'] -ne $packageId) {
+        Deny-StaleStamp "Verify stamp names '$($stamp['package'])' but the current package is '$packageId'."
+    }
+    if ($stamp['result'] -ne 'pass') {
+        Deny-StaleStamp "Verify stamp records result '$($stamp['result'])', not 'pass'."
+    }
+    $entryRel = $stamp['entry']
+    $entryPath = if ([string]::IsNullOrWhiteSpace($entryRel)) { $null } else { Join-Path $rootFull $entryRel }
+    if ($null -eq $entryPath -or -not (Test-Path -LiteralPath $entryPath -PathType Leaf)) {
+        Deny-StaleStamp "Verify stamp names entry '$entryRel' which does not exist."
+    }
+    $currentEntrySha = (Get-FileHash -LiteralPath $entryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($stamp['entry_sha256'] -ne $currentEntrySha) {
+        Deny-StaleStamp "Verification entry '$entryRel' changed after the stamp was written."
+    }
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($null -ne $git) {
+        & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
+        if ($LASTEXITCODE -eq 0) {
+            $headSha = ((& $git.Source -C $rootFull rev-parse HEAD 2>$null) | Out-String).Trim()
+            if ([string]::IsNullOrWhiteSpace($headSha)) { $headSha = 'no-commit' }
+            $porcelain = ((& $git.Source -C $rootFull status --porcelain --untracked-files=all 2>$null) | Out-String).TrimEnd()
+            $shaObj = [System.Security.Cryptography.SHA256]::Create()
+            try {
+                $porcelainSha = ([System.BitConverter]::ToString(
+                    $shaObj.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($porcelain))
+                ) -replace '-', '').ToLowerInvariant()
+            } finally {
+                $shaObj.Dispose()
+            }
+            $currentWorktree = $headSha + '+' + $porcelainSha
+            if ($stamp['worktree'] -ne $currentWorktree) {
+                Deny-StaleStamp 'The worktree changed after the stamp was written; the verified state is not the current state.'
+            }
+        }
+    }
+    Write-Output "Verify stamp: $($stamp['package']) ($($stamp['verified_at']), entry $entryRel)"
 }
 Write-Output 'Verification attestation: caller confirmed the declared environment and project checks passed.'
 Write-Output 'PPS readiness: OK'

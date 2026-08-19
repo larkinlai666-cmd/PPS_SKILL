@@ -216,6 +216,7 @@ for script_name in \
   asset_check.ps1 asset_check.sh \
   readiness_check.ps1 readiness_check.sh \
   verify_gate.ps1 verify_gate.sh \
+  project_verify.ps1 project_verify.sh \
   append_event.ps1 append_event.sh \
   boundary_check.ps1 boundary_check.sh \
   pre-commit pre-commit.ps1; do

@@ -1,21 +1,56 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-19
-- Scope: skill 0.4.0, PPS/1.2 field distillation
-- Method: first-principles threat model, strict-superset comparison against 0.3.0/PPS/1.1, fault injection on every new gate, Bash/PowerShell parity, full regression of the inherited suites
+- Review date: 2026-08-19 (updated for 0.4.1 hardening round)
+- Scope: skill 0.4.1, PPS/1.2 field distillation + external-review blocker fixes
+- Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of all five external-review bypass fixtures on both platforms, Bash/PowerShell parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
+
+## 0.4.1 hardening round
+
+An independent external replacement review of 0.4.0 (commit `8e14d39`) proved four P0 and one P1 bypasses that this repository's own adversarial review had missed. The root cause of the miss is recorded here deliberately: the original fault injections were designed around the same mental model as the defenses, so they exercised expected failure shapes (exact canonical filenames, malformed receipts) but not grammar-level bypasses (`Write: .`), inverted-direction checks (task→receipt), or the gap between "gate exists" and "gate executes". 0.4.1 closes all five blockers plus the coupled secondary findings; every fix landed as a failing test first.
+
+Replay results of the five original external bypass fixtures, both platforms, clean environments:
+
+| External fixture | 0.4.0 behavior (confirmed) | 0.4.1 behavior (verified Bash + PowerShell) |
+|---|---|---|
+| REVIEW-P0-001: `Verify: exit 9` declaration | validate 0 / gate 0 + stamp / readiness 0 | validate 0 / gate 1, **no stamp** / readiness 4; a failing `project_verify.*` also blocks the stamp; unrouted free-form Verify declarations are rejected outright |
+| REVIEW-P0-002: capsule `Write: .` + `Output Root: ../outside` | validate 0 | validate 1 with 12+ distinct diagnostics: full Workset grammar enforced on task capsules, path safety on Output Root, `local-task-output/` containment, overlap rejection |
+| REVIEW-P0-003: `Status: integrated`, no `MERGES.md` | validate 0 | validate 1: terminal task states require exactly one status-matching receipt; receipts require all eleven fields, resolvable T-/PKG-/D- references, non-overlapping dispositions, resolvable Git checkpoints or explicit `lineage_incomplete` |
+| REVIEW-P0-004: unclaimed canonical writes auto-claimed | boundary 0, `claimed:` | boundary 1, `unclaimed_write:`; claims derive only from the acting subject's Write set + Output Root; canonical identity grants nothing; `-AllowPreexisting` requires a recorded session baseline and never covers post-baseline changes |
+| REVIEW-P1-005: Red Lines exists but not first | validate 0 | validate 1 with distinct diagnostics for missing / duplicated / misplaced |
+
+Additional hardening verified by new negative tests: the verify stamp binds entry SHA-256, capsule SHA-256, and worktree identity, and readiness rejects a stamp whose entry or worktree changed afterwards; `append_event.*` inserts inside the `## Events` section even with trailing sections; proposal-aging warnings respect restatement in `Next`.
 
 ## Superset acceptance claims
 
-PPS/1.2 passes only if all claims below hold. Each was verified on this review date:
+Each claim was re-verified for 0.4.1:
 
-1. **No legacy capability removed**: every PPS/1.0 and PPS/1.1 validation rule, script, template token, and trigger phrase remains; the inherited Bash and PowerShell smoke suites pass without deleting or weakening any assertion (fixture protocol strings were updated only where they intentionally exercise the *current* template generation).
-2. **PPS/1.0 and PPS/1.1 projects validate unchanged**: explicit downgrade fixtures pass in both suites; 1.2-only gates are keyed to the `Protocol:` declaration and cannot fire on older projects.
-3. **Every new mechanism has a failing test**: missing `EVENTS.md`, malformed event lines, missing `## Red Lines`, bare-`Present` coverage, missing Writer lease, two active integrators, worker claiming canonical writes, integrated receipts without checkpoints, missing/stale verify stamps, separator-injection into events, and unclaimed writes all fail loudly with regression coverage on both platforms.
-4. **New requirements cost nothing when unused**: the multitask layer activates only when `TASK_INDEX.md` exists; a fresh single-task project passes initialization + validation + gate + readiness end-to-end on both platforms.
-5. **The no-auto-execution security stance is preserved**: the validator only checks that gate files exist and parses stamp text; it never runs `Verify`, the gate, or any manifest command. Readiness still requires explicit caller attestation *plus* the stamp.
-6. **Bash and PowerShell expose one control surface**: all new scripts (`verify_gate`, `append_event`, `boundary_check`) and all new validator gates exist and behave identically on both platforms, verified by parallel fixtures.
-7. **Distribution integrity holds**: `tools/validate_skill.py`, both installed-skill validators, template-token checks, link checks, VERSION/CHANGELOG agreement, and CI runner coverage all pass.
+1. **No legacy capability removed**: the inherited Bash and PowerShell smoke suites pass without deleting or weakening any assertion.
+2. **PPS/1.0 and PPS/1.1 projects validate unchanged**: the PPS/1.0 downgrade fixture passes in both suites, and a synthesized PPS/1.1-era project (bare `Present` coverage, undated proposals, free-form Verify, no EVENTS/gate/red-lines files) validates and resumes cleanly under the 0.4.1 validator on both platforms. 1.2-only gates are keyed to the `Protocol:` declaration.
+3. **Every new mechanism has a failing test**: all 0.4.0 negative tests plus the new 0.4.1 families (failing verify, unrouted verify, stale worktree stamp, capsule grammar, output-root escape/overlap, terminal-task receipts, receipt reference integrity, unclaimed canonical, baseline-gated preexisting, event placement) run on both platforms.
+4. **New requirements cost nothing when unused**: single-task 1.2 projects and untouched 1.0/1.1 projects pay nothing; the multitask layer still activates only via `TASK_INDEX.md`.
+5. **The no-auto-execution stance is preserved and now meaningful**: the structural validator still never executes manifest commands; execution belongs to the verify gate, which runs only the version-controlled `scripts/project_verify.*` entry, never free-form Markdown text.
+6. **Bash and PowerShell expose one control surface**: every fixture above was replayed on both platforms with identical outcomes.
+7. **Distribution integrity holds**: file lists, template tokens, links, VERSION/CHANGELOG agreement, and CI runner coverage all validate.
+
+## Boundary review
+
+Unchanged, deliberately:
+
+- one human owner; serial canonical writes; no distributed lock, team backlog, role model, or concurrent merge authority.
+- red-line *content* stays project-specific; the protocol fixes position and format only.
+- mechanisms not exercised by the field campaigns (asset tiers, L1-L3, stages, evidence profile) are retained unchanged.
+- the stamp proves the inspected gate ran on this device against this worktree state; a malicious hand-edited stamp remains within the single-owner trust model, though the worktree binding now makes accidental staleness detectable.
+- boundary claims are subject-scoped but still declaration-based; diffing against per-task base checkpoints remains future work (0.5).
+
+## Residual risks
+
+- `project_verify.*` ships with real minimal assertions but the project owner can still hollow it out; the gate can enforce execution, not sincerity. The template states this explicitly.
+- Event grammar validation checks shape, not truth.
+- Proposal aging depends on validation actually running; closing requires it, so the gap is bounded.
+
+Within the stated boundary, 0.4.1 is a strict capability superset of 0.4.0 and of 0.3.0/PPS/1.1: every legacy behavior is preserved and verified, every declared 1.2 protection is now machine-enforced with negative tests on both platforms, and all five externally proven bypasses are closed.
+
 
 ## Field-incident replay matrix
 
@@ -35,43 +70,3 @@ Each distilled mechanism is traced to the real incident that motivated it, and t
 | Derived PPT task's scratch polluted product linting | Write sets were declarative only | `boundary_check` classifies every change or fails it as `unclaimed_write`; scratch defaults to ignored `local-task-output/` |
 | Dirty worktree made task contribution history unreconstructable | Fingerprints without checkpoints | `integrated` receipts require base + result checkpoints or explicit `lineage_incomplete` |
 | "Task complete" conflated with "merged into project" | Single `complete` status | `handoff_ready` / `integrated` / `deferred` / `consume_only` split |
-
-## Fault-injection results
-
-All injections were executed, not reasoned about:
-
-| Attack | Result |
-|---|---|
-| Delete `EVENTS.md` from a 1.2 project | fail: `PPS/1.2 is missing required file: EVENTS.md` |
-| Append a free-form event line | fail: `Malformed event line in EVENTS.md` |
-| Rename the `## Red Lines` section | fail: red-lines requirement names AGENTS.md |
-| Downgrade a coverage evidence cell to `Present` | fail with the checked-vs-unchecked diagnostic |
-| Register two active integrators | fail: exactly-one-integrator gate |
-| Point Hot State `Writer` at a non-existent registry | fail: Writer/TASK_INDEX consistency gate |
-| Worker capsule claims `DECISIONS.md` in Write | fail: canonical-write prohibition |
-| Mark a merge receipt `integrated` with `none` checkpoints | fail: checkpoint requirement |
-| Attest readiness without running the gate | exit 4 `VERIFY EVIDENCE MISSING` |
-| Attest readiness with a stamp from another package | exit 4 `VERIFY EVIDENCE STALE` |
-| Inject `|` into an event title | append refused; grammar preserved |
-| Create an undeclared file and close | `boundary_check` fails it as `unclaimed_write` |
-| Validate a PPS/1.0 and a PPS/1.1 fixture | both pass unchanged |
-| Initialize + validate + gate + readiness a fresh project, both platforms | all pass |
-
-## Boundary review
-
-Unchanged, deliberately:
-
-- one human owner; serial canonical writes; no distributed lock, team backlog, role model, or concurrent merge authority. The multitask layer is bookkeeping for serial integration, not concurrency.
-- the validator never executes untrusted manifest commands; the stamp proves a gate ran, not that its checks are semantically sufficient.
-- red-line *content* is project-specific and never enters PPS; only the position and format are protocol.
-- mechanisms not exercised by the two campaigns (asset tiers, L1-L3 escalation, stages, evidence profile) are retained without change; absence of evidence is not evidence against design.
-- `boundary_check` classifies changes against declared boundaries; it does not diff against per-task base checkpoints and does not attribute pre-existing dirt. Checkpoint-diff enforcement remains future work (0.5).
-- Windows CI observation remains pending until the next remote run; local parity was verified with PowerShell 7.6 on macOS.
-
-## Residual risks
-
-- The verify-stamp proves the gate ran on this device for this package; a malicious actor editing the stamp by hand defeats it. The stamp is git-ignored and device-local, so this remains within the single-owner trust model.
-- Event grammar validation checks shape, not truth; a fabricated event line passes structurally. The chronicle's value still depends on the discipline the append script encourages.
-- Proposal aging uses the validator's run date; a project never validated never warns. This is acceptable because closing requires validation.
-
-Within the stated boundary, PPS/1.2 (0.4.0) is a strict capability superset of 0.3.0/PPS/1.1: every legacy behavior is preserved and verified, and every addition is opt-in by protocol declaration or file presence, fail-loud, evidence-backed, and covered by negative tests on both platforms.

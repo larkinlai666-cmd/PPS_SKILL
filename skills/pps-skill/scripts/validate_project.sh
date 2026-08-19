@@ -289,6 +289,91 @@ tool_manifest() {
   result="$(printf '%s' "$tools" | sed '/^$/d')"
 }
 
+validate_task_capsule() {
+  local capsule_file="$1"
+  local capsule_task_id="$2"
+  local capsule_task_role="$3"
+  local capsule_rel="${capsule_file#$root/}"
+  local capsule_section
+  local capsule_field_value
+  local capsule_bytes
+  local capsule_lines
+  task_capsule_write_paths=""
+
+  capsule_bytes="$(wc -c < "$capsule_file" | tr -d ' ')"
+  (( capsule_bytes <= 32768 )) ||
+    add_error "Task $capsule_task_id capsule $capsule_rel has $capsule_bytes bytes; hard limit is 32768."
+  capsule_lines="$(wc -l < "$capsule_file" | tr -d ' ')"
+  if (( capsule_lines > 80 )); then
+    add_error "Task $capsule_task_id capsule $capsule_rel has $capsule_lines lines; hard limit is 80."
+  elif (( capsule_lines > 60 )); then
+    add_warning "Task $capsule_task_id capsule $capsule_rel has $capsule_lines lines; compact target is 60."
+  fi
+
+  capsule_section_count="$(grep -Ec '^##[[:space:]]+Workset Manifest[[:space:]]*$' "$capsule_file" || true)"
+  if [[ "$capsule_section_count" != "1" ]]; then
+    add_error "Task $capsule_task_id capsule $capsule_rel must contain exactly one 'Workset Manifest' section, found $capsule_section_count."
+    return
+  fi
+  capsule_section="$(section_text "$capsule_file" "Workset Manifest")"
+
+  local field_name
+  for field_name in Methods Facts Decisions Sources Assets Components Read Write Verify Excluded Coverage; do
+    capsule_field_count="$(printf '%s\n' "$capsule_section" |
+      grep -Ec "^-[[:space:]]*${field_name}:[[:space:]]*" || true)"
+    if [[ "$capsule_field_count" != "1" ]]; then
+      add_error "Task $capsule_task_id capsule $capsule_rel must declare exactly one '$field_name' field (use 'none' when empty), found $capsule_field_count."
+      continue
+    fi
+    capsule_field_value="$(printf '%s\n' "$capsule_section" |
+      sed -n "s/^-[[:space:]]*${field_name}:[[:space:]]*//p" | head -n 1)"
+    case "$field_name" in
+      Methods) manifest_ids "$capsule_field_value" M "Task $capsule_task_id Methods" >/dev/null ;;
+      Facts) manifest_ids "$capsule_field_value" F "Task $capsule_task_id Facts" >/dev/null ;;
+      Decisions) manifest_ids "$capsule_field_value" D "Task $capsule_task_id Decisions" >/dev/null ;;
+      Sources) manifest_ids "$capsule_field_value" SRC "Task $capsule_task_id Sources" >/dev/null ;;
+      Assets) manifest_ids "$capsule_field_value" A "Task $capsule_task_id Assets" >/dev/null ;;
+      Components) manifest_ids "$capsule_field_value" C "Task $capsule_task_id Components" >/dev/null ;;
+      Read)
+        path_manifest "$capsule_field_value" "Task $capsule_task_id Read" yes
+        ;;
+      Write)
+        path_manifest "$capsule_field_value" "Task $capsule_task_id Write" no
+        task_capsule_write_paths="$result"
+        [[ -n "$task_capsule_write_paths" ]] ||
+          add_error "Task $capsule_task_id capsule Write cannot be empty or 'none'; declare the bounded output paths."
+        ;;
+      Verify)
+        [[ -n "$capsule_field_value" && "$capsule_field_value" != "none" ]] ||
+          add_error "Task $capsule_task_id capsule Verify cannot be empty or 'none'."
+        ;;
+      Excluded)
+        [[ -n "$capsule_field_value" ]] ||
+          add_error "Task $capsule_task_id capsule Excluded cannot be empty; use 'none'."
+        ;;
+      Coverage)
+        [[ -n "$capsule_field_value" ]] ||
+          add_error "Task $capsule_task_id capsule Coverage cannot be empty."
+        ;;
+    esac
+  done
+}
+
+checkpoint_ok() {
+  local checkpoint_value="$1"
+  [[ -n "$checkpoint_value" && "$checkpoint_value" != "none" ]] || return 1
+  if [[ "$checkpoint_value" == "lineage_incomplete" ]]; then
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 &&
+    git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$root" cat-file -e "${checkpoint_value}^{commit}" 2>/dev/null
+    return $?
+  fi
+  # Without Git only the explicit migration marker is acceptable.
+  return 1
+}
+
 required=(
   README.md
   AGENTS.md
@@ -366,6 +451,7 @@ if (( is_pps12 == 1 )); then
   for rel in \
     EVENTS.md \
     scripts/verify_gate.ps1 scripts/verify_gate.sh \
+    scripts/project_verify.ps1 scripts/project_verify.sh \
     scripts/append_event.ps1 scripts/append_event.sh; do
     [[ -f "$root/$rel" ]] || add_error "PPS/1.2 is missing required file: $rel"
   done
@@ -617,8 +703,16 @@ fi
 if (( is_pps12 == 1 )); then
   agents_file="$root/AGENTS.md"
   if [[ -f "$agents_file" ]]; then
-    grep -Eq '^##[[:space:]]+Red Lines[[:space:]]*$' "$agents_file" ||
+    red_lines_count="$(grep -Ec '^##[[:space:]]+Red Lines[[:space:]]*$' "$agents_file" || true)"
+    first_h2="$(grep -E '^##[[:space:]]' "$agents_file" | head -n 1 |
+      sed 's/^##[[:space:]]*//; s/[[:space:]]*$//')"
+    if [[ "$red_lines_count" == "0" ]]; then
       add_error "PPS/1.2 requires a '## Red Lines' section in AGENTS.md."
+    elif [[ "$red_lines_count" != "1" ]]; then
+      add_error "AGENTS.md must contain exactly one '## Red Lines' section, found $red_lines_count."
+    elif [[ "$first_h2" != "Red Lines" ]]; then
+      add_error "The '## Red Lines' section exists but is not the first H2 section of AGENTS.md (found '## $first_h2' first); L0 must meet red lines before any other rule."
+    fi
   fi
 
   events_file="$root/EVENTS.md"
@@ -659,7 +753,11 @@ if (( is_pps12 == 1 )); then
       print $3 + int((153 * m + 2) / 5) + 365 * y + int(y / 4) - int(y / 100) + int(y / 400) - 32045
     }')"
     if (( today_jdn - opened_jdn > 7 )); then
-      add_warning "Proposal $proposal_id has been pending for more than 7 days; restate it in Next as kept, closed, or split."
+      if printf '%s' "$next" | grep -Fq "$proposal_id"; then
+        : # restated in Next; aging discipline satisfied
+      else
+        add_warning "Proposal $proposal_id has been pending for more than 7 days and is not restated in Next; state kept, closed, or split."
+      fi
     fi
   done < <(awk '
     $0 ~ "^##[[:space:]]+Proposals[[:space:]]*$" { inside=1; next }
@@ -670,7 +768,10 @@ if (( is_pps12 == 1 )); then
   writer_value="$(printf '%s\n' "$hot_state" |
     sed -n 's/^-[[:space:]]*Writer:[[:space:]]*//p' | head -n 1)"
   task_index="$root/TASK_INDEX.md"
-  canonical_files="PROJECT_STATE.md DECISIONS.md CONTEXT.md EVENTS.md TASK_INDEX.md MERGES.md"
+  canonical_files="PROJECT_STATE.md DECISIONS.md CONTEXT.md EVENTS.md TASK_INDEX.md MERGES.md PROJECT_MAP.md ENVIRONMENT.md docs/coverage.md docs/CURRENT_REVIEW_EVIDENCE.md"
+  task_ids=""
+  terminal_tasks=""
+  output_roots=""
   if [[ -f "$task_index" ]]; then
     task_ids="$(grep -E '^###[[:space:]]+T-' "$task_index" |
       grep -Eo 'T-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?' || true)"
@@ -702,6 +803,11 @@ if (( is_pps12 == 1 )); then
         active|handoff_ready|integrated|rejected|deferred|archived) ;;
         *) add_error "Task $task_id has invalid Status '$task_status'." ;;
       esac
+      case "$task_status" in
+        integrated|deferred|rejected)
+          terminal_tasks="${terminal_tasks}${task_id}:${task_status}"$'\n'
+          ;;
+      esac
       if [[ "$task_role" == "integrator" && "$task_status" == "active" ]]; then
         active_integrators="${active_integrators}${task_id}"$'\n'
       fi
@@ -710,30 +816,45 @@ if (( is_pps12 == 1 )); then
           add_error "Task $task_id has no Capsule field."
         else
           safe_project_path "$task_capsule" "Task $task_id Capsule"; task_capsule_path="$result"
-          [[ -n "$task_capsule_path" && -f "$task_capsule_path" ]] ||
+          if [[ -z "$task_capsule_path" || ! -f "$task_capsule_path" ]]; then
             add_error "Task $task_id capsule does not exist: $task_capsule"
-          if [[ "$task_role" != "integrator" && -n "$task_capsule_path" && -f "$task_capsule_path" ]]; then
-            task_write="$(awk '
-              $0 ~ "^##[[:space:]]+Workset Manifest[[:space:]]*$" { inside=1; next }
-              inside && /^##[[:space:]]/ { exit }
-              inside && index($0, "- Write:") == 1 {
-                sub("^- Write:[[:space:]]*", "")
-                print
-                exit
-              }
-            ' "$task_capsule_path")"
-            for canonical in $canonical_files; do
-              if printf '%s\n' "$task_write" | tr ',' '\n' |
-                  sed 's/^[[:space:]]*//;s/[[:space:]]*$//' |
-                  grep -Fxq "$canonical"; then
-                add_error "Task $task_id ($task_role) declares canonical file '$canonical' in its Write set."
-              fi
-            done
+          elif [[ "$task_role" != "integrator" ]]; then
+            validate_task_capsule "$task_capsule_path" "$task_id" "$task_role"
+            while IFS= read -r write_rel; do
+              [[ -n "$write_rel" ]] || continue
+              for canonical in $canonical_files; do
+                if [[ "$write_rel" == "$canonical" ]]; then
+                  add_error "Task $task_id ($task_role) declares canonical file '$canonical' in its Write set."
+                fi
+              done
+            done <<< "$task_capsule_write_paths"
           fi
         fi
         if [[ "$task_role" != "integrator" ]]; then
-          [[ -n "$task_output_root" && "$task_output_root" != "none" ]] ||
+          if [[ -z "$task_output_root" || "$task_output_root" == "none" ]]; then
             add_error "Task $task_id ($task_role) requires a bounded Output Root."
+          else
+            safe_project_path "$task_output_root" "Task $task_id Output Root"
+            if [[ -n "$result" ]]; then
+              case "$task_output_root" in
+                local-task-output/*) ;;
+                *)
+                  add_error "Task $task_id Output Root must live under local-task-output/, found '$task_output_root'."
+                  ;;
+              esac
+              while IFS= read -r existing_root_entry; do
+                [[ -n "$existing_root_entry" ]] || continue
+                existing_task="${existing_root_entry%%:*}"
+                existing_root="${existing_root_entry#*:}"
+                if [[ "$task_output_root" == "$existing_root" ||
+                  "$task_output_root" == "$existing_root"/* ||
+                  "$existing_root" == "$task_output_root"/* ]]; then
+                  add_error "Task $task_id Output Root '$task_output_root' overlaps Task $existing_task Output Root '$existing_root'."
+                fi
+              done <<< "$output_roots"
+              output_roots="${output_roots}${task_id}:${task_output_root}"$'\n'
+            fi
+          fi
         fi
       fi
     done <<< "$(printf '%s\n' "$task_ids" | awk '!seen[$0]++')"
@@ -751,6 +872,7 @@ if (( is_pps12 == 1 )); then
   fi
 
   merges_file="$root/MERGES.md"
+  merge_ids=""
   if [[ -f "$merges_file" ]]; then
     [[ -f "$task_index" ]] ||
       add_error "MERGES.md exists but TASK_INDEX.md does not; merge receipts require the task registry."
@@ -767,28 +889,119 @@ if (( is_pps12 == 1 )); then
         inside && /^###[[:space:]]/ { exit }
         inside { print }
       ' "$merges_file")"
-      merge_relation="$(printf '%s\n' "$merge_block" |
-        sed -n 's/^-[[:space:]]*Relation:[[:space:]]*//p' | head -n 1)"
-      merge_status="$(printf '%s\n' "$merge_block" |
-        sed -n 's/^-[[:space:]]*Status:[[:space:]]*//p' | head -n 1)"
-      merge_base="$(printf '%s\n' "$merge_block" |
-        sed -n 's/^-[[:space:]]*Base Checkpoint:[[:space:]]*//p' | head -n 1)"
-      merge_result="$(printf '%s\n' "$merge_block" |
-        sed -n 's/^-[[:space:]]*Result Checkpoint:[[:space:]]*//p' | head -n 1)"
+      merge_field() {
+        printf '%s\n' "$merge_block" |
+          sed -n "s/^-[[:space:]]*$1:[[:space:]]*//p" | head -n 1
+      }
+      merge_target="$(merge_field 'Target Package')"
+      merge_sources="$(merge_field 'Source Tasks')"
+      merge_relation="$(merge_field 'Relation')"
+      merge_accepted="$(merge_field 'Accepted')"
+      merge_rejected="$(merge_field 'Rejected')"
+      merge_deferred="$(merge_field 'Deferred')"
+      merge_base="$(merge_field 'Base Checkpoint')"
+      merge_result="$(merge_field 'Result Checkpoint')"
+      merge_approval="$(merge_field 'Approval')"
+      merge_verification="$(merge_field 'Verification')"
+      merge_status="$(merge_field 'Status')"
+      for required_pair in \
+        "Target Package:$merge_target" "Source Tasks:$merge_sources" \
+        "Relation:$merge_relation" "Accepted:$merge_accepted" \
+        "Rejected:$merge_rejected" "Deferred:$merge_deferred" \
+        "Base Checkpoint:$merge_base" "Result Checkpoint:$merge_result" \
+        "Approval:$merge_approval" "Verification:$merge_verification" \
+        "Status:$merge_status"; do
+        [[ -n "${required_pair#*:}" ]] ||
+          add_error "Merge receipt $merge_id is missing the '${required_pair%%:*}' field."
+      done
       case "$merge_relation" in
         absorbs|layers_on|consumes_only|deferred|supersedes|rejected|rollback_to) ;;
         *) add_error "Merge receipt $merge_id has invalid Relation '$merge_relation'." ;;
       esac
+      case "$merge_status" in
+        pending|integrated|deferred|rejected) ;;
+        *) add_error "Merge receipt $merge_id has invalid Status '$merge_status'." ;;
+      esac
+      [[ "$merge_target" =~ ^PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$ ]] ||
+        add_error "Merge receipt $merge_id Target Package must be a PKG-* ID, found '$merge_target'."
+      if [[ -n "$merge_sources" && "$merge_sources" != "none" ]]; then
+        while IFS= read -r src_task; do
+          src_task="$(printf '%s' "$src_task" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [[ -n "$src_task" ]] || continue
+          if ! printf '%s\n' "$src_task" |
+            grep -Eq '^T-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$'; then
+            add_error "Merge receipt $merge_id Source Tasks contains a non-T-* entry: '$src_task'."
+          elif ! printf '%s\n' "$task_ids" | grep -Fxq "$src_task"; then
+            add_error "Merge receipt $merge_id references unknown Source Task '$src_task'."
+          fi
+        done < <(printf '%s\n' "$merge_sources" | tr ',' '\n')
+      else
+        add_error "Merge receipt $merge_id must name at least one Source Task."
+      fi
+      if [[ -n "$merge_approval" && "$merge_approval" != "none" ]]; then
+        while IFS= read -r approval_id; do
+          approval_id="$(printf '%s' "$approval_id" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [[ -n "$approval_id" ]] || continue
+          if ! printf '%s\n' "$approval_id" |
+            grep -Eq '^D-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$'; then
+            add_error "Merge receipt $merge_id Approval contains a non-D-* entry: '$approval_id'."
+          elif ! grep -Eq "^###[[:space:]]+${approval_id}[[:space:]]+\[" "$decisions"; then
+            add_error "Merge receipt $merge_id Approval references unknown decision '$approval_id'."
+          fi
+        done < <(printf '%s\n' "$merge_approval" | tr ',' '\n')
+      fi
+      overlap_sets="$(
+        for set_value in "$merge_accepted" "$merge_rejected" "$merge_deferred"; do
+          [[ -n "$set_value" && "$set_value" != "none" ]] || continue
+          printf '%s\n' "$set_value" | tr ',' '\n' |
+            sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d'
+        done | sort | uniq -d
+      )"
+      while IFS= read -r overlap_path; do
+        [[ -z "$overlap_path" ]] ||
+          add_error "Merge receipt $merge_id lists '$overlap_path' in more than one of Accepted/Rejected/Deferred."
+      done <<< "$overlap_sets"
       if [[ "$merge_status" == "integrated" ]]; then
-        if [[ -z "$merge_base" || "$merge_base" == "none" ||
-          -z "$merge_result" || "$merge_result" == "none" ]]; then
-          add_error "Merge receipt $merge_id is 'integrated' without both base and result checkpoints; use lineage_incomplete explicitly when history predates the layer."
-        fi
+        checkpoint_ok "$merge_base" ||
+          add_error "Merge receipt $merge_id Base Checkpoint '$merge_base' is not a resolvable Git object or the explicit lineage_incomplete marker."
+        checkpoint_ok "$merge_result" ||
+          add_error "Merge receipt $merge_id Result Checkpoint '$merge_result' is not a resolvable Git object or the explicit lineage_incomplete marker."
       fi
     done <<< "$(printf '%s\n' "$merge_ids" | awk '!seen[$0]++')"
   fi
-fi
 
+  while IFS= read -r terminal_entry; do
+    [[ -n "$terminal_entry" ]] || continue
+    terminal_id="${terminal_entry%%:*}"
+    terminal_status="${terminal_entry#*:}"
+    matching_receipts=0
+    if [[ -f "$merges_file" ]]; then
+      while IFS= read -r merge_id; do
+        [[ -n "$merge_id" ]] || continue
+        merge_block="$(awk -v wanted="### $merge_id" '
+          index($0, wanted) == 1 { inside=1; next }
+          inside && /^###[[:space:]]/ { exit }
+          inside { print }
+        ' "$merges_file")"
+        block_status="$(printf '%s\n' "$merge_block" |
+          sed -n 's/^-[[:space:]]*Status:[[:space:]]*//p' | head -n 1)"
+        block_sources="$(printf '%s\n' "$merge_block" |
+          sed -n 's/^-[[:space:]]*Source Tasks:[[:space:]]*//p' | head -n 1)"
+        if [[ "$block_status" == "$terminal_status" ]] &&
+          printf '%s\n' "$block_sources" | tr ',' '\n' |
+            sed 's/^[[:space:]]*//;s/[[:space:]]*$//' |
+            grep -Fxq "$terminal_id"; then
+          matching_receipts=$((matching_receipts + 1))
+        fi
+      done <<< "$(printf '%s\n' "$merge_ids" | awk '!seen[$0]++')"
+    fi
+    if [[ "$matching_receipts" == "0" ]]; then
+      add_error "Task $terminal_id is '$terminal_status' but no merge receipt with matching status names it; only a receipt proves disposition."
+    elif [[ "$matching_receipts" != "1" ]]; then
+      add_error "Task $terminal_id has $matching_receipts '$terminal_status' receipts; exactly one final disposition receipt is required."
+    fi
+  done <<< "$(printf '%s' "$terminal_tasks" | sed '/^$/d')"
+fi
 if [[ "$profile" == "evidence" && -f "$root/docs/CURRENT_REVIEW_EVIDENCE.md" ]]; then
   evidence_file="$root/docs/CURRENT_REVIEW_EVIDENCE.md"
   require_single_section "$evidence_file" Package; evidence_section="$result"

@@ -179,6 +179,8 @@ foreach ($scriptName in @(
     'readiness_check.sh',
     'verify_gate.ps1',
     'verify_gate.sh',
+    'project_verify.ps1',
+    'project_verify.sh',
     'append_event.ps1',
     'append_event.sh',
     'boundary_check.ps1',

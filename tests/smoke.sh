@@ -765,8 +765,12 @@ expect_invalid "$temp_root/bare-present-coverage" \
 multitask_case="$temp_root/multitask-case"
 cp -R "$temp_root/standard-case" "$multitask_case"
 mkdir -p "$multitask_case/task-contexts"
-printf '# T-002 Capsule\n\n## Workset Manifest\n\n- Write: local-task-output/T-002/out.md\n' \
-  >"$multitask_case/task-contexts/T-002.md"
+{
+  printf '# T-002 Capsule\n\n## Workset Manifest\n\n'
+  printf -- '- Methods: none\n- Facts: none\n- Decisions: none\n- Sources: none\n- Assets: none\n'
+  printf -- '- Components: C-ROOT\n- Read: PROJECT_MAP.md\n- Write: local-task-output/T-002/out.md\n'
+  printf -- '- Verify: scripts/verify_gate.sh\n- Excluded: none\n- Coverage: CONTEXT.md\n'
+} >"$multitask_case/task-contexts/T-002.md"
 {
   printf '# Task Index\n\n## Task Index\n\n'
   printf '### T-001\n- Title: Integration\n- Role: integrator\n- Status: active\n- Active Package: PKG-001\n- Capsule: CONTEXT.md\n- Output Root: none\n\n'
@@ -796,11 +800,63 @@ expect_invalid "$temp_root/worker-writes-canonical" \
 cp -R "$multitask_case" "$temp_root/unchecked-merge"
 {
   printf '# Merges\n\n## Merge Receipts\n\n'
-  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: absorbs\n- Base Checkpoint: none\n- Result Checkpoint: none\n- Status: integrated\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: absorbs\n- Accepted: docs/MAIN.md\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: none\n- Result Checkpoint: none\n- Approval: none\n- Verification: none\n- Status: integrated\n'
 } >"$temp_root/unchecked-merge/MERGES.md"
 expect_invalid "$temp_root/unchecked-merge" \
-  "without both base and result checkpoints" \
+  "not a resolvable Git object or the explicit lineage_incomplete marker" \
   "Integrated merge without checkpoints"
+
+cp -R "$multitask_case" "$temp_root/terminal-no-receipt"
+perl -0pi -e 's/(### T-002\n- Title: Worker\n- Role: worker\n- Status: )active/${1}integrated/' \
+  "$temp_root/terminal-no-receipt/TASK_INDEX.md"
+expect_invalid "$temp_root/terminal-no-receipt" \
+  "no merge receipt with matching status names it" \
+  "Integrated task without receipt"
+
+cp -R "$multitask_case" "$temp_root/receipt-unknown-task"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-404\n- Relation: absorbs\n- Accepted: docs/MAIN.md\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: lineage_incomplete\n- Result Checkpoint: lineage_incomplete\n- Approval: none\n- Verification: manual\n- Status: pending\n'
+} >"$temp_root/receipt-unknown-task/MERGES.md"
+expect_invalid "$temp_root/receipt-unknown-task" \
+  "references unknown Source Task 'T-404'" \
+  "Receipt referencing unknown task"
+
+cp -R "$multitask_case" "$temp_root/capsule-write-dot"
+sed -i.bak 's|^- Write: local-task-output/T-002/out.md$|- Write: .|' \
+  "$temp_root/capsule-write-dot/task-contexts/T-002.md"
+expect_invalid "$temp_root/capsule-write-dot" \
+  "Write path must name an exact file or bounded subdirectory" \
+  "Task capsule repository-root Write"
+
+cp -R "$multitask_case" "$temp_root/capsule-missing-fields"
+printf '# T-003 Capsule\n\n## Workset Manifest\n\n- Write: local-task-output/T-003/out.md\n' \
+  >"$temp_root/capsule-missing-fields/task-contexts/T-003.md"
+printf '\n### T-003\n- Title: Bare\n- Role: worker\n- Status: active\n- Active Package: PKG-001\n- Capsule: task-contexts/T-003.md\n- Output Root: local-task-output/T-003\n' \
+  >>"$temp_root/capsule-missing-fields/TASK_INDEX.md"
+expect_invalid "$temp_root/capsule-missing-fields" \
+  "must declare exactly one 'Methods' field" \
+  "Task capsule missing required fields"
+
+cp -R "$multitask_case" "$temp_root/output-root-escape"
+sed -i.bak 's|^- Output Root: local-task-output/T-002$|- Output Root: ../outside|' \
+  "$temp_root/output-root-escape/TASK_INDEX.md"
+expect_invalid "$temp_root/output-root-escape" \
+  "Output Root must be a safe project-relative path" \
+  "Task Output Root escape"
+
+cp -R "$multitask_case" "$temp_root/output-root-overlap"
+{
+  printf '# T-003 Capsule\n\n## Workset Manifest\n\n'
+  printf -- '- Methods: none\n- Facts: none\n- Decisions: none\n- Sources: none\n- Assets: none\n'
+  printf -- '- Components: C-ROOT\n- Read: PROJECT_MAP.md\n- Write: local-task-output/T-002/nested/out.md\n'
+  printf -- '- Verify: scripts/verify_gate.sh\n- Excluded: none\n- Coverage: CONTEXT.md\n'
+} >"$temp_root/output-root-overlap/task-contexts/T-003.md"
+printf '\n### T-003\n- Title: Overlap\n- Role: worker\n- Status: active\n- Active Package: PKG-001\n- Capsule: task-contexts/T-003.md\n- Output Root: local-task-output/T-002/nested\n' \
+  >>"$temp_root/output-root-overlap/TASK_INDEX.md"
+expect_invalid "$temp_root/output-root-overlap" \
+  "overlaps Task T-002 Output Root" \
+  "Overlapping task output roots"
 
 stamp_case="$temp_root/stamp-case"
 cp -R "$temp_root/standard-case" "$stamp_case"
@@ -849,15 +905,115 @@ if bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
   exit 1
 fi
 grep -q 'unclaimed_write: rogue.txt' "$temp_root/boundary-fail.out"
+if bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
+  --allow-preexisting >"$temp_root/boundary-nobaseline.out" 2>&1; then
+  echo "Boundary check downgraded changes without a recorded baseline." >&2
+  exit 1
+fi
+grep -q 'requires a recorded baseline' "$temp_root/boundary-nobaseline.out"
+bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
+  --record-baseline >/dev/null
 bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
   --allow-preexisting >"$temp_root/boundary-preexisting.out"
-grep -q 'preexisting (unclassified): rogue.txt' \
+grep -q 'preexisting (baseline): rogue.txt' \
   "$temp_root/boundary-preexisting.out"
-rm "$boundary_case/rogue.txt"
+printf 'new rogue\n' >"$boundary_case/rogue2.txt"
+if bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
+  --allow-preexisting >"$temp_root/boundary-newrogue.out" 2>&1; then
+  echo "Boundary check treated a post-baseline change as preexisting." >&2
+  exit 1
+fi
+grep -q 'unclaimed_write: rogue2.txt' "$temp_root/boundary-newrogue.out"
+rm "$boundary_case/rogue.txt" "$boundary_case/rogue2.txt" \
+  "$boundary_case/.pps/boundary-baseline"
 printf 'update\n' >>"$boundary_case/docs/MAIN.md"
 bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
   >"$temp_root/boundary-claimed.out"
 grep -q 'claimed: docs/MAIN.md' "$temp_root/boundary-claimed.out"
 grep -q '^PPS boundary check: OK$' "$temp_root/boundary-claimed.out"
+
+unclaimed_canonical="$temp_root/boundary-canonical"
+bash "$skill/scripts/init_project.sh" boundary-canonical \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+sed -i.bak 's|^- Write:.*|- Write: docs/MAIN.md|' \
+  "$unclaimed_canonical/CONTEXT.md"
+rm "$unclaimed_canonical/CONTEXT.md.bak"
+git -C "$unclaimed_canonical" add CONTEXT.md >/dev/null
+git -C "$unclaimed_canonical" commit -qm "narrow write set" >/dev/null
+printf 'drift\n' >>"$unclaimed_canonical/DECISIONS.md"
+if bash "$unclaimed_canonical/scripts/boundary_check.sh" "$unclaimed_canonical" \
+  >"$temp_root/boundary-canonical.out" 2>&1; then
+  echo "Boundary check auto-claimed an undeclared canonical file." >&2
+  exit 1
+fi
+grep -q 'unclaimed_write: DECISIONS.md' "$temp_root/boundary-canonical.out"
+
+gate_fail_case="$temp_root/gate-fail-case"
+cp -R "$temp_root/standard-case" "$gate_fail_case"
+printf '#!/usr/bin/env bash\nexit 9\n' >"$gate_fail_case/scripts/project_verify.sh"
+chmod +x "$gate_fail_case/scripts/project_verify.sh"
+rm -f "$gate_fail_case/.pps/verify-stamp"
+if bash "$gate_fail_case/scripts/verify_gate.sh" "$gate_fail_case" \
+  >"$temp_root/gate-fail.out" 2>&1; then
+  echo "Verify gate wrote a green stamp for a failing project verification." >&2
+  exit 1
+fi
+grep -q 'PPS verify gate: FAILED (project verification)' "$temp_root/gate-fail.out"
+if [[ -f "$gate_fail_case/.pps/verify-stamp" ]]; then
+  echo "Verify gate left a stamp behind after a failed verification." >&2
+  exit 1
+fi
+set +e
+bash "$gate_fail_case/scripts/readiness_check.sh" "$gate_fail_case" --verified \
+  >"$temp_root/gate-fail-readiness.out" 2>&1
+gate_fail_readiness=$?
+set -e
+[[ "$gate_fail_readiness" == "4" ]]
+grep -q 'VERIFY EVIDENCE MISSING' "$temp_root/gate-fail-readiness.out"
+
+unrouted_case="$temp_root/unrouted-verify-case"
+cp -R "$temp_root/standard-case" "$unrouted_case"
+sed -i.bak 's|^- Verify:.*|- Verify: bash -c "exit 9"|' "$unrouted_case/CONTEXT.md"
+rm -f "$unrouted_case/.pps/verify-stamp"
+if bash "$unrouted_case/scripts/verify_gate.sh" "$unrouted_case" \
+  >"$temp_root/unrouted.out" 2>&1; then
+  echo "Verify gate accepted an unrouted free-form Verify declaration." >&2
+  exit 1
+fi
+grep -q 'unrouted Verify declaration' "$temp_root/unrouted.out"
+[[ ! -f "$unrouted_case/.pps/verify-stamp" ]]
+
+stale_worktree_case="$temp_root/stale-worktree-case"
+bash "$skill/scripts/init_project.sh" stale-worktree-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+bash "$stale_worktree_case/scripts/verify_gate.sh" "$stale_worktree_case" >/dev/null
+printf 'post-stamp drift\n' >>"$stale_worktree_case/docs/MAIN.md"
+set +e
+bash "$stale_worktree_case/scripts/readiness_check.sh" "$stale_worktree_case" --verified \
+  >"$temp_root/stale-worktree.out" 2>&1
+stale_worktree_code=$?
+set -e
+[[ "$stale_worktree_code" == "4" ]]
+grep -q 'worktree changed after the stamp' "$temp_root/stale-worktree.out"
+
+event_placement_case="$temp_root/event-placement-case"
+cp -R "$temp_root/standard-case" "$event_placement_case"
+printf '\n## Trailing Notes\n\n- unrelated trailing content\n' \
+  >>"$event_placement_case/EVENTS.md"
+bash "$event_placement_case/scripts/append_event.sh" "$event_placement_case" \
+  --title "Placement test"
+awk '
+  /^## Events$/ { inside=1; next }
+  inside && /^## / { inside=0 }
+  inside && /Placement test/ { found=1 }
+  END { exit found ? 0 : 1 }
+' "$event_placement_case/EVENTS.md" || {
+  echo "Appended event landed outside the Events section." >&2
+  exit 1
+}
+bash "$event_placement_case/scripts/validate_project.sh" \
+  "$event_placement_case" --quiet
 
 echo "PPS Bash smoke tests: OK"

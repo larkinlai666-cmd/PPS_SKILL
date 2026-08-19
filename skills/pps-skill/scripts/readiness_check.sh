@@ -100,13 +100,48 @@ if [[ "$protocol" == "PPS/1.2" ]]; then
     echo "No verify stamp found; run scripts/verify_gate.* on this device first." >&2
     exit 4
   fi
-  stamp_package="$(sed -n 's/^package:[[:space:]]*//p' "$stamp_file" | head -n 1)"
-  if [[ "$stamp_package" != "$package_id" ]]; then
+  stamp_field() {
+    sed -n "s/^$1:[[:space:]]*//p" "$stamp_file" | head -n 1
+  }
+  stamp_package="$(stamp_field package)"
+  stamp_entry="$(stamp_field entry)"
+  stamp_entry_sha="$(stamp_field entry_sha256)"
+  stamp_result="$(stamp_field result)"
+  stamp_worktree="$(stamp_field worktree)"
+  stamp_time="$(stamp_field verified_at)"
+  reject_stale() {
     echo "PPS readiness: VERIFY EVIDENCE STALE" >&2
-    echo "Verify stamp names '$stamp_package' but the current package is '$package_id'; rerun scripts/verify_gate.*." >&2
+    echo "$1" >&2
+    echo "Rerun scripts/verify_gate.* on this device." >&2
     exit 4
+  }
+  [[ "$stamp_package" == "$package_id" ]] ||
+    reject_stale "Verify stamp names '$stamp_package' but the current package is '$package_id'."
+  [[ "$stamp_result" == "pass" ]] ||
+    reject_stale "Verify stamp records result '$stamp_result', not 'pass'."
+  [[ -n "$stamp_entry" && -f "$root/$stamp_entry" ]] ||
+    reject_stale "Verify stamp names entry '$stamp_entry' which does not exist."
+  if command -v shasum >/dev/null 2>&1; then
+    current_entry_sha="$(shasum -a 256 "$root/$stamp_entry" | awk '{print $1}')"
+  else
+    current_entry_sha="$(sha256sum "$root/$stamp_entry" | awk '{print $1}')"
   fi
-  echo "Verify stamp: $stamp_package ($(sed -n 's/^verified_at:[[:space:]]*//p' "$stamp_file" | head -n 1))"
+  [[ "$stamp_entry_sha" == "$current_entry_sha" ]] ||
+    reject_stale "Verification entry '$stamp_entry' changed after the stamp was written."
+  if command -v git >/dev/null 2>&1 &&
+    git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    head_sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || echo 'no-commit')"
+    porcelain="$(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null || true)"
+    if command -v shasum >/dev/null 2>&1; then
+      porcelain_sha="$(printf '%s' "$porcelain" | shasum -a 256 | awk '{print $1}')"
+    else
+      porcelain_sha="$(printf '%s' "$porcelain" | sha256sum | awk '{print $1}')"
+    fi
+    current_worktree="${head_sha}+${porcelain_sha}"
+    [[ "$stamp_worktree" == "$current_worktree" ]] ||
+      reject_stale "The worktree changed after the stamp was written; the verified state is not the current state."
+  fi
+  echo "Verify stamp: $stamp_package ($stamp_time, entry $stamp_entry)"
 fi
 echo "Verification attestation: caller confirmed the declared environment and project checks passed."
 echo "PPS readiness: OK"

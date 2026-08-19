@@ -91,9 +91,24 @@ package_id="$(
 }
 
 date_value="$(date -u '+%Y-%m-%d')"
-printf -- '- %s: [%s] %s | files: %s | verify: %s | pending: %s\n' \
-  "$date_value" "$package_id" "$title" \
-  "$files_value" "$verify_value" "$pending_value" >> "$events_file"
+event_line="- ${date_value}: [${package_id}] ${title} | files: ${files_value} | verify: ${verify_value} | pending: ${pending_value}"
+
+# Insert at the end of the '## Events' section, not the end of the file, so
+# trailing sections can never silently absorb new events.
+tmp_events="$(mktemp "${TMPDIR:-/tmp}/pps-events.XXXXXX")"
+awk -v new_event="$event_line" '
+  BEGIN { inside = 0; inserted = 0 }
+  /^##[[:space:]]+Events[[:space:]]*$/ { inside = 1; print; next }
+  inside == 1 && /^##[[:space:]]/ {
+    print new_event
+    inserted = 1
+    inside = 0
+  }
+  { print }
+  END {
+    if (inserted == 0) { print new_event }
+  }
+' "$events_file" > "$tmp_events" && mv "$tmp_events" "$events_file"
 
 line_count="$(wc -l < "$events_file" | tr -d '[:space:]')"
 if (( line_count > 200 )); then

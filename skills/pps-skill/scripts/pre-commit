@@ -51,6 +51,7 @@ for relative in \
   scripts/environment_doctor.ps1 scripts/environment_doctor.sh \
   scripts/resume_packet.ps1 scripts/resume_packet.sh \
   scripts/verify_gate.ps1 scripts/verify_gate.sh \
+  scripts/project_verify.ps1 scripts/project_verify.sh \
   scripts/append_event.ps1 scripts/append_event.sh; do
   checkout_staged_path "$relative"
 done
