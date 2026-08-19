@@ -23,8 +23,25 @@ if ($null -eq $git) {
     Write-Host "ERROR: git is unavailable; boundary check needs worktree status."
     exit 1
 }
-& $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
-if ($LASTEXITCODE -ne 0) {
+function Invoke-NativeProbe([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5 promotes native stderr to error records; treat
+        # probe failures as data, not terminating errors.
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command 2>$null)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Output = $output
+        Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+    }
+}
+$repoProbe = Invoke-NativeProbe { & $git.Source -C $rootFull rev-parse --is-inside-work-tree }
+if ($repoProbe.Code -ne 0 -or $repoProbe.Text -ne 'true') {
     Write-Host "ERROR: not a Git repository: $rootFull"
     exit 1
 }
@@ -32,9 +49,9 @@ if ($LASTEXITCODE -ne 0) {
 $baselinePath = Join-Path $rootFull '.pps/boundary-baseline'
 
 function Get-ChangedPaths {
-    $lines = @(& $git.Source -C $rootFull status --porcelain --untracked-files=all 2>$null)
+    $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
     $paths = @()
-    foreach ($statusLine in $lines) {
+    foreach ($statusLine in $statusProbe.Output) {
         $line = "$statusLine"
         if ($line.Length -le 3) { continue }
         $changed = $line.Substring(3).Trim('"')

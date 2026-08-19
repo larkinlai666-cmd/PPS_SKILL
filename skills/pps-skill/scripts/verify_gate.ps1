@@ -108,15 +108,37 @@ function Get-TextSha256([string]$Text) {
 
 $entrySha = Get-FileSha256 $entryPath
 $capsuleSha = Get-FileSha256 (Join-Path $rootFull 'CONTEXT.md')
+
+function Invoke-NativeProbe([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5 promotes native stderr to error records; a
+        # non-repository is a normal probe result, not a terminating error.
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command 2>$null)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+    }
+}
+
 $git = Get-Command git -ErrorAction SilentlyContinue
 $worktreeId = 'no-git'
 if ($null -ne $git) {
-    & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
-    if ($LASTEXITCODE -eq 0) {
-        $headSha = ((& $git.Source -C $rootFull rev-parse HEAD 2>$null) | Out-String).Trim()
-        if ([string]::IsNullOrWhiteSpace($headSha)) { $headSha = 'no-commit' }
-        $porcelain = ((& $git.Source -C $rootFull status --porcelain --untracked-files=all 2>$null) | Out-String)
-        $worktreeId = $headSha + '+' + (Get-TextSha256 $porcelain.TrimEnd())
+    $repoProbe = Invoke-NativeProbe { & $git.Source -C $rootFull rev-parse --is-inside-work-tree }
+    if ($repoProbe.Code -eq 0 -and $repoProbe.Text -eq 'true') {
+        $headProbe = Invoke-NativeProbe { & $git.Source -C $rootFull rev-parse HEAD }
+        $headSha = if ($headProbe.Code -eq 0 -and -not [string]::IsNullOrWhiteSpace($headProbe.Text)) {
+            $headProbe.Text
+        } else {
+            'no-commit'
+        }
+        $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
+        $worktreeId = $headSha + '+' + (Get-TextSha256 $statusProbe.Text)
     }
 }
 

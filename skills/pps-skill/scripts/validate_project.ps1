@@ -688,10 +688,19 @@ function Test-CheckpointResolvable([string]$Value) {
     if ($Value -eq 'lineage_incomplete') { return $true }
     $git = Get-Command git -ErrorAction SilentlyContinue
     if ($null -eq $git) { return $false }
-    & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
-    if ($LASTEXITCODE -ne 0) { return $false }
-    & $git.Source -C $rootFull cat-file -e "$Value^{commit}" *> $null
-    return $LASTEXITCODE -eq 0
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5 promotes native stderr to error records; a
+        # missing object is a normal probe result, not a terminating error.
+        $ErrorActionPreference = 'SilentlyContinue'
+        $null = @(& $git.Source -C $rootFull rev-parse --is-inside-work-tree 2>$null)
+        $insideCode = $LASTEXITCODE
+        if ($insideCode -ne 0) { return $false }
+        $null = @(& $git.Source -C $rootFull cat-file -e "$Value^{commit}" 2>$null)
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
 }
 
 if ($isPps12) {

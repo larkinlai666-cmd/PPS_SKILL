@@ -108,15 +108,33 @@ if ($protocol -eq 'PPS/1.2') {
     }
     $git = Get-Command git -ErrorAction SilentlyContinue
     if ($null -ne $git) {
-        & $git.Source -C $rootFull rev-parse --is-inside-work-tree *> $null
-        if ($LASTEXITCODE -eq 0) {
-            $headSha = ((& $git.Source -C $rootFull rev-parse HEAD 2>$null) | Out-String).Trim()
-            if ([string]::IsNullOrWhiteSpace($headSha)) { $headSha = 'no-commit' }
-            $porcelain = ((& $git.Source -C $rootFull status --porcelain --untracked-files=all 2>$null) | Out-String).TrimEnd()
+        function Invoke-NativeProbe([scriptblock]$Command) {
+            $previousPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'SilentlyContinue'
+                $output = @(& $Command 2>$null)
+                $exitCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousPreference
+            }
+            return @{
+                Code = $exitCode
+                Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+            }
+        }
+        $repoProbe = Invoke-NativeProbe { & $git.Source -C $rootFull rev-parse --is-inside-work-tree }
+        if ($repoProbe.Code -eq 0 -and $repoProbe.Text -eq 'true') {
+            $headProbe = Invoke-NativeProbe { & $git.Source -C $rootFull rev-parse HEAD }
+            $headSha = if ($headProbe.Code -eq 0 -and -not [string]::IsNullOrWhiteSpace($headProbe.Text)) {
+                $headProbe.Text
+            } else {
+                'no-commit'
+            }
+            $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
             $shaObj = [System.Security.Cryptography.SHA256]::Create()
             try {
                 $porcelainSha = ([System.BitConverter]::ToString(
-                    $shaObj.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($porcelain))
+                    $shaObj.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($statusProbe.Text))
                 ) -replace '-', '').ToLowerInvariant()
             } finally {
                 $shaObj.Dispose()
