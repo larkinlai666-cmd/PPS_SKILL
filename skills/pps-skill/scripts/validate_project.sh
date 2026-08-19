@@ -334,15 +334,23 @@ require_section_field "$hot_state" "$state" "Hot State" Updated; updated="$resul
 device_value="$(printf '%s\n' "$hot_state" |
   sed -n 's/^-[[:space:]]*Device:[[:space:]]*//p' | head -n 1)"
 
-[[ "$protocol" == "PPS/1.0" || "$protocol" == "PPS/1.1" ]] ||
-  add_error "Protocol must be PPS/1.0 or PPS/1.1, found '$protocol'."
+[[ "$protocol" == "PPS/1.0" || "$protocol" == "PPS/1.1" || "$protocol" == "PPS/1.2" ]] ||
+  add_error "Protocol must be PPS/1.0, PPS/1.1, or PPS/1.2, found '$protocol'."
 [[ "$profile" == "standard" || "$profile" == "evidence" ]] ||
   add_error "Profile must be standard or evidence, found '$profile'."
+is_pps11_plus=0
+if [[ "$protocol" == "PPS/1.1" || "$protocol" == "PPS/1.2" ]]; then
+  is_pps11_plus=1
+fi
+is_pps12=0
+if [[ "$protocol" == "PPS/1.2" ]]; then
+  is_pps12=1
+fi
 
 mode=""
 map_rel=""
 environment_rel=""
-if [[ "$protocol" == "PPS/1.1" ]]; then
+if (( is_pps11_plus == 1 )); then
   require_section_field "$hot_state" "$state" "Hot State" Mode; mode="$result"
   require_section_field "$hot_state" "$state" "Hot State" Map; map_rel="$result"
   require_section_field "$hot_state" "$state" "Hot State" Environment; environment_rel="$result"
@@ -351,7 +359,15 @@ if [[ "$protocol" == "PPS/1.1" ]]; then
   for rel in \
     scripts/environment_doctor.ps1 scripts/environment_doctor.sh \
     scripts/resume_packet.ps1 scripts/resume_packet.sh; do
-    [[ -f "$root/$rel" ]] || add_error "PPS/1.1 is missing required file: $rel"
+    [[ -f "$root/$rel" ]] || add_error "$protocol is missing required file: $rel"
+  done
+fi
+if (( is_pps12 == 1 )); then
+  for rel in \
+    EVENTS.md \
+    scripts/verify_gate.ps1 scripts/verify_gate.sh \
+    scripts/append_event.ps1 scripts/append_event.sh; do
+    [[ -f "$root/$rel" ]] || add_error "PPS/1.2 is missing required file: $rel"
   done
 fi
 case "$status" in
@@ -372,7 +388,7 @@ valid_utc_timestamp "$updated" ||
 safe_project_path "$main_rel" Main; main_path="$result"
 safe_project_path "$capsule_rel" Capsule; capsule_path="$result"
 safe_project_path "$coverage_rel" Coverage; coverage_path="$result"
-if [[ "$protocol" == "PPS/1.1" && "$mode" != "document" ]]; then
+if (( is_pps11_plus == 1 )) && [[ "$mode" != "document" ]]; then
   [[ -n "$main_path" && -e "$main_path" ]] || add_error "Main path does not exist: $main_rel"
 else
   [[ -n "$main_path" && -f "$main_path" ]] || add_error "Main file does not exist: $main_rel"
@@ -382,8 +398,13 @@ fi
 
 [[ "$capsule_rel" == "CONTEXT.md" ]] || add_error "$protocol requires Capsule: CONTEXT.md."
 if [[ "$profile" == "standard" ]]; then
-  [[ "$coverage_rel" == "CONTEXT.md" ]] ||
-    add_error "The standard profile requires Coverage: CONTEXT.md."
+  if (( is_pps12 == 1 )); then
+    [[ "$coverage_rel" == "CONTEXT.md" || "$coverage_rel" == "docs/coverage.md" ]] ||
+      add_error "The PPS/1.2 standard profile requires Coverage: CONTEXT.md or docs/coverage.md."
+  else
+    [[ "$coverage_rel" == "CONTEXT.md" ]] ||
+      add_error "The standard profile requires Coverage: CONTEXT.md."
+  fi
 fi
 if [[ "$profile" == "evidence" ]]; then
   [[ "$coverage_rel" == "docs/CURRENT_REVIEW_EVIDENCE.md" ]] ||
@@ -414,7 +435,9 @@ require_section_field "$workset" "$context" "Workset Manifest" Sources; sources_
 assets_field_count="$(printf '%s\n' "$workset" | grep -Ec '^-[[:space:]]*Assets:[[:space:]]*' || true)"
 if [[ "$assets_field_count" == "0" ]]; then
   assets_value="none"
-  if [[ "$protocol" == "PPS/1.1" ]]; then
+  if (( is_pps12 == 1 )); then
+    add_error "PPS/1.2 requires an explicit Assets field in the Workset Manifest; use 'none' when empty."
+  elif [[ "$protocol" == "PPS/1.1" ]]; then
     add_warning "Workset Manifest has no Assets field; treating it as 'none' for PPS/1.1 compatibility."
   fi
 elif [[ "$assets_field_count" == "1" ]]; then
@@ -438,7 +461,7 @@ required_ids="$(printf '%s\n%s\n%s\n' "$methods" "$facts" "$decision_ids" | sed 
 components=""
 read_paths=""
 write_paths=""
-if [[ "$protocol" == "PPS/1.1" ]]; then
+if (( is_pps11_plus == 1 )); then
   require_section_field "$workset" "$context" "Workset Manifest" Components; components_value="$result"
   require_section_field "$workset" "$context" "Workset Manifest" Read; read_value="$result"
   require_section_field "$workset" "$context" "Workset Manifest" Write; write_value="$result"
@@ -497,7 +520,7 @@ fi
   add_error "CONTEXT package '$context_package' does not match PROJECT_STATE Package '$package'."
 [[ -n "$excluded_value" ]] || add_error "Excluded cannot be empty; use 'none' when nothing is excluded."
 
-if [[ "$protocol" == "PPS/1.1" ]]; then
+if (( is_pps11_plus == 1 )); then
   safe_project_path "$map_rel" Map; map_path="$result"
   safe_project_path "$environment_rel" Environment; environment_path="$result"
   [[ -n "$map_path" && -f "$map_path" ]] || add_error "Project map file does not exist: $map_rel"
@@ -588,6 +611,181 @@ if [[ "$protocol" == "PPS/1.1" ]]; then
     esac
     [[ "$install_policy" == "project-local-first" ]] ||
       add_error "Install policy must be project-local-first."
+  fi
+fi
+
+if (( is_pps12 == 1 )); then
+  agents_file="$root/AGENTS.md"
+  if [[ -f "$agents_file" ]]; then
+    grep -Eq '^##[[:space:]]+Red Lines[[:space:]]*$' "$agents_file" ||
+      add_error "PPS/1.2 requires a '## Red Lines' section in AGENTS.md."
+  fi
+
+  events_file="$root/EVENTS.md"
+  if [[ -f "$events_file" ]]; then
+    grep -Eq '^##[[:space:]]+Events[[:space:]]*$' "$events_file" ||
+      add_error "EVENTS.md must contain a '## Events' section."
+    while IFS=: read -r line_number event_line; do
+      [[ -n "$line_number" ]] || continue
+      printf '%s\n' "$event_line" |
+        grep -Eq '^- [0-9]{4}-[0-9]{2}-[0-9]{2}: \[PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$' ||
+        add_error "Malformed event line in EVENTS.md at line $line_number: $event_line"
+    done < <(awk '
+      $0 ~ "^##[[:space:]]+Events[[:space:]]*$" { inside=1; next }
+      inside && /^##[[:space:]]/ { inside=0 }
+      inside && /^- / { printf "%d:%s\n", NR, $0 }
+    ' "$events_file")
+    events_lines="$(wc -l < "$events_file" | tr -d ' ')"
+    (( events_lines <= 200 )) ||
+      add_warning "EVENTS.md has $events_lines lines; archive older months to docs/events-archive/."
+  fi
+
+  today_jdn="$(date -u '+%Y %m %d' | awk '{
+    a = int((14 - $2) / 12); y = $1 + 4800 - a; m = $2 + 12 * a - 3
+    print $3 + int((153 * m + 2) / 5) + 365 * y + int(y / 4) - int(y / 100) + int(y / 400) - 32045
+  }')"
+  while IFS= read -r proposal_line; do
+    [[ -n "$proposal_line" ]] || continue
+    proposal_id="$(printf '%s\n' "$proposal_line" |
+      grep -Eo 'P-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?' | head -n 1)"
+    opened_date="$(printf '%s\n' "$proposal_line" |
+      sed -n 's/.*(opened \([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)).*/\1/p')"
+    if [[ -z "$opened_date" ]]; then
+      add_warning "Proposal $proposal_id has no '(opened YYYY-MM-DD)' date; aging cannot be tracked."
+      continue
+    fi
+    opened_jdn="$(printf '%s\n' "$opened_date" | awk -F- '{
+      a = int((14 - $2) / 12); y = $1 + 4800 - a; m = $2 + 12 * a - 3
+      print $3 + int((153 * m + 2) / 5) + 365 * y + int(y / 4) - int(y / 100) + int(y / 400) - 32045
+    }')"
+    if (( today_jdn - opened_jdn > 7 )); then
+      add_warning "Proposal $proposal_id has been pending for more than 7 days; restate it in Next as kept, closed, or split."
+    fi
+  done < <(awk '
+    $0 ~ "^##[[:space:]]+Proposals[[:space:]]*$" { inside=1; next }
+    inside && /^##[[:space:]]/ { inside=0 }
+    inside && /^- P-/ { print }
+  ' "$context")
+
+  writer_value="$(printf '%s\n' "$hot_state" |
+    sed -n 's/^-[[:space:]]*Writer:[[:space:]]*//p' | head -n 1)"
+  task_index="$root/TASK_INDEX.md"
+  canonical_files="PROJECT_STATE.md DECISIONS.md CONTEXT.md EVENTS.md TASK_INDEX.md MERGES.md"
+  if [[ -f "$task_index" ]]; then
+    task_ids="$(grep -E '^###[[:space:]]+T-' "$task_index" |
+      grep -Eo 'T-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?' || true)"
+    duplicate_tasks="$(printf '%s\n' "$task_ids" | sed '/^$/d' | sort | uniq -d)"
+    while IFS= read -r id; do
+      [[ -z "$id" ]] || add_error "TASK_INDEX.md contains duplicate task blocks for $id."
+    done <<< "$duplicate_tasks"
+    active_integrators=""
+    while IFS= read -r task_id; do
+      [[ -n "$task_id" ]] || continue
+      task_block="$(awk -v wanted="### $task_id" '
+        index($0, wanted) == 1 { inside=1; next }
+        inside && /^###[[:space:]]/ { exit }
+        inside { print }
+      ' "$task_index")"
+      task_role="$(printf '%s\n' "$task_block" |
+        sed -n 's/^-[[:space:]]*Role:[[:space:]]*//p' | head -n 1)"
+      task_status="$(printf '%s\n' "$task_block" |
+        sed -n 's/^-[[:space:]]*Status:[[:space:]]*//p' | head -n 1)"
+      task_capsule="$(printf '%s\n' "$task_block" |
+        sed -n 's/^-[[:space:]]*Capsule:[[:space:]]*//p' | head -n 1)"
+      task_output_root="$(printf '%s\n' "$task_block" |
+        sed -n 's/^-[[:space:]]*Output Root:[[:space:]]*//p' | head -n 1)"
+      case "$task_role" in
+        integrator|worker|consumer) ;;
+        *) add_error "Task $task_id has invalid Role '$task_role'." ;;
+      esac
+      case "$task_status" in
+        active|handoff_ready|integrated|rejected|deferred|archived) ;;
+        *) add_error "Task $task_id has invalid Status '$task_status'." ;;
+      esac
+      if [[ "$task_role" == "integrator" && "$task_status" == "active" ]]; then
+        active_integrators="${active_integrators}${task_id}"$'\n'
+      fi
+      if [[ "$task_status" != "archived" ]]; then
+        if [[ -z "$task_capsule" ]]; then
+          add_error "Task $task_id has no Capsule field."
+        else
+          safe_project_path "$task_capsule" "Task $task_id Capsule"; task_capsule_path="$result"
+          [[ -n "$task_capsule_path" && -f "$task_capsule_path" ]] ||
+            add_error "Task $task_id capsule does not exist: $task_capsule"
+          if [[ "$task_role" != "integrator" && -n "$task_capsule_path" && -f "$task_capsule_path" ]]; then
+            task_write="$(awk '
+              $0 ~ "^##[[:space:]]+Workset Manifest[[:space:]]*$" { inside=1; next }
+              inside && /^##[[:space:]]/ { exit }
+              inside && index($0, "- Write:") == 1 {
+                sub("^- Write:[[:space:]]*", "")
+                print
+                exit
+              }
+            ' "$task_capsule_path")"
+            for canonical in $canonical_files; do
+              if printf '%s\n' "$task_write" | tr ',' '\n' |
+                  sed 's/^[[:space:]]*//;s/[[:space:]]*$//' |
+                  grep -Fxq "$canonical"; then
+                add_error "Task $task_id ($task_role) declares canonical file '$canonical' in its Write set."
+              fi
+            done
+          fi
+        fi
+        if [[ "$task_role" != "integrator" ]]; then
+          [[ -n "$task_output_root" && "$task_output_root" != "none" ]] ||
+            add_error "Task $task_id ($task_role) requires a bounded Output Root."
+        fi
+      fi
+    done <<< "$(printf '%s\n' "$task_ids" | awk '!seen[$0]++')"
+    active_integrators="$(printf '%s' "$active_integrators" | sed '/^$/d')"
+    integrator_count="$(printf '%s\n' "$active_integrators" | sed '/^$/d' | wc -l | tr -d ' ')"
+    [[ "$integrator_count" == "1" ]] ||
+      add_error "TASK_INDEX.md must have exactly one active integrator, found $integrator_count."
+    if [[ -z "$writer_value" ]]; then
+      add_error "Multitask projects require a 'Writer:' field in Hot State."
+    elif [[ "$integrator_count" == "1" && "$writer_value" != "$active_integrators" ]]; then
+      add_error "Hot State Writer '$writer_value' does not match the active integrator '$active_integrators'."
+    fi
+  elif [[ -n "$writer_value" ]]; then
+    add_error "Hot State declares Writer '$writer_value' but TASK_INDEX.md does not exist."
+  fi
+
+  merges_file="$root/MERGES.md"
+  if [[ -f "$merges_file" ]]; then
+    [[ -f "$task_index" ]] ||
+      add_error "MERGES.md exists but TASK_INDEX.md does not; merge receipts require the task registry."
+    merge_ids="$(grep -E '^###[[:space:]]+MERGE-' "$merges_file" |
+      grep -Eo 'MERGE-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?' || true)"
+    duplicate_merges="$(printf '%s\n' "$merge_ids" | sed '/^$/d' | sort | uniq -d)"
+    while IFS= read -r id; do
+      [[ -z "$id" ]] || add_error "MERGES.md contains duplicate receipt blocks for $id."
+    done <<< "$duplicate_merges"
+    while IFS= read -r merge_id; do
+      [[ -n "$merge_id" ]] || continue
+      merge_block="$(awk -v wanted="### $merge_id" '
+        index($0, wanted) == 1 { inside=1; next }
+        inside && /^###[[:space:]]/ { exit }
+        inside { print }
+      ' "$merges_file")"
+      merge_relation="$(printf '%s\n' "$merge_block" |
+        sed -n 's/^-[[:space:]]*Relation:[[:space:]]*//p' | head -n 1)"
+      merge_status="$(printf '%s\n' "$merge_block" |
+        sed -n 's/^-[[:space:]]*Status:[[:space:]]*//p' | head -n 1)"
+      merge_base="$(printf '%s\n' "$merge_block" |
+        sed -n 's/^-[[:space:]]*Base Checkpoint:[[:space:]]*//p' | head -n 1)"
+      merge_result="$(printf '%s\n' "$merge_block" |
+        sed -n 's/^-[[:space:]]*Result Checkpoint:[[:space:]]*//p' | head -n 1)"
+      case "$merge_relation" in
+        absorbs|layers_on|consumes_only|deferred|supersedes|rejected|rollback_to) ;;
+        *) add_error "Merge receipt $merge_id has invalid Relation '$merge_relation'." ;;
+      esac
+      if [[ "$merge_status" == "integrated" ]]; then
+        if [[ -z "$merge_base" || "$merge_base" == "none" ||
+          -z "$merge_result" || "$merge_result" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'integrated' without both base and result checkpoints; use lineage_incomplete explicitly when history predates the layer."
+        fi
+      fi
+    done <<< "$(printf '%s\n' "$merge_ids" | awk '!seen[$0]++')"
   fi
 fi
 
@@ -704,6 +902,17 @@ while IFS= read -r id; do
       coverage_locations="${result:-none}"
       add_error "Manifest ID $id must have exactly one row in $coverage_rel, found $coverage_count (lines $coverage_locations)."
     }
+  if (( is_pps12 == 1 )) && [[ "$coverage_count" == "1" ]]; then
+    coverage_evidence="$(grep -E "^\\|[[:space:]]*${id}[[:space:]]*\\|" "$coverage_path" |
+      head -n 1 | awk -F'|' '{
+        value = $5
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        print value
+      }')"
+    if [[ -z "$coverage_evidence" || "$coverage_evidence" == "Present" || "$coverage_evidence" == "present" ]]; then
+      add_error "Coverage row for $id needs an evidence cell naming the command, test, or inspection; bare 'Present' cannot distinguish checked from unchecked."
+    fi
+  fi
 done <<< "$required_ids"
 
 if [[ -n "$source_ids" ]]; then

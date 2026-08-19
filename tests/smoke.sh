@@ -101,7 +101,7 @@ grep -Eq '^(PASS|MISSING) required: gh$' \
   "$temp_root/core-environment-check.out"
 
 cp -R "$temp_root/standard-case" "$temp_root/legacy-pps10"
-sed -i.bak 's/^- Protocol: PPS\/1.1$/- Protocol: PPS\/1.0/' \
+sed -i.bak 's/^- Protocol: PPS\/1.2$/- Protocol: PPS\/1.0/' \
   "$temp_root/legacy-pps10/PROJECT_STATE.md"
 sed -i.bak '/^- Mode:/d;/^- Map:/d;/^- Environment:/d' \
   "$temp_root/legacy-pps10/PROJECT_STATE.md"
@@ -125,8 +125,8 @@ expect_invalid "$temp_root/missing-environment" \
 cp -R "$temp_root/standard-case" "$temp_root/missing-resume-script"
 rm "$temp_root/missing-resume-script/scripts/resume_packet.sh"
 expect_invalid "$temp_root/missing-resume-script" \
-  "PPS/1.1 is missing required file: scripts/resume_packet.sh" \
-  "Missing PPS/1.1 resume script"
+  "PPS/1.2 is missing required file: scripts/resume_packet.sh" \
+  "Missing PPS/1.2 resume script"
 
 cp -R "$temp_root/standard-case" "$temp_root/missing-component"
 sed -i.bak 's/^- Components: C-ROOT$/- Components: C-MISSING/' \
@@ -264,6 +264,7 @@ PPS_FAKE_RCLONE_COUNT=1 PPS_FAKE_RCLONE_BYTES="$asset_bytes" \
 grep -q '^WARNING: Reference asset A-REF-001 is not materialized' \
   "$temp_root/asset-full.out"
 grep -q '^PASS cloud copy: A-CORE-001' "$temp_root/asset-full.out"
+bash "$asset_case/scripts/verify_gate.sh" "$asset_case" >/dev/null
 PPS_FAKE_RCLONE_COUNT=1 PPS_FAKE_RCLONE_BYTES="$asset_bytes" \
   PATH="$fake_rclone_bin:$PATH" \
   bash "$asset_case/scripts/readiness_check.sh" "$asset_case" --verified \
@@ -580,9 +581,9 @@ grep -Eq 'found 2 \(lines [0-9]+,[0-9]+\)' \
   "$temp_root/duplicate-source-row.invalid.out"
 
 cp -R "$temp_root/standard-case" "$temp_root/misplaced-hot-field"
-sed -i.bak '/^- Protocol: PPS\/1.1$/d' \
+sed -i.bak '/^- Protocol: PPS\/1.2$/d' \
   "$temp_root/misplaced-hot-field/PROJECT_STATE.md"
-printf '\n## Misplaced\n\n- Protocol: PPS/1.1\n' \
+printf '\n## Misplaced\n\n- Protocol: PPS/1.2\n' \
   >>"$temp_root/misplaced-hot-field/PROJECT_STATE.md"
 expect_invalid "$temp_root/misplaced-hot-field" \
   "Expected exactly one 'Protocol' field in 'Hot State', found 0" \
@@ -598,7 +599,7 @@ expect_invalid "$temp_root/misplaced-workset-field" \
   "Workset field outside canonical section"
 
 cp -R "$temp_root/standard-case" "$temp_root/duplicate-hot-section"
-printf '\n## Hot State\n\n- Protocol: PPS/1.1\n' \
+printf '\n## Hot State\n\n- Protocol: PPS/1.2\n' \
   >>"$temp_root/duplicate-hot-section/PROJECT_STATE.md"
 expect_invalid "$temp_root/duplicate-hot-section" \
   "Expected exactly one 'Hot State' section, found 2" \
@@ -732,5 +733,131 @@ printf '# Archived state\n' >"$pps_with_history/legacy-state/STATE.md"
 bash "$skill/scripts/audit_legacy_project.sh" --root "$pps_with_history" \
   >"$temp_root/pps-history-report.md"
 grep -q 'Detected system: `pps`' "$temp_root/pps-history-report.md"
+
+cp -R "$temp_root/standard-case" "$temp_root/missing-events"
+rm "$temp_root/missing-events/EVENTS.md"
+expect_invalid "$temp_root/missing-events" \
+  "PPS/1.2 is missing required file: EVENTS.md" \
+  "Missing PPS/1.2 events file"
+
+cp -R "$temp_root/standard-case" "$temp_root/malformed-event"
+printf -- '- 2026-08-19: broken event without package or segments\n' \
+  >>"$temp_root/malformed-event/EVENTS.md"
+expect_invalid "$temp_root/malformed-event" \
+  "Malformed event line in EVENTS.md" \
+  "Malformed event line"
+
+cp -R "$temp_root/standard-case" "$temp_root/missing-red-lines"
+sed -i.bak 's/^## Red Lines$/## Old Section/' \
+  "$temp_root/missing-red-lines/AGENTS.md"
+expect_invalid "$temp_root/missing-red-lines" \
+  "requires a '## Red Lines' section in AGENTS.md" \
+  "Missing Red Lines section"
+
+cp -R "$temp_root/standard-case" "$temp_root/bare-present-coverage"
+sed -i.bak \
+  's/| M-001 | Stable IDs and explicit workset retrieval | `CONTEXT.md` \/ Workset Manifest | .* |/| M-001 | Stable IDs and explicit workset retrieval | `CONTEXT.md` \/ Workset Manifest | Present |/' \
+  "$temp_root/bare-present-coverage/CONTEXT.md"
+expect_invalid "$temp_root/bare-present-coverage" \
+  "needs an evidence cell naming the command, test, or inspection" \
+  "Bare Present coverage row"
+
+multitask_case="$temp_root/multitask-case"
+cp -R "$temp_root/standard-case" "$multitask_case"
+mkdir -p "$multitask_case/task-contexts"
+printf '# T-002 Capsule\n\n## Workset Manifest\n\n- Write: local-task-output/T-002/out.md\n' \
+  >"$multitask_case/task-contexts/T-002.md"
+{
+  printf '# Task Index\n\n## Task Index\n\n'
+  printf '### T-001\n- Title: Integration\n- Role: integrator\n- Status: active\n- Active Package: PKG-001\n- Capsule: CONTEXT.md\n- Output Root: none\n\n'
+  printf '### T-002\n- Title: Worker\n- Role: worker\n- Status: active\n- Active Package: PKG-001\n- Capsule: task-contexts/T-002.md\n- Output Root: local-task-output/T-002\n'
+} >"$multitask_case/TASK_INDEX.md"
+expect_invalid "$multitask_case" \
+  "Multitask projects require a 'Writer:' field in Hot State" \
+  "Multitask without Writer lease"
+sed -i.bak 's/^- Device: /- Writer: T-001\n- Device: /' \
+  "$multitask_case/PROJECT_STATE.md"
+bash "$multitask_case/scripts/validate_project.sh" "$multitask_case" --quiet
+
+cp -R "$multitask_case" "$temp_root/two-integrators"
+sed -i.bak 's/^- Role: worker$/- Role: integrator/' \
+  "$temp_root/two-integrators/TASK_INDEX.md"
+expect_invalid "$temp_root/two-integrators" \
+  "must have exactly one active integrator, found 2" \
+  "Two active integrators"
+
+cp -R "$multitask_case" "$temp_root/worker-writes-canonical"
+sed -i.bak 's|^- Write: local-task-output/T-002/out.md$|- Write: DECISIONS.md|' \
+  "$temp_root/worker-writes-canonical/task-contexts/T-002.md"
+expect_invalid "$temp_root/worker-writes-canonical" \
+  "declares canonical file 'DECISIONS.md' in its Write set" \
+  "Worker claiming canonical write"
+
+cp -R "$multitask_case" "$temp_root/unchecked-merge"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: absorbs\n- Base Checkpoint: none\n- Result Checkpoint: none\n- Status: integrated\n'
+} >"$temp_root/unchecked-merge/MERGES.md"
+expect_invalid "$temp_root/unchecked-merge" \
+  "without both base and result checkpoints" \
+  "Integrated merge without checkpoints"
+
+stamp_case="$temp_root/stamp-case"
+cp -R "$temp_root/standard-case" "$stamp_case"
+set +e
+bash "$stamp_case/scripts/readiness_check.sh" "$stamp_case" --verified \
+  >"$temp_root/stamp-missing.out" 2>&1
+stamp_missing_code=$?
+set -e
+[[ "$stamp_missing_code" == "4" ]]
+grep -q 'VERIFY EVIDENCE MISSING' "$temp_root/stamp-missing.out"
+bash "$stamp_case/scripts/verify_gate.sh" "$stamp_case" >/dev/null
+bash "$stamp_case/scripts/readiness_check.sh" "$stamp_case" --verified \
+  >"$temp_root/stamp-present.out"
+grep -q '^PPS readiness: OK$' "$temp_root/stamp-present.out"
+sed -i.bak 's/^package: PKG-001$/package: PKG-999/' "$stamp_case/.pps/verify-stamp"
+set +e
+bash "$stamp_case/scripts/readiness_check.sh" "$stamp_case" --verified \
+  >"$temp_root/stamp-stale.out" 2>&1
+stamp_stale_code=$?
+set -e
+[[ "$stamp_stale_code" == "4" ]]
+grep -q 'VERIFY EVIDENCE STALE' "$temp_root/stamp-stale.out"
+
+event_append_case="$temp_root/event-append-case"
+cp -R "$temp_root/standard-case" "$event_append_case"
+bash "$event_append_case/scripts/append_event.sh" "$event_append_case" \
+  --title "Smoke event" --files "docs/MAIN.md" --verify "gate pass"
+grep -q '\[PKG-001\] Smoke event | files: docs/MAIN.md | verify: gate pass | pending: none' \
+  "$event_append_case/EVENTS.md"
+bash "$event_append_case/scripts/validate_project.sh" "$event_append_case" --quiet
+if bash "$event_append_case/scripts/append_event.sh" "$event_append_case" \
+  --title "bad | title" >"$temp_root/event-pipe.out" 2>&1; then
+  echo "Event appender accepted a title containing the separator." >&2
+  exit 1
+fi
+grep -q "must not contain the '|' separator" "$temp_root/event-pipe.out"
+
+boundary_case="$temp_root/boundary-case"
+bash "$skill/scripts/init_project.sh" boundary-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+printf 'rogue content\n' >"$boundary_case/rogue.txt"
+if bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
+  >"$temp_root/boundary-fail.out" 2>&1; then
+  echo "Boundary check accepted an unclaimed write." >&2
+  exit 1
+fi
+grep -q 'unclaimed_write: rogue.txt' "$temp_root/boundary-fail.out"
+bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
+  --allow-preexisting >"$temp_root/boundary-preexisting.out"
+grep -q 'preexisting (unclassified): rogue.txt' \
+  "$temp_root/boundary-preexisting.out"
+rm "$boundary_case/rogue.txt"
+printf 'update\n' >>"$boundary_case/docs/MAIN.md"
+bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
+  >"$temp_root/boundary-claimed.out"
+grep -q 'claimed: docs/MAIN.md' "$temp_root/boundary-claimed.out"
+grep -q '^PPS boundary check: OK$' "$temp_root/boundary-claimed.out"
 
 echo "PPS Bash smoke tests: OK"

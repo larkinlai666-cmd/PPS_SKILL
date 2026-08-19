@@ -31,6 +31,7 @@ $required = @(
     'assets/templates/CONTEXT.md',
     'assets/templates/CURRENT_REVIEW_EVIDENCE.md',
     'assets/templates/DECISIONS.md',
+    'assets/templates/EVENTS.md',
     'assets/templates/MAIN.md',
     'assets/templates/ENVIRONMENT.md',
     'assets/templates/PROJECT_MAP.md',
@@ -44,6 +45,7 @@ $required = @(
     'references/environment-bootstrap.md',
     'references/git-sync.md',
     'references/migration.md',
+    'references/multitask.md',
     'references/protocol.md',
     'references/project-modes.md',
     'references/retrieval-and-gates.md',
@@ -66,7 +68,13 @@ $required = @(
     'scripts/validate_project.ps1',
     'scripts/validate_project.sh',
     'scripts/validate_skill.ps1',
-    'scripts/validate_skill.sh'
+    'scripts/validate_skill.sh',
+    'scripts/verify_gate.ps1',
+    'scripts/verify_gate.sh',
+    'scripts/append_event.ps1',
+    'scripts/append_event.sh',
+    'scripts/boundary_check.ps1',
+    'scripts/boundary_check.sh'
 )
 
 foreach ($relative in $required) {

@@ -221,7 +221,7 @@ try {
     Copy-Item -LiteralPath $standard -Destination $legacyPps10 -Recurse
     $legacyStatePath = Join-Path $legacyPps10 'PROJECT_STATE.md'
     $text = [System.IO.File]::ReadAllText($legacyStatePath, [System.Text.Encoding]::UTF8)
-    $text = $text.Replace('- Protocol: PPS/1.1', '- Protocol: PPS/1.0')
+    $text = $text.Replace('- Protocol: PPS/1.2', '- Protocol: PPS/1.0')
     $text = [regex]::Replace($text, '(?m)^- (Mode|Map|Environment):.*\r?\n', '')
     [System.IO.File]::WriteAllText($legacyStatePath, $text, $utf8NoBom)
     $legacyContextPath = Join-Path $legacyPps10 'CONTEXT.md'
@@ -251,8 +251,8 @@ try {
     Copy-Item -LiteralPath $standard -Destination $missingResume -Recurse
     Remove-Item -LiteralPath (Join-Path $missingResume 'scripts/resume_packet.ps1')
     Assert-InvalidProject $missingResume `
-        'PPS/1.1 is missing required file: scripts/resume_packet.ps1' `
-        'Missing PPS/1.1 resume script'
+        'PPS/1.2 is missing required file: scripts/resume_packet.ps1' `
+        'Missing PPS/1.2 resume script'
 
     $missingComponent = Join-Path $tempRoot 'missing-component'
     Copy-Item -LiteralPath $standard -Destination $missingComponent -Recurse
@@ -469,6 +469,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         $assetFullResult.Text -notmatch 'Reference asset A-REF-001 is not materialized' -or
         $assetFullResult.Text -notmatch 'PASS cloud copy: A-CORE-001') {
         throw 'PowerShell full asset check mishandled a marker-only reference.'
+    }
+    $gateResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $assetCase 'scripts/verify_gate.ps1') `
+            -Root $assetCase 2>&1
+    }
+    if ($gateResult.Code -ne 0) {
+        throw "PowerShell verify gate failed on a valid project: $($gateResult.Text)"
     }
     $readinessResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
@@ -966,8 +974,8 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     Copy-Item -LiteralPath $standard -Destination $misplacedHotField -Recurse
     $casePath = Join-Path $misplacedHotField "PROJECT_STATE.md"
     $text = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
-    $text = [regex]::Replace($text, '(?m)^- Protocol: PPS/1\.1\r?\n', '')
-    $text += "`n## Misplaced`n`n- Protocol: PPS/1.1`n"
+    $text = [regex]::Replace($text, '(?m)^- Protocol: PPS/1\.2\r?\n', '')
+    $text += "`n## Misplaced`n`n- Protocol: PPS/1.2`n"
     [System.IO.File]::WriteAllText($casePath, $text, $utf8NoBom)
     Assert-InvalidProject $misplacedHotField `
         "Expected exactly one 'Protocol' field in 'Hot State', found 0" `
@@ -988,7 +996,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     Copy-Item -LiteralPath $standard -Destination $duplicateHotSection -Recurse
     [System.IO.File]::AppendAllText(
         (Join-Path $duplicateHotSection "PROJECT_STATE.md"),
-        "`n## Hot State`n`n- Protocol: PPS/1.1`n",
+        "`n## Hot State`n`n- Protocol: PPS/1.2`n",
         $utf8NoBom
     )
     Assert-InvalidProject $duplicateHotSection `
@@ -1215,6 +1223,229 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     if ($ppsHistoryResult.Code -ne 0 -or
         $ppsHistoryResult.Text -notmatch 'Detected system: `pps`') {
         throw "A valid PPS project with retained planning history was misclassified."
+    }
+
+    $missingEvents = Join-Path $tempRoot "missing-events"
+    Copy-Item -LiteralPath $standard -Destination $missingEvents -Recurse
+    Remove-Item -LiteralPath (Join-Path $missingEvents "EVENTS.md")
+    Assert-InvalidProject $missingEvents `
+        "PPS/1.2 is missing required file: EVENTS.md" `
+        "Missing PPS/1.2 events file"
+
+    $malformedEvent = Join-Path $tempRoot "malformed-event"
+    Copy-Item -LiteralPath $standard -Destination $malformedEvent -Recurse
+    [System.IO.File]::AppendAllText(
+        (Join-Path $malformedEvent "EVENTS.md"),
+        "- 2026-08-19: broken event without package or segments`n",
+        $utf8NoBom
+    )
+    Assert-InvalidProject $malformedEvent `
+        "Malformed event line in EVENTS.md" `
+        "Malformed event line"
+
+    $missingRedLines = Join-Path $tempRoot "missing-red-lines"
+    Copy-Item -LiteralPath $standard -Destination $missingRedLines -Recurse
+    $casePath = Join-Path $missingRedLines "AGENTS.md"
+    $text = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text = $text.Replace('## Red Lines', '## Old Section')
+    [System.IO.File]::WriteAllText($casePath, $text, $utf8NoBom)
+    Assert-InvalidProject $missingRedLines `
+        "requires a '## Red Lines' section in AGENTS.md" `
+        "Missing Red Lines section"
+
+    $barePresent = Join-Path $tempRoot "bare-present-coverage"
+    Copy-Item -LiteralPath $standard -Destination $barePresent -Recurse
+    $casePath = Join-Path $barePresent "CONTEXT.md"
+    $text = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text = [regex]::Replace(
+        $text,
+        '(?m)^\| M-001 \| (.*) \| (.*) \| .* \|$',
+        '| M-001 | $1 | $2 | Present |'
+    )
+    [System.IO.File]::WriteAllText($casePath, $text, $utf8NoBom)
+    Assert-InvalidProject $barePresent `
+        "needs an evidence cell naming the command, test, or inspection" `
+        "Bare Present coverage row"
+
+    $multitaskCase = Join-Path $tempRoot "multitask-case"
+    Copy-Item -LiteralPath $standard -Destination $multitaskCase -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $multitaskCase "task-contexts") -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $multitaskCase "task-contexts/T-002.md"),
+        "# T-002 Capsule`n`n## Workset Manifest`n`n- Write: local-task-output/T-002/out.md`n",
+        $utf8NoBom
+    )
+    $taskIndexText = @(
+        '# Task Index', '', '## Task Index', '',
+        '### T-001', '- Title: Integration', '- Role: integrator', '- Status: active',
+        '- Active Package: PKG-001', '- Capsule: CONTEXT.md', '- Output Root: none', '',
+        '### T-002', '- Title: Worker', '- Role: worker', '- Status: active',
+        '- Active Package: PKG-001', '- Capsule: task-contexts/T-002.md',
+        '- Output Root: local-task-output/T-002'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $multitaskCase "TASK_INDEX.md"),
+        $taskIndexText + "`n",
+        $utf8NoBom
+    )
+    Assert-InvalidProject $multitaskCase `
+        "Multitask projects require a 'Writer:' field in Hot State" `
+        "Multitask without Writer lease"
+    $casePath = Join-Path $multitaskCase "PROJECT_STATE.md"
+    $text = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text = $text.Replace('- Device: ', "- Writer: T-001`n- Device: ")
+    [System.IO.File]::WriteAllText($casePath, $text, $utf8NoBom)
+    $multitaskValid = Run-Validator $multitaskCase
+    if ($multitaskValid.Code -ne 0) {
+        throw "Valid multitask project was rejected: $($multitaskValid.Text)"
+    }
+
+    $twoIntegrators = Join-Path $tempRoot "two-integrators"
+    Copy-Item -LiteralPath $multitaskCase -Destination $twoIntegrators -Recurse
+    $casePath = Join-Path $twoIntegrators "TASK_INDEX.md"
+    $text = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text = $text.Replace('- Role: worker', '- Role: integrator')
+    [System.IO.File]::WriteAllText($casePath, $text, $utf8NoBom)
+    Assert-InvalidProject $twoIntegrators `
+        "must have exactly one active integrator, found 2" `
+        "Two active integrators"
+
+    $workerCanonical = Join-Path $tempRoot "worker-writes-canonical"
+    Copy-Item -LiteralPath $multitaskCase -Destination $workerCanonical -Recurse
+    $casePath = Join-Path $workerCanonical "task-contexts/T-002.md"
+    $text = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text = $text.Replace('- Write: local-task-output/T-002/out.md', '- Write: DECISIONS.md')
+    [System.IO.File]::WriteAllText($casePath, $text, $utf8NoBom)
+    Assert-InvalidProject $workerCanonical `
+        "declares canonical file 'DECISIONS.md' in its Write set" `
+        "Worker claiming canonical write"
+
+    $uncheckedMerge = Join-Path $tempRoot "unchecked-merge"
+    Copy-Item -LiteralPath $multitaskCase -Destination $uncheckedMerge -Recurse
+    $mergesText = @(
+        '# Merges', '', '## Merge Receipts', '',
+        '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: absorbs', '- Base Checkpoint: none',
+        '- Result Checkpoint: none', '- Status: integrated'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $uncheckedMerge "MERGES.md"),
+        $mergesText + "`n",
+        $utf8NoBom
+    )
+    Assert-InvalidProject $uncheckedMerge `
+        "without both base and result checkpoints" `
+        "Integrated merge without checkpoints"
+
+    $stampCase = Join-Path $tempRoot "stamp-case"
+    Copy-Item -LiteralPath $standard -Destination $stampCase -Recurse
+    $stampMissingResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $stampCase 'scripts/readiness_check.ps1') `
+            -Root $stampCase -Verified 2>&1
+    }
+    if ($stampMissingResult.Code -ne 4 -or
+        $stampMissingResult.Text -notmatch 'VERIFY EVIDENCE MISSING') {
+        throw 'Readiness accepted attestation without a verify stamp.'
+    }
+    $gateStampResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $stampCase 'scripts/verify_gate.ps1') `
+            -Root $stampCase 2>&1
+    }
+    if ($gateStampResult.Code -ne 0) {
+        throw "Verify gate failed on a valid project: $($gateStampResult.Text)"
+    }
+    $stampOkResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $stampCase 'scripts/readiness_check.ps1') `
+            -Root $stampCase -Verified 2>&1
+    }
+    if ($stampOkResult.Code -ne 0 -or
+        $stampOkResult.Text -notmatch '(?m)^PPS readiness: OK$') {
+        throw 'Readiness rejected a stamped, attested package.'
+    }
+    $stampPath = Join-Path $stampCase '.pps/verify-stamp'
+    $stampText = [System.IO.File]::ReadAllText($stampPath, [System.Text.Encoding]::UTF8)
+    $stampText = $stampText.Replace('package: PKG-001', 'package: PKG-999')
+    [System.IO.File]::WriteAllText($stampPath, $stampText, $utf8NoBom)
+    $stampStaleResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $stampCase 'scripts/readiness_check.ps1') `
+            -Root $stampCase -Verified 2>&1
+    }
+    if ($stampStaleResult.Code -ne 4 -or
+        $stampStaleResult.Text -notmatch 'VERIFY EVIDENCE STALE') {
+        throw 'Readiness accepted a stale verify stamp for another package.'
+    }
+
+    $eventAppendCase = Join-Path $tempRoot "event-append-case"
+    Copy-Item -LiteralPath $standard -Destination $eventAppendCase -Recurse
+    $appendResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $eventAppendCase 'scripts/append_event.ps1') `
+            -Root $eventAppendCase -Title 'Smoke event' -Files 'docs/MAIN.md' -Verify 'gate pass' 2>&1
+    }
+    if ($appendResult.Code -ne 0) {
+        throw "Event appender failed: $($appendResult.Text)"
+    }
+    $eventsText = [System.IO.File]::ReadAllText(
+        (Join-Path $eventAppendCase 'EVENTS.md'), [System.Text.Encoding]::UTF8)
+    if ($eventsText -notmatch '\[PKG-001\] Smoke event \| files: docs/MAIN\.md \| verify: gate pass \| pending: none') {
+        throw 'Appended event line has the wrong format.'
+    }
+    $eventAppendValid = Run-Validator $eventAppendCase
+    if ($eventAppendValid.Code -ne 0) {
+        throw "Project with appended event failed validation: $($eventAppendValid.Text)"
+    }
+    $pipeResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $eventAppendCase 'scripts/append_event.ps1') `
+            -Root $eventAppendCase -Title 'bad | title' 2>&1
+    }
+    if ($pipeResult.Code -eq 0 -or
+        $pipeResult.Text -notmatch "must not contain the '\|' separator") {
+        throw 'Event appender accepted a title containing the separator.'
+    }
+
+    $boundaryCase = Join-Path $tempRoot "boundary-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName boundary-case -Profile standard -ParentDir $tempRoot `
+        -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Boundary-case initialization failed." }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $boundaryCase "rogue.txt"), "rogue content`n", $utf8NoBom)
+    $boundaryFail = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $boundaryCase 'scripts/boundary_check.ps1') `
+            -Root $boundaryCase 2>&1
+    }
+    if ($boundaryFail.Code -eq 0 -or
+        $boundaryFail.Text -notmatch 'unclaimed_write: rogue.txt') {
+        throw 'Boundary check accepted an unclaimed write.'
+    }
+    $boundaryPre = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $boundaryCase 'scripts/boundary_check.ps1') `
+            -Root $boundaryCase -AllowPreexisting 2>&1
+    }
+    if ($boundaryPre.Code -ne 0 -or
+        $boundaryPre.Text -notmatch 'preexisting \(unclassified\): rogue.txt') {
+        throw 'Boundary check did not classify a preexisting change.'
+    }
+    Remove-Item -LiteralPath (Join-Path $boundaryCase "rogue.txt")
+    [System.IO.File]::AppendAllText(
+        (Join-Path $boundaryCase "docs/MAIN.md"), "update`n", $utf8NoBom)
+    $boundaryOk = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $boundaryCase 'scripts/boundary_check.ps1') `
+            -Root $boundaryCase 2>&1
+    }
+    if ($boundaryOk.Code -ne 0 -or
+        $boundaryOk.Text -notmatch 'claimed: docs/MAIN.md' -or
+        $boundaryOk.Text -notmatch '(?m)^PPS boundary check: OK$') {
+        throw 'Boundary check rejected a claimed write.'
     }
 
     Write-Host "PPS PowerShell smoke tests: OK"

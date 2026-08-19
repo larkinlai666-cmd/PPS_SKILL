@@ -33,11 +33,25 @@
 - [x] Extend environment declarations to document/media/cloud tooling
 - [x] Harden legacy audit against false IDs and migration contamination
 
-## 0.4 — Interoperability
+## 0.4 — Field distillation (PPS/1.2)
+
+- [x] Relay handover protection: session-start `git status`, dirty-file overwrite prohibition, explicit handover
+- [x] Verify gate with device-local execution evidence and readiness stamp checks
+- [x] Behavioral end-to-end assertions and liveness probes as legitimate Verify members
+- [x] `EVENTS.md` chronicle with fixed grammar, append scripts, and archive discipline
+- [x] Coverage evidence cells replacing bare `Present`
+- [x] Proposal aging with seven-day restatement discipline
+- [x] Red-lines protocol position in `AGENTS.md`
+- [x] Optional single-owner multitask layer: task registry, writer lease, typed merge receipts, checkpointed integration
+- [x] Write-boundary enforcement against actual Git status (unclaimed-write gate)
+- [x] Negative tests for every new gate on both platforms
+- [x] PPS/1.0 and PPS/1.1 validation compatibility preserved
+
+## 0.5 — Interoperability
 
 - [ ] Define a stable export contract for software execution systems
 - [ ] Add machine-readable validation output
-- [ ] Add an explicit in-project PPS/1.0-to-1.1 upgrade command after more field experience
+- [ ] Add an explicit in-project PPS/1.1-to-1.2 upgrade command after more field experience
 - [ ] Test installation and use across additional AI agent environments
 - [ ] Add optional bounded symbol anchors without creating an index service
 

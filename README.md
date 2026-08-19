@@ -4,7 +4,7 @@
 
 [![Validate](https://github.com/larkinlai666-cmd/PPS_SKILL/actions/workflows/validate.yml/badge.svg)](https://github.com/larkinlai666-cmd/PPS_SKILL/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](CHANGELOG.md)
 
 PPS 面向一个人使用不同设备或 AI Agent 串行推进的长期项目。它既能管理方案、报告和研究，也能管理轻量网页、小游戏、脚本、工具、原型及文档与代码并重的项目。
 
@@ -26,24 +26,30 @@ English summary: PPS is a Markdown-and-Git protocol for long-lived personal docu
 | 当前内容入口 | `PROJECT_STATE.md` 的 `Main` |
 | 工作流位置 | `PROJECT_STATE.md` |
 | 生效权威 | `DECISIONS.md` 的 active block |
+| 事件编年 | `EVENTS.md`（固定格式，追加脚本，月度归档） |
 | 架构导航 | `PROJECT_MAP.md` 的稳定 `C-*` 组件 |
 | 当前工作集 | `CONTEXT.md` 的 ID、组件、Read/Write/Verify |
+| 任务登记（可选） | `TASK_INDEX.md` 的 `T-*`、writer lease 与 `MERGES.md` 类型化合并回执 |
 | 资产身份 | 可选 `ASSETS.md` 的 `A-*` 优先级、同步后端、大小与哈希 |
 | 设备物化 | Git/LFS/云端取得的本地字节；与 Git 同步状态分开 |
+| 验证证据 | 设备本地 `.pps/verify-stamp`（verify gate 写入，readiness 校验） |
 | 环境需求 | `ENVIRONMENT.md` |
 | 外部证据 | `SOURCE_INDEX.md` 与原始资料（evidence profile） |
-| 传播证明 | 当前 coverage artifact |
+| 传播证明 | 当前 coverage artifact（证据列必填） |
 | 可恢复历史 | Git |
 
 权威 ID 全项目唯一：
 
 - `M-*`：方法与治理约束；
 - `F-*`：用户或权威来源提供的事实；
-- `P-*`：Agent 提案，不自动生效；
+- `P-*`：Agent 提案，带 opened 日期，挂起超 7 天必须重述处置；
 - `H-*`：可逆局部假设，不进入权威索引；
 - `D-*`：用户明确批准的决定；
-- `C-*`：稳定组件边界，不等同于逐文件清单。
-- `A-*`：稳定资产身份；区分核心、当前支撑与非阻断参考素材。
+- `C-*`：稳定组件边界，不等同于逐文件清单；
+- `A-*`：稳定资产身份；区分核心、当前支撑与非阻断参考素材；
+- `T-*`（可选多任务层）：稳定任务身份；唯一 active integrator 持有 Canonical 写权。
+
+PPS/1.2 来自两个真实项目战役的蒸馏：多 Agent 接力项目贡献了接力保护（开工 `git status`、禁覆写脏文件、显式交接）、verify gate 执行证据、事件编年、覆盖证据列与红线协议位；单所有者多任务项目贡献了任务登记、writer lease、类型化合并回执与越界写入门禁。PPS/1.0 与 1.1 项目继续原样通过验证。
 
 当前包中的每个 `M/F/D` 必须处于 active 状态、存在唯一规范记录并具有覆盖行。每个 `C-*` 必须解析到唯一组件行。Read/Write 合计目标不超过 12 个路径，硬上限为 30；仓库根 `.` 和 glob 不是合法工作集路径。
 

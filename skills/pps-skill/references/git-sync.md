@@ -1,12 +1,13 @@
 # Safe Git synchronization
 
-## Before work
+## Before work — the relay rule
 
-1. Inspect branch, remotes, and worktree status.
-2. If synchronization is requested, run status with `--fetch`, then fast-forward or rebase according to the repository's established policy.
-3. Never overwrite uncommitted user work.
-4. Run the environment doctor in check mode and then the resume-packet script after updating the working tree.
-5. Treat Git state and asset materialization as separate. A clean/pushed repository is not a complete handoff while required `core` or current `supporting` assets are missing or mismatched.
+1. Inspect branch, remotes, and worktree status with `git status` before anything else.
+2. A dirty worktree is the previous session's unfinished message. Read the diff and understand it before any edit; **never wholesale-overwrite a file that has uncommitted changes**. Git protects committed history only; nothing else protects the handover moment between two sessions.
+3. If synchronization is requested, run status with `--fetch`, then fast-forward or rebase according to the repository's established policy.
+4. Never overwrite uncommitted user work.
+5. Run the environment doctor in check mode and then the resume-packet script after updating the working tree.
+6. Treat Git state and asset materialization as separate. A clean/pushed repository is not a complete handoff while required `core` or current `supporting` assets are missing or mismatched.
 
 The initializer accepts an optional repository-local Git name and email. Prefer that option when global identity is unset and the user does not want a machine-wide configuration change.
 
@@ -16,6 +17,10 @@ The initializer accepts an optional repository-local Git name and email. Prefer 
 - Do not let parallel agents commit competing edits to state files.
 - Prefer small package-close checkpoints over narrative snapshot commits.
 - Do not commit secrets, local caches, temporary exports, or unrelated user files.
+
+## At session end — the relay rule again
+
+Either commit the session's work, or record an explicit handover in hot-state `Next` ("worktree holds my uncommitted X: paths, intent"). Leaving silent uncommitted work is how relay projects lose hardening: the next session cannot distinguish your unfinished improvement from noise.
 
 ## On “save”
 
@@ -47,10 +52,12 @@ When adding a remote manually, keep its protocol consistent with the authenticat
 
 ## Human-language commands
 
-- “同步并继续”: inspect dirty state and upstream, fetch/pull safely, check the environment, validate, then report both bounded state recovery and asset materialization.
-- “保存并同步”: update the complete canonical write set, validate, verify required assets and declared checks, inspect the diff, commit, fetch/reconcile, and push. Report Git sync and material sync separately.
-- “这个定了”: record explicit approval as a `D-*` decision and propagate it before commit.
-- “冷启动接入项目”: perform the new-device sequence above.
+These are intent → action mappings, not magic keywords. Route any natural-language phrasing that carries the same intent to the same action; the canonical phrases below are anchors, not requirements.
+
+- Intent "sync then continue" (“同步并继续”): inspect dirty state and upstream, fetch/pull safely, check the environment, validate, then report both bounded state recovery and asset materialization.
+- Intent "save and sync" (“保存并同步”): update the complete canonical write set, validate, verify required assets and declared checks, inspect the diff, commit, fetch/reconcile, and push. Report Git sync and material sync separately.
+- Intent "this is decided" (“这个定了”): record explicit approval as a `D-*` decision and propagate it before commit.
+- Intent "cold-start onto the project" (“冷启动接入项目”): perform the new-device sequence above.
 
 ## Conflict handling
 

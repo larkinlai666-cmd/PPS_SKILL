@@ -32,3 +32,16 @@ PPS must be a capability superset of the legacy `plan-project-sync` workflow unl
 PPS intentionally replaces free-form decision memory with globally stable authority records, an explicit current workset, strict coverage gates, and project-local validation. PPS/1.1 adds modes, component navigation, bounded paths, recovery packets, and environment manifests without changing the authority or single-writer model.
 
 PPS intentionally does not preserve placeholder Git identities; when identity is missing, initialization leaves files staged or accepts an explicit repository-local identity. This is a safety upgrade, not a missing capability, because it avoids silently falsifying commit authorship.
+
+## PPS/1.2 upgrade compatibility
+
+PPS/1.2 (skill 0.4.0) is an additive distillation from two field campaigns. Compatibility guarantees:
+
+| Guarantee | Evidence |
+|---|---|
+| PPS/1.0 projects validate unchanged | Explicit PPS/1.0 downgrade fixture in both smoke suites |
+| PPS/1.1 projects validate unchanged, including the Assets compatibility warning | `is_pps11_plus` gating keeps 1.1 rules identical; 1.2-only gates fire only on `Protocol: PPS/1.2` |
+| Audits recognize all three protocol generations | `pps-with-history` audit fixtures |
+| New requirements apply only to PPS/1.2 projects | `EVENTS.md`, verify gate, red lines, coverage evidence, and Assets-explicit rules are keyed to the protocol declaration |
+| Multitask layer is strictly opt-in | All `T-*`/`MERGES.md`/Writer gates activate only when `TASK_INDEX.md` exists |
+| No auto-execution of untrusted commands | The validator checks gate file existence and stamp contents only; execution stays with the agent and `--verified` attestation remains required |

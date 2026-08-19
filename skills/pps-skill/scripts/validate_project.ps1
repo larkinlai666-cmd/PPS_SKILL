@@ -253,16 +253,18 @@ $next = Get-SectionField $hotStateText $stateText 'Hot State' 'Next'
 $updated = Get-SectionField $hotStateText $stateText 'Hot State' 'Updated'
 $deviceMatch = [regex]::Match($hotStateText, '(?m)^-\s+Device:\s*(.*?)\s*$')
 
-if ($protocol -notin @('PPS/1.0', 'PPS/1.1')) {
-    Add-ValidationError "Protocol must be PPS/1.0 or PPS/1.1, found '$protocol'."
+if ($protocol -notin @('PPS/1.0', 'PPS/1.1', 'PPS/1.2')) {
+    Add-ValidationError "Protocol must be PPS/1.0, PPS/1.1, or PPS/1.2, found '$protocol'."
 }
 if ($profile -notin @('standard', 'evidence')) {
     Add-ValidationError "Profile must be standard or evidence, found '$profile'."
 }
+$isPps11Plus = $protocol -in @('PPS/1.1', 'PPS/1.2')
+$isPps12 = $protocol -eq 'PPS/1.2'
 $mode = $null
 $mapRelative = $null
 $environmentRelative = $null
-if ($protocol -eq 'PPS/1.1') {
+if ($isPps11Plus) {
     $mode = Get-SectionField $hotStateText $stateText 'Hot State' 'Mode'
     $mapRelative = Get-SectionField $hotStateText $stateText 'Hot State' 'Map'
     $environmentRelative = Get-SectionField $hotStateText $stateText 'Hot State' 'Environment'
@@ -276,7 +278,20 @@ if ($protocol -eq 'PPS/1.1') {
         'scripts/resume_packet.sh'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $rootFull $relative) -PathType Leaf)) {
-            Add-ValidationError "PPS/1.1 is missing required file: $relative"
+            Add-ValidationError "$protocol is missing required file: $relative"
+        }
+    }
+}
+if ($isPps12) {
+    foreach ($relative in @(
+        'EVENTS.md',
+        'scripts/verify_gate.ps1',
+        'scripts/verify_gate.sh',
+        'scripts/append_event.ps1',
+        'scripts/append_event.sh'
+    )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $rootFull $relative) -PathType Leaf)) {
+            Add-ValidationError "PPS/1.2 is missing required file: $relative"
         }
     }
 }
@@ -316,7 +331,7 @@ $mainPath = Resolve-ProjectFile $rootFull $mainRelative 'Main'
 $capsulePath = Resolve-ProjectFile $rootFull $capsuleRelative 'Capsule'
 $coveragePath = Resolve-ProjectFile $rootFull $coverageRelative 'Coverage'
 if ($null -ne $mainPath) {
-    $mainExists = if ($protocol -eq 'PPS/1.1' -and $mode -ne 'document') {
+    $mainExists = if ($isPps11Plus -and $mode -ne 'document') {
         Test-Path -LiteralPath $mainPath
     } else {
         Test-Path -LiteralPath $mainPath -PathType Leaf
@@ -335,8 +350,14 @@ foreach ($pair in @(
 if ($capsuleRelative -ne 'CONTEXT.md') {
     Add-ValidationError "$protocol requires Capsule: CONTEXT.md."
 }
-if ($profile -eq 'standard' -and $coverageRelative -ne 'CONTEXT.md') {
-    Add-ValidationError "The standard profile requires Coverage: CONTEXT.md."
+if ($profile -eq 'standard') {
+    if ($isPps12) {
+        if ($coverageRelative -notin @('CONTEXT.md', 'docs/coverage.md')) {
+            Add-ValidationError "The PPS/1.2 standard profile requires Coverage: CONTEXT.md or docs/coverage.md."
+        }
+    } elseif ($coverageRelative -ne 'CONTEXT.md') {
+        Add-ValidationError "The standard profile requires Coverage: CONTEXT.md."
+    }
 }
 if ($profile -eq 'evidence') {
     if ($coverageRelative -ne 'docs/CURRENT_REVIEW_EVIDENCE.md') {
@@ -370,7 +391,9 @@ $sourcesValue = Get-SectionField $worksetText $contextText 'Workset Manifest' 'S
 $assetsFieldMatches = [regex]::Matches($worksetText, '(?m)^-\s*Assets:\s*(.*?)\s*$')
 if ($assetsFieldMatches.Count -eq 0) {
     $assetsValue = 'none'
-    if ($protocol -eq 'PPS/1.1') {
+    if ($isPps12) {
+        Add-ValidationError "PPS/1.2 requires an explicit Assets field in the Workset Manifest; use 'none' when empty."
+    } elseif ($protocol -eq 'PPS/1.1') {
         Add-ValidationWarning "Workset Manifest has no Assets field; treating it as 'none' for PPS/1.1 compatibility."
     }
 } elseif ($assetsFieldMatches.Count -eq 1) {
@@ -395,7 +418,7 @@ $assetIds = @(Get-ManifestIds $assetsValue 'A' 'Assets')
 $components = @()
 $readPaths = @()
 $writePaths = @()
-if ($protocol -eq 'PPS/1.1') {
+if ($isPps11Plus) {
     $componentsValue = Get-SectionField $worksetText $contextText 'Workset Manifest' 'Components'
     $readValue = Get-SectionField $worksetText $contextText 'Workset Manifest' 'Read'
     $writeValue = Get-SectionField $worksetText $contextText 'Workset Manifest' 'Write'
@@ -480,7 +503,7 @@ if ([string]::IsNullOrWhiteSpace($excludedValue)) {
     Add-ValidationError "Excluded cannot be empty; use 'none' when nothing is excluded."
 }
 
-if ($protocol -eq 'PPS/1.1') {
+if ($isPps11Plus) {
     $mapPath = Resolve-ProjectFile $rootFull $mapRelative 'Map'
     $environmentPath = Resolve-ProjectFile $rootFull $environmentRelative 'Environment'
     if ($null -ne $mapPath -and -not (Test-Path -LiteralPath $mapPath -PathType Leaf)) {
@@ -584,6 +607,171 @@ if ($protocol -eq 'PPS/1.1') {
         }
         if ($installPolicy -ne 'project-local-first') {
             Add-ValidationError 'Install policy must be project-local-first.'
+        }
+    }
+}
+
+if ($isPps12) {
+    $agentsPath = Join-Path $rootFull 'AGENTS.md'
+    if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
+        $agentsText = Read-Utf8File $agentsPath
+        if ($agentsText -notmatch '(?m)^##\s+Red Lines\s*$') {
+            Add-ValidationError "PPS/1.2 requires a '## Red Lines' section in AGENTS.md."
+        }
+    }
+
+    $eventsPath = Join-Path $rootFull 'EVENTS.md'
+    if (Test-Path -LiteralPath $eventsPath -PathType Leaf) {
+        $eventsText = Read-Utf8File $eventsPath
+        if ($eventsText -notmatch '(?m)^##\s+Events\s*$') {
+            Add-ValidationError "EVENTS.md must contain a '## Events' section."
+        }
+        $eventsSection = [regex]::Match(
+            $eventsText,
+            '(?ms)^##\s+Events\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
+        if ($eventsSection.Success) {
+            $eventPattern = '^- \d{4}-\d{2}-\d{2}: \[PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$'
+            foreach ($line in @($eventsSection.Groups['body'].Value -split "`r?`n")) {
+                if ($line -notmatch '^- ') { continue }
+                if ($line -notmatch $eventPattern) {
+                    Add-ValidationError "Malformed event line in EVENTS.md: $line"
+                }
+            }
+        }
+        $eventsLineCount = @($eventsText -split "`r?`n").Count
+        if ($eventsLineCount -gt 200) {
+            Add-ValidationWarning "EVENTS.md has $eventsLineCount lines; archive older months to docs/events-archive/."
+        }
+    }
+
+    $proposalSection = [regex]::Match(
+        $contextText,
+        '(?ms)^##\s+Proposals\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
+    if ($proposalSection.Success) {
+        foreach ($line in @($proposalSection.Groups['body'].Value -split "`r?`n")) {
+            if ($line -notmatch '^- P-') { continue }
+            $proposalId = [regex]::Match($line, 'P-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?').Value
+            $openedMatch = [regex]::Match($line, '\(opened (\d{4}-\d{2}-\d{2})\)')
+            if (-not $openedMatch.Success) {
+                Add-ValidationWarning "Proposal $proposalId has no '(opened YYYY-MM-DD)' date; aging cannot be tracked."
+                continue
+            }
+            $openedDate = [datetime]::ParseExact(
+                $openedMatch.Groups[1].Value, 'yyyy-MM-dd',
+                [System.Globalization.CultureInfo]::InvariantCulture)
+            if (([DateTime]::UtcNow.Date - $openedDate.Date).TotalDays -gt 7) {
+                Add-ValidationWarning "Proposal $proposalId has been pending for more than 7 days; restate it in Next as kept, closed, or split."
+            }
+        }
+    }
+
+    $writerMatch = [regex]::Match($hotStateText, '(?m)^-\s+Writer:\s*(.*?)\s*$')
+    $writerValue = if ($writerMatch.Success) { $writerMatch.Groups[1].Value } else { '' }
+    $taskIndexPath = Join-Path $rootFull 'TASK_INDEX.md'
+    $canonicalFiles = @(
+        'PROJECT_STATE.md', 'DECISIONS.md', 'CONTEXT.md',
+        'EVENTS.md', 'TASK_INDEX.md', 'MERGES.md'
+    )
+    if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
+        $taskIndexText = Read-Utf8File $taskIndexPath
+        $taskHeadings = [regex]::Matches(
+            $taskIndexText,
+            '(?m)^###\s+(?<id>T-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?)\s*$')
+        $taskIds = @($taskHeadings | ForEach-Object { $_.Groups['id'].Value })
+        foreach ($duplicate in @($taskIds | Group-Object | Where-Object Count -gt 1)) {
+            Add-ValidationError "TASK_INDEX.md contains duplicate task blocks for $($duplicate.Name)."
+        }
+        $activeIntegrators = @()
+        foreach ($taskId in @($taskIds | Select-Object -Unique)) {
+            $blockMatch = [regex]::Match(
+                $taskIndexText,
+                '(?ms)^###\s+' + [regex]::Escape($taskId) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
+            $body = if ($blockMatch.Success) { $blockMatch.Groups['body'].Value } else { '' }
+            $taskRole = [regex]::Match($body, '(?m)^-\s+Role:\s*(.*?)\s*$').Groups[1].Value
+            $taskStatus = [regex]::Match($body, '(?m)^-\s+Status:\s*(.*?)\s*$').Groups[1].Value
+            $taskCapsule = [regex]::Match($body, '(?m)^-\s+Capsule:\s*(.*?)\s*$').Groups[1].Value
+            $taskOutputRoot = [regex]::Match($body, '(?m)^-\s+Output Root:\s*(.*?)\s*$').Groups[1].Value
+            if ($taskRole -notin @('integrator', 'worker', 'consumer')) {
+                Add-ValidationError "Task $taskId has invalid Role '$taskRole'."
+            }
+            if ($taskStatus -notin @('active', 'handoff_ready', 'integrated', 'rejected', 'deferred', 'archived')) {
+                Add-ValidationError "Task $taskId has invalid Status '$taskStatus'."
+            }
+            if ($taskRole -eq 'integrator' -and $taskStatus -eq 'active') {
+                $activeIntegrators += $taskId
+            }
+            if ($taskStatus -ne 'archived') {
+                if ([string]::IsNullOrWhiteSpace($taskCapsule)) {
+                    Add-ValidationError "Task $taskId has no Capsule field."
+                } else {
+                    $taskCapsulePath = Resolve-ProjectFile $rootFull $taskCapsule "Task $taskId Capsule"
+                    if ($null -eq $taskCapsulePath -or -not (Test-Path -LiteralPath $taskCapsulePath -PathType Leaf)) {
+                        Add-ValidationError "Task $taskId capsule does not exist: $taskCapsule"
+                    } elseif ($taskRole -ne 'integrator') {
+                        $capsuleText = Read-Utf8File $taskCapsulePath
+                        $capsuleWorkset = [regex]::Match(
+                            $capsuleText,
+                            '(?ms)^##\s+Workset Manifest\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
+                        $writeValueLine = [regex]::Match(
+                            $capsuleWorkset.Groups['body'].Value,
+                            '(?m)^-\s+Write:\s*(.*?)\s*$').Groups[1].Value
+                        $writeEntries = @($writeValueLine -split ',' | ForEach-Object { $_.Trim() })
+                        foreach ($canonical in $canonicalFiles) {
+                            if ($canonical -in $writeEntries) {
+                                Add-ValidationError "Task $taskId ($taskRole) declares canonical file '$canonical' in its Write set."
+                            }
+                        }
+                    }
+                }
+                if ($taskRole -ne 'integrator' -and
+                    ([string]::IsNullOrWhiteSpace($taskOutputRoot) -or $taskOutputRoot -eq 'none')) {
+                    Add-ValidationError "Task $taskId ($taskRole) requires a bounded Output Root."
+                }
+            }
+        }
+        if ($activeIntegrators.Count -ne 1) {
+            Add-ValidationError "TASK_INDEX.md must have exactly one active integrator, found $($activeIntegrators.Count)."
+        }
+        if ([string]::IsNullOrWhiteSpace($writerValue)) {
+            Add-ValidationError "Multitask projects require a 'Writer:' field in Hot State."
+        } elseif ($activeIntegrators.Count -eq 1 -and $writerValue -ne $activeIntegrators[0]) {
+            Add-ValidationError "Hot State Writer '$writerValue' does not match the active integrator '$($activeIntegrators[0])'."
+        }
+    } elseif (-not [string]::IsNullOrWhiteSpace($writerValue)) {
+        Add-ValidationError "Hot State declares Writer '$writerValue' but TASK_INDEX.md does not exist."
+    }
+
+    $mergesPath = Join-Path $rootFull 'MERGES.md'
+    if (Test-Path -LiteralPath $mergesPath -PathType Leaf) {
+        if (-not (Test-Path -LiteralPath $taskIndexPath -PathType Leaf)) {
+            Add-ValidationError "MERGES.md exists but TASK_INDEX.md does not; merge receipts require the task registry."
+        }
+        $mergesText = Read-Utf8File $mergesPath
+        $mergeHeadings = [regex]::Matches(
+            $mergesText,
+            '(?m)^###\s+(?<id>MERGE-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?)\s*$')
+        $mergeIds = @($mergeHeadings | ForEach-Object { $_.Groups['id'].Value })
+        foreach ($duplicate in @($mergeIds | Group-Object | Where-Object Count -gt 1)) {
+            Add-ValidationError "MERGES.md contains duplicate receipt blocks for $($duplicate.Name)."
+        }
+        foreach ($mergeId in @($mergeIds | Select-Object -Unique)) {
+            $blockMatch = [regex]::Match(
+                $mergesText,
+                '(?ms)^###\s+' + [regex]::Escape($mergeId) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
+            $body = if ($blockMatch.Success) { $blockMatch.Groups['body'].Value } else { '' }
+            $mergeRelation = [regex]::Match($body, '(?m)^-\s+Relation:\s*(.*?)\s*$').Groups[1].Value
+            $mergeStatus = [regex]::Match($body, '(?m)^-\s+Status:\s*(.*?)\s*$').Groups[1].Value
+            $mergeBase = [regex]::Match($body, '(?m)^-\s+Base Checkpoint:\s*(.*?)\s*$').Groups[1].Value
+            $mergeResult = [regex]::Match($body, '(?m)^-\s+Result Checkpoint:\s*(.*?)\s*$').Groups[1].Value
+            if ($mergeRelation -notin @('absorbs', 'layers_on', 'consumes_only', 'deferred', 'supersedes', 'rejected', 'rollback_to')) {
+                Add-ValidationError "Merge receipt $mergeId has invalid Relation '$mergeRelation'."
+            }
+            if ($mergeStatus -eq 'integrated') {
+                if ([string]::IsNullOrWhiteSpace($mergeBase) -or $mergeBase -eq 'none' -or
+                    [string]::IsNullOrWhiteSpace($mergeResult) -or $mergeResult -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'integrated' without both base and result checkpoints; use lineage_incomplete explicitly when history predates the layer."
+                }
+            }
         }
     }
 }
@@ -696,6 +884,15 @@ foreach ($id in $requiredIds) {
             '^\|\s*' + [regex]::Escape($id) + '\s*\|'
         )
         Add-ValidationError "Manifest ID $id must have exactly one row in $coverageRelative, found $coverageCount (lines $locations)."
+    } elseif ($isPps12) {
+        $rowMatch = [regex]::Match(
+            $coverageText,
+            '(?m)^\|\s*' + [regex]::Escape($id) + '\s*\|(?<rest>.*)$')
+        $cells = @($rowMatch.Groups['rest'].Value -split '\|' | ForEach-Object { $_.Trim() })
+        $evidenceCell = if ($cells.Count -ge 3) { $cells[2] } else { '' }
+        if ([string]::IsNullOrWhiteSpace($evidenceCell) -or $evidenceCell -in @('Present', 'present')) {
+            Add-ValidationError "Coverage row for $id needs an evidence cell naming the command, test, or inspection; bare 'Present' cannot distinguish checked from unchecked."
+        }
     }
 }
 

@@ -12,6 +12,20 @@
 
 These mechanisms are optimized for semantic correctness across long-running personal projects.
 
+## What PPS/1.2 learned from the field
+
+Two real campaigns—a 13-day multi-agent relay project and a single-owner multi-task content platform—pressure-tested PPS/1.1. Their incident reviews drove these distillations:
+
+- **Relay protection**: the single-writer assumption said nothing about the handover moment; an uncommitted hardening was silently overwritten between two agent sessions. Hence the rigid session-start `git status` rule and explicit handover.
+- **Executable verification**: a declarative Verify line was known but not run (BOM incident), and green unit tests coexisted with a dead system (parameter-binding incident). Hence the verify gate, behavioral assertions, and the device-local stamp that readiness checks.
+- **Event chronicling**: status events accidentally became the only complete project narrative, but had no format, no budget, and no archive. Hence `EVENTS.md` with fixed grammar and an append script.
+- **Coverage evidence**: a 17-row coverage table stayed `Present` for 13 days straight, indistinguishable from never being checked. Hence the required evidence cell.
+- **Proposal aging**: a review checklist hung for six days with zero pressure. Hence the seven-day restatement discipline.
+- **Red-line placement**: four of five incidents were engineering-layer (encoding, language traps, silent catches); the project invented its own red-line section. Hence the fixed `AGENTS.md` first-section position—position is protocol, content is project.
+- **Multitask bookkeeping**: seven coexisting tasks shared one worktree and one capsule; task state, merge lineage, and rejection history lived only in host-app chat history. Hence the optional task registry, writer lease, typed merge receipts, and write-boundary enforcement.
+
+Mechanisms that the campaigns never triggered (asset tiers, L1-L3 escalation, stages, evidence profile) were deliberately kept: absence of a scenario in two samples is not evidence against the design.
+
 ## Design influence is not integration
 
 A useful design principle may motivate a PPS invariant, but PPS redefines that invariant in its own protocol, templates, parsers, and tests. No external workflow command, online artifact, state directory, lifecycle, or release is part of PPS execution.
@@ -29,10 +43,11 @@ PPS performance and reliability gains must therefore be demonstrated by its loca
 
 - machine-readable state boundaries;
 - deterministic parsing of decision-shaped content;
-- coverage checks that prove required constraints reached outputs;
-- explicit verification before closure;
+- coverage checks that prove required constraints reached outputs, with named evidence;
+- explicit verification before closure, with device-local execution evidence;
 - failure on malformed or missing state instead of silent omission;
-- separation between planning context and execution/verification gates.
+- separation between planning context and execution/verification gates;
+- make doing the right thing cheaper than doing the wrong thing, rather than raising penalties.
 
 ## What PPS intentionally avoids
 

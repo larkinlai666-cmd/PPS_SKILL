@@ -1,122 +1,77 @@
-# PPS/1.1 adversarial review
+# PPS/1.2 adversarial review
 
-- Review date: 2026-07-23
-- Scope: `codex/pps-universal-projects`
-- Method: first-principles threat model, capability comparison, fault injection, Bash/PowerShell parity, large-source isolation
-- Verdict: **PASS within the personal serial-project boundary**
+- Review date: 2026-08-19
+- Scope: skill 0.4.0, PPS/1.2 field distillation
+- Method: first-principles threat model, strict-superset comparison against 0.3.0/PPS/1.1, fault injection on every new gate, Bash/PowerShell parity, full regression of the inherited suites
+- Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
 
-## Acceptance claims
+## Superset acceptance claims
 
-PPS/1.1 passes only if all claims below hold:
+PPS/1.2 passes only if all claims below hold. Each was verified on this review date:
 
-1. it remains a capability superset of `plan-project-sync`;
-2. the PPS/1.0 authority, active-block, coverage, and single-writer semantics remain valid;
-3. text, software, and hybrid projects use one protocol rather than parallel state systems;
-4. routine recovery cost is bounded independently of source-line count;
-5. malformed component, path, environment, asset, package, authority, and coverage state fails loudly;
-6. Bash and PowerShell expose the same control surface;
-7. environment installation is never an implicit consequence of resuming;
-8. no external workflow name, command, online artifact, state directory, or release is required at runtime;
-9. multi-owner collaboration remains explicitly out of scope.
+1. **No legacy capability removed**: every PPS/1.0 and PPS/1.1 validation rule, script, template token, and trigger phrase remains; the inherited Bash and PowerShell smoke suites pass without deleting or weakening any assertion (fixture protocol strings were updated only where they intentionally exercise the *current* template generation).
+2. **PPS/1.0 and PPS/1.1 projects validate unchanged**: explicit downgrade fixtures pass in both suites; 1.2-only gates are keyed to the `Protocol:` declaration and cannot fire on older projects.
+3. **Every new mechanism has a failing test**: missing `EVENTS.md`, malformed event lines, missing `## Red Lines`, bare-`Present` coverage, missing Writer lease, two active integrators, worker claiming canonical writes, integrated receipts without checkpoints, missing/stale verify stamps, separator-injection into events, and unclaimed writes all fail loudly with regression coverage on both platforms.
+4. **New requirements cost nothing when unused**: the multitask layer activates only when `TASK_INDEX.md` exists; a fresh single-task project passes initialization + validation + gate + readiness end-to-end on both platforms.
+5. **The no-auto-execution security stance is preserved**: the validator only checks that gate files exist and parses stamp text; it never runs `Verify`, the gate, or any manifest command. Readiness still requires explicit caller attestation *plus* the stamp.
+6. **Bash and PowerShell expose one control surface**: all new scripts (`verify_gate`, `append_event`, `boundary_check`) and all new validator gates exist and behave identically on both platforms, verified by parallel fixtures.
+7. **Distribution integrity holds**: `tools/validate_skill.py`, both installed-skill validators, template-token checks, link checks, VERSION/CHANGELOG agreement, and CI runner coverage all pass.
 
-The legacy comparison is recorded in [COMPATIBILITY.md](COMPATIBILITY.md).
+## Field-incident replay matrix
 
-## First-principles model
+Each distilled mechanism is traced to the real incident that motivated it, and to the gate that would have caught it:
 
-The minimum durable personal-project state is:
-
-- **what is true**: stable `M/F/D` authority;
-- **where the project is**: hot state and one active package;
-- **where to look**: stable `C-*` component boundaries;
-- **what may enter context now**: bounded `Read` paths;
-- **what may change now**: bounded `Write` paths;
-- **how closure is tested**: declared `Verify` plus structural gates;
-- **what the device needs**: an allowlisted environment manifest;
-- **which non-Git bytes matter**: stable `A-*` identity, priority, locator, size, and SHA-256;
-- **how history is recovered**: Git.
-
-PPS/1.1 adds the missing navigation, environment, and optional materialization layers. It does not replace the PPS/1.0 authority model. Therefore the iteration is an additive protocol upgrade, not an architecture rewrite.
-
-## Adversarial findings and repairs
-
-| Attack or regression | Risk | PPS/1.1 behavior |
+| Field incident (campaign evidence) | PPS/1.1 behavior | PPS/1.2 gate |
 |---|---|---|
-| Treat project root as `Main` | File-only validation rejects software projects | `software`/`hybrid` accept a contained file or directory; `document` still requires a file |
-| Resume a 200,001-line codebase | Agent bulk-loads source to reconstruct context | Packet reads only control metadata and selected map rows; output is capped at 240 lines and 32768 bytes |
-| Hide a sentinel in unlisted source | Recovery leaks implementation content | Bash and PowerShell tests assert the sentinel never appears |
-| Reference a missing component | Agent invents architecture from memory | Every current `C-*` must resolve to exactly one map row |
-| Duplicate a component ID | Navigation becomes ambiguous | Global duplicate component rows fail |
-| Escape with absolute, parent, foreign-separator, symlink, or reparse paths | Workset crosses project trust boundary | Cross-platform path guards fail validation |
-| Inflate current workset | “Bounded” context becomes nominal | Target is 12 paths; more than 30 fails |
-| Declare `Read: .`, a glob, or one huge line | Count/line limits are bypassed | Exact-path grammar plus per-file and packet byte budgets fail |
-| Delete map, environment, or recovery scripts | Upgraded project silently degrades | PPS/1.1 requires all controls and reports the exact omission |
-| Add an arbitrary environment tool | Manifest becomes a command-injection surface | Only twelve stable capability names are accepted |
-| Resume on a new device | Tool setup mutates the machine without review | Doctor defaults to check; apply needs two explicit flags |
-| Mark optional tools | Convenience list triggers unnecessary installs | Optional tools are reported but never auto-installed |
-| Use a machine without a supported package manager | Bootstrap downloads another installer | Doctor stops and requests manual installation |
-| Audit a valid PPS/1.1 project | Old detector misclassifies it | Audit recognizes both PPS/1.0 and PPS/1.1 |
-| Audit a text project containing `node_modules` | Generated dependency code causes a false software/hybrid migration | Common generated/dependency directories are pruned; root implementation code still informs mode |
-| Validate a legacy PPS/1.0 project | Upgrade becomes forced migration | Explicit PPS/1.0 fixtures still pass |
-| Validate staged state with component directories | Hook materializes a whole code tree | Snapshot creates directory anchors and exports only bounded control/read files |
-| Stage `ASSETS.md` while repairing the worktree checker | Hook validates the wrong asset state or misses dependencies | Snapshot exports the staged registry and both platform asset checkers |
-| Call a 4K video “reference” while the package depends on it | Missing material silently changes results | References cannot enter the active Workset; promote to supporting/core first |
-| Mark a core asset `local-marker` | Git looks complete while the project cannot continue elsewhere | Core marker-only rows fail structurally |
-| Put a signed URL or token in a cloud locator | Secret leaks through Git and soon expires | Only non-secret `rclone:REMOTE:path` syntax is accepted |
-| Declare a cloud locator without uploading the object | Handoff falsely claims material completeness | Full handoff requires one reachable remote object with the declared byte size |
-| Track a 100 MiB-class video outside LFS | Remote push fails or repository history bloats | Non-LFS binary audit warns above 50 MiB/100 MiB aggregate and fails above 95 MiB per file |
-| Pass structure and assets but never run project tests | “Validated” is confused with “works” | Readiness remains `VERIFY PENDING` until explicit verification attestation |
-| Move canonical fields or duplicate authority | Parser normalizes invalid state | Section scope, marker bijection, global IDs, and exact cardinality fail loudly |
+| Uncommitted hardening overwritten at agent handover (relay project, 3-day silent loss) | No rule covered the handover moment | Session-start `git status` + dirty-overwrite prohibition + explicit `Next` handover; relay rule is L0 step 1 |
+| Known verification regimen never executed; encoding break shipped | Verify was a declarative line with no execution proof | Verify gate writes a device-local stamp; readiness fails on missing stamp (exit 4, `VERIFY EVIDENCE MISSING`) |
+| Unit tests green while the wired system was dead; silent catch + graceful degradation hid it | "Structural coverage ≠ semantic correctness" was stated but had no operational answer | Behavioral end-to-end assertions and liveness probes are named, legitimate Verify members; stamp binds gate runs to the package |
+| Three days spent fixing code that was never loaded | No "deployed vs loaded" distinction | Protocol self-knowledge line: deployed never proves loaded; liveness probes have a protocol position |
+| Coverage table uniformly `Present` for 13 days—unfalsifiable | Bare `Present` was structurally valid | Evidence cell required; bare `Present` fails with a targeted diagnostic |
+| Review proposal hung 6 days unnoticed | Proposals had no aging | `(opened date)` + 7-day restatement warning |
+| Event log grew 397 lines with two diverging hand-written styles | Status events had no grammar, budget, or archive | `EVENTS.md` fixed grammar + append script + malformed-line failure + archive warning |
+| 4 of 5 incidents were engineering-layer traps outside the authority system | Red lines had no protocol position | `## Red Lines` first section required, L0-read, packet-surfaced |
+| Task state, merge lineage, and rejections lived only in host-app chat history (7 tasks, 1 worktree) | One capsule served as both project and task state | Opt-in task registry, per-task capsules, Writer lease, typed merge receipts |
+| Derived PPT task's scratch polluted product linting | Write sets were declarative only | `boundary_check` classifies every change or fails it as `unclaimed_write`; scratch defaults to ignored `local-task-output/` |
+| Dirty worktree made task contribution history unreconstructable | Fingerprints without checkpoints | `integrated` receipts require base + result checkpoints or explicit `lineage_incomplete` |
+| "Task complete" conflated with "merged into project" | Single `complete` status | `handoff_ready` / `integrated` / `deferred` / `consume_only` split |
 
-The new suite also exposed two audit defects: `UTF-8` could be misread as `F-8`, and Bash failed when a legacy target had no `docs/` directory. Both now have regression coverage.
+## Fault-injection results
 
-## Large-project claim
+All injections were executed, not reasoned about:
 
-The test creates a source file with 200,001 lines, validates a software-mode project, and generates both Bash and PowerShell resume packets. The packets remain below 240 lines and 32768 bytes and exclude a unique source sentinel.
-
-This supports one precise claim: **routine PPS recovery does not scale its context output with source size**.
-
-It does not prove:
-
-- that a component map is semantically complete;
-- that an Agent can understand arbitrary 200,000-line code without targeted search;
-- that project-native build or test commands are correct;
-- that structural coverage proves semantic compliance.
-
-Those remain explicit human/agent verification responsibilities.
-
-## Legacy upgrade assessment
-
-PPS/1.1 retains every mapped legacy capability: neutral Markdown/Git handoff, human-language commands, cross-device continuation, GitHub cold start, stable main branch, remote risk reporting, safe non-empty refusal, asset/prototype directories, installed-skill checks, migration audit, and cross-platform scripts.
-
-It strengthens the old workflow with:
-
-- stable typed authority instead of free-form memory;
-- exact coverage and lifecycle gates;
-- modes for documents, software, and hybrid projects;
-- stable component navigation;
-- bounded read/write sets;
-- a source-free recovery packet;
-- declarative environment diagnosis;
-- tiered, content-identified asset routing and durable cloud-copy checks;
-- explicit separation of structural validation from project verification attestation;
-- staged-index validation;
-- explicit PPS/1.0 compatibility.
-
-No useful legacy capability is removed. Placeholder Git identities remain intentionally rejected because fabricated authorship is unsafe.
+| Attack | Result |
+|---|---|
+| Delete `EVENTS.md` from a 1.2 project | fail: `PPS/1.2 is missing required file: EVENTS.md` |
+| Append a free-form event line | fail: `Malformed event line in EVENTS.md` |
+| Rename the `## Red Lines` section | fail: red-lines requirement names AGENTS.md |
+| Downgrade a coverage evidence cell to `Present` | fail with the checked-vs-unchecked diagnostic |
+| Register two active integrators | fail: exactly-one-integrator gate |
+| Point Hot State `Writer` at a non-existent registry | fail: Writer/TASK_INDEX consistency gate |
+| Worker capsule claims `DECISIONS.md` in Write | fail: canonical-write prohibition |
+| Mark a merge receipt `integrated` with `none` checkpoints | fail: checkpoint requirement |
+| Attest readiness without running the gate | exit 4 `VERIFY EVIDENCE MISSING` |
+| Attest readiness with a stamp from another package | exit 4 `VERIFY EVIDENCE STALE` |
+| Inject `|` into an event title | append refused; grammar preserved |
+| Create an undeclared file and close | `boundary_check` fails it as `unclaimed_write` |
+| Validate a PPS/1.0 and a PPS/1.1 fixture | both pass unchanged |
+| Initialize + validate + gate + readiness a fresh project, both platforms | all pass |
 
 ## Boundary review
 
-PPS is sufficiently reliable for its declared scope, not universally omniscient:
+Unchanged, deliberately:
 
-- it assumes one human owner and serial canonical writes;
-- it is not a distributed lock or team planner;
-- it does not replace build, test, preview, deployment, or code search;
-- it does not execute the declarative `Verify` line automatically;
-- routine cloud proof checks remote object count and bytes, while a fresh byte-for-byte remote download remains an explicit archival audit;
-- rclone credentials, provider availability, quota, and account recovery remain external user-owned conditions;
-- installation still depends on the operating system's existing package manager and permissions;
-- configured Windows CI is not the same as observing a future remote run.
+- one human owner; serial canonical writes; no distributed lock, team backlog, role model, or concurrent merge authority. The multitask layer is bookkeeping for serial integration, not concurrency.
+- the validator never executes untrusted manifest commands; the stamp proves a gate ran, not that its checks are semantically sufficient.
+- red-line *content* is project-specific and never enters PPS; only the position and format are protocol.
+- mechanisms not exercised by the two campaigns (asset tiers, L1-L3 escalation, stages, evidence profile) are retained without change; absence of evidence is not evidence against design.
+- `boundary_check` classifies changes against declared boundaries; it does not diff against per-task base checkpoints and does not attribute pre-existing dirt. Checkpoint-diff enforcement remains future work (0.5).
+- Windows CI observation remains pending until the next remote run; local parity was verified with PowerShell 7.6 on macOS.
 
-Changing any of those boundaries—especially multi-owner authority, parallel canonical writers, or an automatic software-delivery engine—would require a fresh architecture decision rather than an incremental PPS/1.1 patch.
+## Residual risks
 
-Within the stated boundary, PPS/1.1 is a comprehensive upgrade over both PPS/1.0 and `plan-project-sync`.
+- The verify-stamp proves the gate ran on this device for this package; a malicious actor editing the stamp by hand defeats it. The stamp is git-ignored and device-local, so this remains within the single-owner trust model.
+- Event grammar validation checks shape, not truth; a fabricated event line passes structurally. The chronicle's value still depends on the discipline the append script encourages.
+- Proposal aging uses the validator's run date; a project never validated never warns. This is acceptable because closing requires validation.
+
+Within the stated boundary, PPS/1.2 (0.4.0) is a strict capability superset of 0.3.0/PPS/1.1: every legacy behavior is preserved and verified, and every addition is opt-in by protocol declaration or file presence, fail-loud, evidence-backed, and covered by negative tests on both platforms.

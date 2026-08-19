@@ -93,7 +93,7 @@ $hasDecisions = Test-RelativeFile 'DECISIONS.md'
 $hasContext = Test-RelativeFile 'CONTEXT.md'
 $hasAgents = Test-RelativeFile 'AGENTS.md'
 $hasPlanControl = $hasState -and $hasDecisions -and $hasAgents
-$hasPpsProtocol = $protocol -in @('PPS/1.0', 'PPS/1.1') -and $hasPlanControl -and $hasContext
+$hasPpsProtocol = $protocol -in @('PPS/1.0', 'PPS/1.1', 'PPS/1.2') -and $hasPlanControl -and $hasContext
 
 $projectFiles = @(Get-ProjectFiles)
 $stateCandidateNames = @('STATE.md', 'CURRENT_STATE.md', 'WORKFLOW_STATE.md')

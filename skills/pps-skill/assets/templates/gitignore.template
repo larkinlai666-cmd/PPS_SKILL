@@ -9,6 +9,8 @@ Thumbs.db
 exports/
 tmp/
 local-assets/
+.pps/
+local-task-output/
 
 # Large binary assets stay external unless the project explicitly adopts Git LFS
 *.mp4

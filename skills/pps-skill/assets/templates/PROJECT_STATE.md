@@ -2,7 +2,7 @@
 
 ## Hot State
 
-- Protocol: PPS/1.1
+- Protocol: PPS/1.2
 - Profile: {{PROFILE}}
 - Mode: {{MODE}}
 - Stage: 0 / bootstrap

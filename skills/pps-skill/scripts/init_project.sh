@@ -196,6 +196,7 @@ render DECISIONS.md "$target/DECISIONS.md"
 render CONTEXT.md "$target/CONTEXT.md"
 render PROJECT_MAP.md "$target/PROJECT_MAP.md"
 render ENVIRONMENT.md "$target/ENVIRONMENT.md"
+render EVENTS.md "$target/EVENTS.md"
 if [[ "$mode" != "software" ]]; then
   render MAIN.md "$target/docs/MAIN.md"
 fi
@@ -214,6 +215,9 @@ for script_name in \
   resume_packet.ps1 resume_packet.sh \
   asset_check.ps1 asset_check.sh \
   readiness_check.ps1 readiness_check.sh \
+  verify_gate.ps1 verify_gate.sh \
+  append_event.ps1 append_event.sh \
+  boundary_check.ps1 boundary_check.sh \
   pre-commit pre-commit.ps1; do
   cp "$script_dir/$script_name" "$target/scripts/$script_name"
 done

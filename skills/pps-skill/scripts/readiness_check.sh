@@ -71,5 +71,42 @@ if (( verified == 0 )); then
   echo "Inspect and run the declared project verification, then rerun with --verified only after it passes."
   exit 3
 fi
+protocol="$(
+  awk '
+    /^## Hot State[[:space:]]*$/ { inside=1; next }
+    inside && /^## / { exit }
+    inside && /^-[[:space:]]*Protocol:[[:space:]]*/ {
+      sub("^-+[[:space:]]*Protocol:[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$root/PROJECT_STATE.md"
+)"
+if [[ "$protocol" == "PPS/1.2" ]]; then
+  package_id="$(
+    awk '
+      /^## Hot State[[:space:]]*$/ { inside=1; next }
+      inside && /^## / { exit }
+      inside && /^-[[:space:]]*Package:[[:space:]]*/ {
+        sub("^-+[[:space:]]*Package:[[:space:]]*", "")
+        print
+        exit
+      }
+    ' "$root/PROJECT_STATE.md"
+  )"
+  stamp_file="$root/.pps/verify-stamp"
+  if [[ ! -f "$stamp_file" ]]; then
+    echo "PPS readiness: VERIFY EVIDENCE MISSING" >&2
+    echo "No verify stamp found; run scripts/verify_gate.* on this device first." >&2
+    exit 4
+  fi
+  stamp_package="$(sed -n 's/^package:[[:space:]]*//p' "$stamp_file" | head -n 1)"
+  if [[ "$stamp_package" != "$package_id" ]]; then
+    echo "PPS readiness: VERIFY EVIDENCE STALE" >&2
+    echo "Verify stamp names '$stamp_package' but the current package is '$package_id'; rerun scripts/verify_gate.*." >&2
+    exit 4
+  fi
+  echo "Verify stamp: $stamp_package ($(sed -n 's/^verified_at:[[:space:]]*//p' "$stamp_file" | head -n 1))"
+fi
 echo "Verification attestation: caller confirmed the declared environment and project checks passed."
 echo "PPS readiness: OK"

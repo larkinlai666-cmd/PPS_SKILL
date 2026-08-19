@@ -10,7 +10,7 @@
 - Components: C-ROOT
 - Read: {{READ_SET}}
 - Write: {{WRITE_SET}}
-- Verify: Run project-local PPS validation; replace with stack-specific checks after bootstrap.
+- Verify: Run scripts/verify_gate.* (structural validation plus declared project checks); extend the gate with stack-specific checks after bootstrap.
 - Excluded: none
 - Coverage: {{COVERAGE_ARTIFACT}}
 
@@ -28,7 +28,7 @@
 
 ## Proposals
 
-- P-001: Begin with one reviewable end-to-end slice of the deliverable.
+- P-001 (opened {{DATE}}): Begin with one reviewable end-to-end slice of the deliverable.
 
 ## Working Assumptions
 
@@ -40,10 +40,10 @@
 
 ## Constraint Coverage
 
-| ID | Constraint | Artifact / section | Result |
+| ID | Constraint | Artifact / section | Evidence |
 |---|---|---|---|
-| M-001 | Stable IDs and explicit workset retrieval | `CONTEXT.md` / Workset Manifest | Present |
-| M-002 | Close only after propagation and validation | `AGENTS.md` / 写入与并发 | Present |
+| M-001 | Stable IDs and explicit workset retrieval | `CONTEXT.md` / Workset Manifest | verify_gate: structural validation checks manifest IDs |
+| M-002 | Close only after propagation and validation | `AGENTS.md` / 写入与并发 | verify_gate: close requires gate pass and verify stamp |
 
 ## Next Action
 

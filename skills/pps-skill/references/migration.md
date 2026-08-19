@@ -56,6 +56,24 @@ PPS/1.1 is an additive upgrade. Do not reinitialize the repository or renumber a
 
 The PPS/1.1 validator continues to recognize a valid PPS/1.0 project. Compatibility does not silently mutate it.
 
+## From PPS/1.1 to PPS/1.2
+
+PPS/1.2 is an additive upgrade distilled from two field campaigns. Do not reinitialize or renumber:
+
+1. create a recoverable Git checkpoint;
+2. add `EVENTS.md` with one `## Events` section; move future status events there (existing Status Events in `DECISIONS.md` stay valid as history);
+3. add a `## Red Lines` first section to `AGENTS.md`; seed it from real incident lessons or leave the placeholder;
+4. copy `scripts/verify_gate.*` and `scripts/append_event.*` from the skill; extend the gate with the project's declared checks;
+5. add an explicit `Assets:` field to the workset (use `none`);
+6. upgrade coverage rows to carry an evidence cell naming the command, test, or inspection; bare `Present` fails;
+7. date existing proposals with `(opened YYYY-MM-DD)`;
+8. optionally move the coverage table to `docs/coverage.md` and update both `Coverage:` fields together;
+9. add `.pps/` and `local-task-output/` to `.gitignore`;
+10. set `Protocol: PPS/1.2`, run the verify gate, then validate;
+11. keep the project on PPS/1.1 if the upgrade cannot pass without changing its existing authority semantics.
+
+Activate the multitask layer only when the project genuinely has coexisting tasks: create `TASK_INDEX.md` per [multitask.md](multitask.md); single-task projects should not create it.
+
 ## From another structured state system
 
 If another structured state system is authoritative:

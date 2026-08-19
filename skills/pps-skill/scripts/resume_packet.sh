@@ -41,10 +41,30 @@ trap 'rm -f "$tmp_file"' EXIT
   echo "# PPS Resume Packet"
   echo
   echo "## Hot State"
-  for field in Protocol Profile Mode Stage Main Map Environment Package Status Capsule Coverage Blockers Next Updated Device; do
+  for field in Protocol Profile Mode Stage Main Map Environment Package Status Capsule Coverage Blockers Next Updated Device Writer; do
     value="$(field_in_section "$state" "Hot State" "$field")"
     [[ -n "$value" ]] && printf -- '- %s: %s\n' "$field" "$value"
   done
+
+  if grep -Eq '^##[[:space:]]+Red Lines[[:space:]]*$' "$root/AGENTS.md" 2>/dev/null; then
+    echo
+    echo "## Red Lines"
+    awk '
+      $0 ~ "^##[[:space:]]+Red Lines[[:space:]]*$" { inside=1; next }
+      inside && /^##[[:space:]]/ { exit }
+      inside && /^- / { print }
+    ' "$root/AGENTS.md" | sed -n '1,12p'
+  fi
+
+  if [[ -f "$root/EVENTS.md" ]]; then
+    echo
+    echo "## Recent Events"
+    awk '
+      $0 ~ "^##[[:space:]]+Events[[:space:]]*$" { inside=1; next }
+      inside && /^##[[:space:]]/ { inside=0 }
+      inside && /^- / { print }
+    ' "$root/EVENTS.md" | tail -n 5
+  fi
 
   echo
   echo "## Workset"

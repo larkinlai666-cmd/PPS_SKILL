@@ -8,10 +8,10 @@
 
 ## Constraint Coverage
 
-| ID | Constraint | Artifact / section | Result |
+| ID | Constraint | Artifact / section | Evidence |
 |---|---|---|---|
-| M-001 | Stable IDs and explicit workset retrieval | `CONTEXT.md` / Workset Manifest | Present |
-| M-002 | Close only after propagation and validation | `AGENTS.md` / 写入与并发 | Present |
+| M-001 | Stable IDs and explicit workset retrieval | `CONTEXT.md` / Workset Manifest | verify_gate: structural validation checks manifest IDs |
+| M-002 | Close only after propagation and validation | `AGENTS.md` / 写入与并发 | verify_gate: close requires gate pass and verify stamp |
 
 ## Object × Lifecycle / Process Matrix
 

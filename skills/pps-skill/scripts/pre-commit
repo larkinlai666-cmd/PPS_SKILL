@@ -44,13 +44,27 @@ checkout_staged_anchor() {
 for relative in \
   README.md AGENTS.md PROJECT_STATE.md DECISIONS.md CONTEXT.md \
   PROJECT_MAP.md ENVIRONMENT.md ASSETS.md SOURCE_INDEX.md docs/CURRENT_REVIEW_EVIDENCE.md \
+  EVENTS.md TASK_INDEX.md MERGES.md docs/coverage.md \
   scripts/asset_check.ps1 scripts/asset_check.sh \
   scripts/status_check.ps1 scripts/status_check.sh \
   scripts/validate_project.ps1 scripts/validate_project.sh \
   scripts/environment_doctor.ps1 scripts/environment_doctor.sh \
-  scripts/resume_packet.ps1 scripts/resume_packet.sh; do
+  scripts/resume_packet.ps1 scripts/resume_packet.sh \
+  scripts/verify_gate.ps1 scripts/verify_gate.sh \
+  scripts/append_event.ps1 scripts/append_event.sh; do
   checkout_staged_path "$relative"
 done
+
+if [[ -f "$snapshot/TASK_INDEX.md" ]]; then
+  while IFS= read -r relative; do
+    relative="$(printf '%s' "$relative" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [[ -n "$relative" && "$relative" != "none" && "$relative" != /* &&
+      "$relative" != *\\* &&
+      ! "$relative" =~ ^[A-Za-z]:[\\/]|(^|/)\.\.(/|$) ]]; then
+      checkout_staged_anchor "$relative"
+    fi
+  done < <(sed -n 's/^-[[:space:]]*Capsule:[[:space:]]*//p' "$snapshot/TASK_INDEX.md")
+fi
 
 if [[ -f "$snapshot/PROJECT_STATE.md" ]]; then
   hot_state="$(

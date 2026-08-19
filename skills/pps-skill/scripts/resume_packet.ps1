@@ -62,9 +62,41 @@ $packet = [System.Collections.Generic.List[string]]::new()
 $packet.Add('# PPS Resume Packet')
 $packet.Add('')
 $packet.Add('## Hot State')
-foreach ($field in @('Protocol', 'Profile', 'Mode', 'Stage', 'Main', 'Map', 'Environment', 'Package', 'Status', 'Capsule', 'Coverage', 'Blockers', 'Next', 'Updated', 'Device')) {
+foreach ($field in @('Protocol', 'Profile', 'Mode', 'Stage', 'Main', 'Map', 'Environment', 'Package', 'Status', 'Capsule', 'Coverage', 'Blockers', 'Next', 'Updated', 'Device', 'Writer')) {
     $value = Get-SectionField $stateLines 'Hot State' $field
     if (-not [string]::IsNullOrWhiteSpace($value)) { $packet.Add("- ${field}: $value") }
+}
+
+$agentsPath = Join-Path $rootFull 'AGENTS.md'
+if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
+    $agentsLines = [System.IO.File]::ReadAllLines($agentsPath, [System.Text.Encoding]::UTF8)
+    $redLines = [System.Collections.Generic.List[string]]::new()
+    $insideRed = $false
+    foreach ($line in $agentsLines) {
+        if ($line -match '^##\s+Red Lines\s*$') { $insideRed = $true; continue }
+        if ($insideRed -and $line -match '^## ') { break }
+        if ($insideRed -and $line.StartsWith('- ')) { $redLines.Add($line) }
+    }
+    if ($redLines.Count -gt 0) {
+        $packet.Add('')
+        $packet.Add('## Red Lines')
+        foreach ($line in @($redLines | Select-Object -First 12)) { $packet.Add($line) }
+    }
+}
+
+$eventsPath = Join-Path $rootFull 'EVENTS.md'
+if (Test-Path -LiteralPath $eventsPath -PathType Leaf) {
+    $eventsLines = [System.IO.File]::ReadAllLines($eventsPath, [System.Text.Encoding]::UTF8)
+    $eventEntries = [System.Collections.Generic.List[string]]::new()
+    $insideEvents = $false
+    foreach ($line in $eventsLines) {
+        if ($line -match '^##\s+Events\s*$') { $insideEvents = $true; continue }
+        if ($insideEvents -and $line -match '^## ') { $insideEvents = $false; continue }
+        if ($insideEvents -and $line.StartsWith('- ')) { $eventEntries.Add($line) }
+    }
+    $packet.Add('')
+    $packet.Add('## Recent Events')
+    foreach ($line in @($eventEntries | Select-Object -Last 5)) { $packet.Add($line) }
 }
 
 $packet.Add('')

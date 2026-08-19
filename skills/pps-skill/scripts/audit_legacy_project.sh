@@ -108,7 +108,7 @@ has_other_state=0
 if (( has_state == 1 && has_decisions == 1 && has_agents == 1 )); then
   has_plan_control=1
 fi
-if [[ "$protocol" == "PPS/1.0" || "$protocol" == "PPS/1.1" ]] &&
+if [[ "$protocol" == "PPS/1.0" || "$protocol" == "PPS/1.1" || "$protocol" == "PPS/1.2" ]] &&
   (( has_state == 1 && has_decisions == 1 && has_context == 1 && has_agents == 1 )); then
   has_pps_protocol=1
 fi

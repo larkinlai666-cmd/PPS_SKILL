@@ -1,22 +1,37 @@
-# AGENTS.md — PPS/1.1 个人项目接手协议
+# AGENTS.md — PPS/1.2 个人项目接手协议
 
-项目终点是当前个人项目产物可验证地完成，不是建设长期知识库或多人协作平台。
+## Red Lines
+
+本节是 L0 必读首节，存放项目特化的工程红线：由真实事故沉淀的硬禁令（编码规则、禁用语言构造、禁止静默吞错等）。每条一行祈使句，括号内注明事故或理由。红线内容永远是项目特化的，不属于 PPS 本体。
+
+- 暂无项目红线。第一次事故复盘后在此追加，勿删除本节。
+
+## 接力规则（刚性）
+
+Git 只保护已提交的历史，不保护会话交接瞬间的工作区。
+
+1. 每次会话开工先 `git status`。工作区脏时先读 diff 并理解它，再动手；**禁止整体覆写有未提交改动的文件**。
+2. 收工时要么提交，要么在 Hot State `Next` 里显式交接（"工作区有我未提交的 X"）。
+3. 心智模型：同一作者意图下的会话串行、工作区共享。上一会话留下的未提交改动是给你的留言，不是可以覆盖的噪音。
 
 ## L0 恢复
 
-1. Windows 运行 `powershell -ExecutionPolicy Bypass -File scripts/resume_packet.ps1`；其他系统运行 `bash scripts/resume_packet.sh`。
-2. 读取 `PROJECT_STATE.md` 的 Mode、Stage、Main、Map、Environment、Package、Status、Capsule、Coverage、Blockers、Next。
-3. 读取胶囊中的 `Workset Manifest`。
-4. 按 `M/F/D` 精确检索权威，按 `C-*` 查项目地图，只读取 `Read` 指向的文件或符号，再编辑 `Write` 范围。
-5. 解析 `Assets` 中的 `A-*`；快速检查全部核心资产和当前支撑资产，只物化本包需要的内容。
-6. 不得把整个仓库、整个源码目录或“最近几个文件”塞进上下文替代显式清单。
+1. 先执行上面的接力规则（`git status`）。
+2. Windows 运行 `powershell -ExecutionPolicy Bypass -File scripts/resume_packet.ps1`；其他系统运行 `bash scripts/resume_packet.sh`。
+3. 重读本文件 Red Lines 一节，再动任何文件。
+4. 读取 `PROJECT_STATE.md` 的 Mode、Stage、Main、Map、Environment、Package、Status、Capsule、Coverage、Blockers、Next（多任务项目还有 Writer）。
+5. 读取胶囊中的 `Workset Manifest`。
+6. 读 `EVENTS.md` 中当前包的近期事件，恢复工作现场。
+7. 按 `M/F/D` 精确检索权威，按 `C-*` 查项目地图，只读取 `Read` 指向的文件或符号，再编辑 `Write` 范围。
+8. 解析 `Assets` 中的 `A-*`；快速检查全部核心资产和当前支撑资产，只物化本包需要的内容。
+9. 不得把整个仓库、整个源码目录或"最近几个文件"塞进上下文替代显式清单。
 
 ## 权威
 
 - `M`：方法与治理约束。
 - `F`：用户或权威资料提供的事实，Agent 不得改写。
-- `P`：Agent 的完整建议，未获批准前不约束后续。
-- `H`：可逆、局部、非阻塞的工作假设；注明失效条件。
+- `P`：Agent 的完整建议，未获批准前不约束后续。带 `(opened YYYY-MM-DD)` 日期；挂起超 7 天必须在 `Next` 中重述处置（续挂/关闭/拆分），沉默视为放弃。
+- `H`：可逆、局部、非阻塞的工作假设；注明失效条件。方向错了尽快证伪推翻——H 错损失的是时间，不是秩序。
 - `D`：用户明确批准的决定，约束后续。
 
 只有 `M/F/D` 进入 `DECISIONS.md` 的 active block。ID 全项目唯一、稳定；废止时保留记录并改状态，不复用编号。
@@ -25,9 +40,10 @@
 
 - 一次只维护一个当前包。
 - 文档先提供真实成品切片；软件先锁定组件、入口、接口、改动路径和验证命令。
+- 对流畅度、手感等自动断言覆盖不到的体验属性，优先小步施工 + 尽早用户实测，而非基于未验证心智模型的一次性大方案。
 - Agent 负责补完 `P`；能用安全 `H` 继续时不阻塞用户。
 - 只有缺失外部事实、同级权威冲突，或无安全默认且会改变架构时才提问。
-- `CONTEXT.md` 是派生的当前工作集，不是权威正文或历史堆栈。
+- `CONTEXT.md` 是便签不是台账：只留工作集、当前包、反馈、提案、假设、风险和下一步。覆盖表放不下时外置 `docs/coverage.md`，历史归 `EVENTS.md`。
 - `PROJECT_MAP.md` 是稳定导航，不是自动生成的全文件清单；只在架构边界变化时更新。
 - 普通恢复只做 L0；来源核验升到 L1；阶段矩阵审计升到 L2；最终全源审计升到 L3。
 
@@ -35,19 +51,26 @@
 
 - 先查当前清单，再查全局 active authority；时间近不等于权威高。
 - 历史候选必须区分 active、superseded、rejected、frozen，不能自动生效。
-- 当前清单中的每个 `M/F/D` 都必须出现在覆盖表，并指向真实成品章节。
-- 当前 `Components/Read/Write` 必须足以完成当前包，但保持有界；Read/Write 不得使用仓库根或 glob，目录只允许作为精确搜索范围，不允许批量读取所有后代源码。
-- 验证器通过只代表结构覆盖；提交评审前仍需检查语义矛盾、遗漏传播和偷偷缩减范围。
-- Git 已同步不等于资产已物化。`core` 必须有 Git/LFS/云端副本，当前 `supporting` 必须可取得；`reference` 可只留标记且不得进入当前 Workset。
+- 当前清单中的每个 `M/F/D` 都必须出现在覆盖表，指向真实成品章节，且证据列注明验证命令、测试名或检查方式——裸 `Present` 无法区分"没事"和"没查"。
+- 当前 `Components/Read/Write` 必须足以完成当前包，但保持有界；Read/Write 不得使用仓库根或 glob，目录只允许作为精确搜索范围。
+- **结构覆盖不代表语义正确**：验证器通过只代表结构覆盖；提交评审前仍需检查语义矛盾、遗漏传播和偷偷缩减范围。
+- **Git 已同步不等于资产已物化，部署了不等于生效了**：`core` 必须有 Git/LFS/云端副本；行为断言（用户视角端到端冒烟、生效性探针）是 Verify 的合法组成——单测全绿可能绕开了你改的调用路径，落盘的文件不一定被加载。
 - 决策形文本解析失败必须修复，不得静默忽略。
+
+## 事件编年
+
+- 每次收口、事故、方向变更都用 `scripts/append_event.*` 追加一行事件：日期/包/标题/触及文件/验证证据/待验项。
+- 事件只增不改；超 200 行归档到 `docs/events-archive/YYYY-MM.md`。
+- 事件是后来者复原现场的唯一叙事，格式漂移等于毁史。
 
 ## 写入与并发
 
-- 主任务是状态文件、项目地图、当前产物和覆盖表的唯一写入者。
-- 并行任务可以查资料或给建议，但只返回结论和精确位置，由主任务串行合并。
+- 当前 Canonical 写入者是状态文件、事件、项目地图、当前产物和覆盖表的唯一写入者。
+- 并行任务可以查资料或给建议，但只返回结论和精确位置，由 Canonical 写入者串行合并。
+- 多任务项目（存在 `TASK_INDEX.md` 时）：Hot State `Writer` 指名唯一 active integrator；worker/consumer 只写自己的 Output Root，任务产物经 `MERGES.md` 类型化合并回收；"任务完成"不等于"已合入项目"，只有 Merge Receipt 才算。
 - 用户反馈后立即更新主稿；批准项形成 `D`，否决项离开现行主稿，历史交给 Git。
-- 每次收口同步更新真实产物、`DECISIONS.md`、`PROJECT_MAP.md`（仅架构变化时）、`CONTEXT.md`、覆盖表和 `PROJECT_STATE.md`。
-- 声称完成前运行当前环境/项目 `Verify`，再运行 `scripts/readiness_check.* --verified`/`-Verified`；失败时修复项目，不降低门槛。
+- 每次收口同步更新真实产物、`DECISIONS.md`、`EVENTS.md`、`PROJECT_MAP.md`（仅架构变化时）、`CONTEXT.md`、覆盖表和 `PROJECT_STATE.md`。
+- 声称完成前运行 `scripts/verify_gate.*`（结构验证 + 项目声明检查 + 写入验证戳），再运行 `scripts/readiness_check.* --verified`/`-Verified`；验证戳缺失或包不匹配时 readiness 拒绝。失败时修复项目，不降低门槛。
 
 ## 同步
 
@@ -55,9 +78,9 @@
 - 不覆盖未提交的用户改动，不强推，不提交无关文件。
 - 只有用户要求保存、提交或同步时执行相应 Git 写操作。
 - 新设备先运行 `scripts/environment_doctor.*`，再生成恢复包；系统级安装必须获得一次明确授权。
-- “同步并继续”：检查 dirty/remote/upstream，安全拉取后按 Workset Manifest 恢复。
-- “保存并同步”：完成写入集并验证，检查核心/当前支撑资产的完整交接状态，检查精确 diff，提交、拉取协调并推送；分别报告 Git 与资产同步结果。
-- “这个定了”：仅对用户明确批准的内容创建或更新 `D-*`，并完成全写入集传播。
-- “冷启动接入项目”：按 Skill 的 `git-sync.md` 先用已安装 Skill 的 core doctor 检查 Git/gh，克隆后运行项目 doctor 与恢复包。
+- "同步并继续"：检查 dirty/remote/upstream，安全拉取后按 Workset Manifest 恢复。
+- "保存并同步"：完成写入集并验证，检查核心/当前支撑资产的完整交接状态，检查精确 diff，提交、拉取协调并推送；分别报告 Git 与资产同步结果。
+- "这个定了"：仅对用户明确批准的内容创建或更新 `D-*`，并完成全写入集传播。
+- "冷启动接入项目"：按 Skill 的 `git-sync.md` 先用已安装 Skill 的 core doctor 检查 Git/gh，克隆后运行项目 doctor 与恢复包。
 
 PPS 只适配个人串行推进。未经用户批准，不引入全局语言包、Wiki、向量库、图数据库、RAG、常驻服务、另一套状态系统或多人协作编排。

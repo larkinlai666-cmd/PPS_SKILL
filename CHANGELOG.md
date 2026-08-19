@@ -4,6 +4,38 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-19
+
+PPS/1.2: a field-driven distillation from two real campaigns—a 13-day multi-agent relay project (5 recorded incidents) and a single-owner multi-task content platform (8 confirmed defects). PPS/1.0 and PPS/1.1 projects continue to validate unchanged.
+
+### Added
+
+- **Relay handover protection**: rigid session-start `git status` rule, prohibition on wholesale-overwriting dirty files, and explicit session-end handover via hot-state `Next` (from the relay-overwrite incident where an uncommitted hardening silently vanished between two agent sessions).
+- **Verify gate with execution evidence**: required `scripts/verify_gate.*` runs structural validation plus declared project checks and writes a device-local `.pps/verify-stamp`; `readiness_check.*` now rejects attestation when the stamp is missing or names another package (from the BOM incident where a known regimen was never run, and the splat incident where green unit tests coexisted with a dead system). Behavioral end-to-end assertions and liveness probes are explicit, legitimate Verify members.
+- **Event chronicling**: required `EVENTS.md` with fixed grammar (`date: [PKG] title | files | verify | pending`), `scripts/append_event.*` to prevent format drift, malformed-line validation, and a 200-line archive warning (from the observation that status events were the only complete project narrative but had no format or budget).
+- **Coverage evidence cells**: PPS/1.2 coverage rows must name the command, test, or inspection backing them; bare `Present` fails (from the 17-row table that stayed uniformly green for 13 days, indistinguishable from never checked). The standard profile may externalize coverage to `docs/coverage.md`.
+- **Proposal aging**: proposals carry `(opened YYYY-MM-DD)`; pending past seven days warns until restated in `Next` (from the checklist that hung six days with zero pressure).
+- **Red-lines protocol position**: `AGENTS.md` first section `## Red Lines` is required and L0-read before any edit; content stays project-specific (from four of five incidents being engineering-layer traps the authority system never covered).
+- **Single-owner multitask layer (optional)**: stable `T-*` task IDs in `TASK_INDEX.md`, per-task capsules under `task-contexts/`, a `Writer:` lease naming the single active integrator, bounded worker/consumer output roots, typed merge receipts in `MERGES.md` (`absorbs`/`layers_on`/`consumes_only`/`deferred`/`supersedes`/`rejected`/`rollback_to`), and checkpoint requirements for `integrated` status. Activated only when `TASK_INDEX.md` exists; single-task projects pay nothing. New reference: `references/multitask.md`.
+- **Write-boundary enforcement**: `scripts/boundary_check.*` classifies every worktree change as claimed by the canonical Write set, a task Write set, or a task output root—or fails it as `unclaimed_write`; pre-existing shared-worktree dirt is classified explicitly, never silently absorbed (from the derived PPT task whose scratch directory polluted product linting).
+- Validator gates for all of the above on both platforms: missing events file, malformed event lines, missing red-lines section, bare-Present coverage, missing Writer lease, duplicate task IDs, two active integrators, workers claiming canonical writes, missing output roots, integrated receipts without checkpoints, and stale/missing verify stamps.
+- Negative smoke tests for every new gate in both Bash and PowerShell.
+
+### Changed
+
+- `SKILL.md`, `protocol.md`, `retrieval-and-gates.md`, `git-sync.md`, and the project `AGENTS.md` template were rewritten around the distilled rules; the capsule is now explicitly a work note with coverage externalization, and human-language commands are documented as intent → action mappings rather than magic keywords.
+- `resume_packet.*` now includes the Writer field, up to 12 red lines, and the last 5 events.
+- PPS/1.2 requires an explicit `Assets:` workset field (PPS/1.1 keeps its compatibility warning).
+- `design-rationale.md` records the field-campaign lessons and the "make doing the right thing cheaper" principle.
+- `migration.md` adds the PPS/1.1 → 1.2 upgrade path; audits recognize PPS/1.2 projects.
+- Templates ignore `.pps/` and `local-task-output/`; the coverage tables ship with evidence cells.
+
+### Unchanged by design
+
+- Single-owner, serial canonical writes; no locks, backlogs, roles, or concurrent merge authority.
+- The validator never auto-executes untrusted manifest commands; evidence is checked, execution stays with the agent.
+- Untriggered mechanisms (asset tiers, L1-L3, stages, evidence profile) are retained; two field samples not exercising a mechanism is not evidence against it.
+
 ## [0.3.0] - 2026-07-23
 
 ### Added

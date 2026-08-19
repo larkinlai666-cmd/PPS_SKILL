@@ -95,6 +95,10 @@ try {
         'ASSETS.md',
         'SOURCE_INDEX.md',
         'docs/CURRENT_REVIEW_EVIDENCE.md',
+        'EVENTS.md',
+        'TASK_INDEX.md',
+        'MERGES.md',
+        'docs/coverage.md',
         'scripts/asset_check.ps1',
         'scripts/asset_check.sh',
         'scripts/status_check.ps1',
@@ -104,9 +108,29 @@ try {
         'scripts/environment_doctor.ps1',
         'scripts/environment_doctor.sh',
         'scripts/resume_packet.ps1',
-        'scripts/resume_packet.sh'
+        'scripts/resume_packet.sh',
+        'scripts/verify_gate.ps1',
+        'scripts/verify_gate.sh',
+        'scripts/append_event.ps1',
+        'scripts/append_event.sh'
     )) {
         Export-StagedPath $relative
+    }
+
+    $taskIndexSnapshotPath = Join-Path $snapshot 'TASK_INDEX.md'
+    if (Test-Path -LiteralPath $taskIndexSnapshotPath -PathType Leaf) {
+        $taskIndexText = [System.IO.File]::ReadAllText(
+            $taskIndexSnapshotPath, [System.Text.Encoding]::UTF8)
+        foreach ($capsuleMatch in [regex]::Matches($taskIndexText, '(?m)^-\s+Capsule:\s*(.*?)\s*$')) {
+            $relative = $capsuleMatch.Groups[1].Value.Trim()
+            if ([string]::IsNullOrWhiteSpace($relative) -or $relative -eq 'none' -or
+                [System.IO.Path]::IsPathRooted($relative) -or
+                $relative.Contains('\') -or
+                $relative -match '(^|/)\.\.(/|$)') {
+                continue
+            }
+            Export-StagedAnchor $relative
+        }
     }
 
     $statePath = Join-Path $snapshot 'PROJECT_STATE.md'

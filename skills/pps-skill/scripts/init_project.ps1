@@ -152,6 +152,7 @@ Render-Template 'DECISIONS.md' (Join-Path $target 'DECISIONS.md')
 Render-Template 'CONTEXT.md' (Join-Path $target 'CONTEXT.md')
 Render-Template 'PROJECT_MAP.md' (Join-Path $target 'PROJECT_MAP.md')
 Render-Template 'ENVIRONMENT.md' (Join-Path $target 'ENVIRONMENT.md')
+Render-Template 'EVENTS.md' (Join-Path $target 'EVENTS.md')
 if ($Mode -ne 'software') {
     Render-Template 'MAIN.md' (Join-Path $docsDir 'MAIN.md')
 }
@@ -176,6 +177,12 @@ foreach ($scriptName in @(
     'asset_check.sh',
     'readiness_check.ps1',
     'readiness_check.sh',
+    'verify_gate.ps1',
+    'verify_gate.sh',
+    'append_event.ps1',
+    'append_event.sh',
+    'boundary_check.ps1',
+    'boundary_check.sh',
     'pre-commit',
     'pre-commit.ps1'
 )) {
