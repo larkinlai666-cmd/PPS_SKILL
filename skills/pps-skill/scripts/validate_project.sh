@@ -865,7 +865,13 @@ if (( is_pps12 == 1 )); then
           safe_project_path "$task_capsule" "Task $task_id Capsule"; task_capsule_path="$result"
           if [[ -z "$task_capsule_path" || ! -f "$task_capsule_path" ]]; then
             add_error "Task $task_id capsule does not exist: $task_capsule"
-          elif [[ "$task_role" != "integrator" ]]; then
+          elif [[ "$task_role" == "integrator" ]]; then
+            # The integrator writes canonical truth, so its capsule IS the
+            # canonical capsule. A separate integrator capsule would be a
+            # second, unvalidated grant channel for Main and state files.
+            [[ "$task_capsule" == "CONTEXT.md" ]] ||
+              add_error "Task $task_id (integrator) capsule must be CONTEXT.md itself, found '$task_capsule'; a separate integrator capsule would bypass Workset validation."
+          else
             validate_task_capsule "$task_capsule_path" "$task_id" "$task_role"
             all_task_authority_refs="${all_task_authority_refs}$(
               printf '%s' "$task_capsule_authority_ids" | sed '/^$/d' |
@@ -1073,6 +1079,16 @@ if (( is_pps12 == 1 )); then
         [[ -z "$overlap_path" ]] ||
           add_error "Merge receipt $merge_id lists '$overlap_path' in more than one of Accepted/Rejected/Deferred."
       done <<< "$overlap_sets"
+      for set_pair in "Accepted:$merge_accepted" "Rejected:$merge_rejected" "Deferred:$merge_deferred"; do
+        set_name="${set_pair%%:*}"
+        set_value="${set_pair#*:}"
+        [[ -n "$set_value" && "$set_value" != "none" ]] || continue
+        while IFS= read -r disposition_path; do
+          disposition_path="$(printf '%s' "$disposition_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [[ -n "$disposition_path" ]] || continue
+          safe_project_path "$disposition_path" "Merge receipt $merge_id $set_name path" >/dev/null
+        done < <(printf '%s\n' "$set_value" | tr ',' '\n')
+      done
       if [[ "$merge_status" == "integrated" ]]; then
         checkpoint_ok "$merge_base" ||
           add_error "Merge receipt $merge_id Base Checkpoint '$merge_base' is not a resolvable Git object or the explicit lineage_incomplete marker."

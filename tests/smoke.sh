@@ -862,6 +862,26 @@ expect_invalid "$temp_root/output-root-overlap" \
   "overlaps Task T-002 Output Root" \
   "Overlapping task output roots"
 
+cp -R "$multitask_case" "$temp_root/rogue-integrator"
+printf '# Rogue integrator capsule\n\n## Workset Manifest\n\n- Write: docs/MAIN.md\n' \
+  >"$temp_root/rogue-integrator/task-contexts/T-001.md"
+perl -0pi -e 's|(### T-001\n- Title: [^\n]+\n- Role: integrator\n- Status: active\n- Active Package: PKG-001\n- Capsule: )CONTEXT\.md|${1}task-contexts/T-001.md|' \
+  "$temp_root/rogue-integrator/TASK_INDEX.md"
+expect_invalid "$temp_root/rogue-integrator" \
+  "capsule must be CONTEXT.md itself" \
+  "Integrator with a separate capsule"
+
+cp -R "$multitask_case" "$temp_root/receipt-escape-path"
+perl -0pi -e 's/(### T-002\n- Title: Worker\n- Role: worker\n- Status: )active/${1}integrated/' \
+  "$temp_root/receipt-escape-path/TASK_INDEX.md"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: absorbs\n- Accepted: ../outside/thing.md\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: lineage_incomplete\n- Result Checkpoint: lineage_incomplete\n- Lineage Note: fixture migration marker\n- Approval: D-001\n- Verification: manual review\n- Status: integrated\n'
+} >"$temp_root/receipt-escape-path/MERGES.md"
+expect_invalid "$temp_root/receipt-escape-path" \
+  "Accepted path must be a safe project-relative path" \
+  "Receipt disposition path escape"
+
 cp -R "$multitask_case" "$temp_root/worker-writes-main"
 sed -i.bak 's|^- Write: local-task-output/T-002/out.md$|- Write: docs/MAIN.md|' \
   "$temp_root/worker-writes-main/task-contexts/T-002.md"
@@ -1065,6 +1085,36 @@ dirty_content_code=$?
 set -e
 [[ "$dirty_content_code" == "4" ]]
 grep -q 'worktree content changed after the stamp' "$temp_root/dirty-content.out"
+
+cjk_dirty_case="$temp_root/cjk-dirty-case"
+bash "$skill/scripts/init_project.sh" cjk-dirty-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+printf 'first version\n' >"$cjk_dirty_case/中文 脏文件.md"
+bash "$cjk_dirty_case/scripts/verify_gate.sh" "$cjk_dirty_case" >/dev/null
+printf 'second version\n' >"$cjk_dirty_case/中文 脏文件.md"
+set +e
+bash "$cjk_dirty_case/scripts/readiness_check.sh" "$cjk_dirty_case" --verified \
+  >"$temp_root/cjk-dirty.out" 2>&1
+cjk_dirty_code=$?
+set -e
+[[ "$cjk_dirty_code" == "4" ]]
+grep -q 'worktree content changed after the stamp' "$temp_root/cjk-dirty.out"
+
+gitless_case="$temp_root/gitless-stamp-case"
+bash "$skill/scripts/init_project.sh" gitless-stamp-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+bash "$gitless_case/scripts/verify_gate.sh" "$gitless_case" >/dev/null
+mv "$gitless_case/.git" "$temp_root/gitless-stamp-case-git"
+set +e
+bash "$gitless_case/scripts/readiness_check.sh" "$gitless_case" --verified \
+  >"$temp_root/gitless.out" 2>&1
+gitless_code=$?
+set -e
+[[ "$gitless_code" == "4" ]]
+grep -q 'no longer one' "$temp_root/gitless.out"
+mv "$temp_root/gitless-stamp-case-git" "$gitless_case/.git"
 
 capsule_drift_case="$temp_root/capsule-drift-case"
 bash "$skill/scripts/init_project.sh" capsule-drift-case \

@@ -840,6 +840,13 @@ if ($isPps12) {
                     $taskCapsulePath = Resolve-ProjectFile $rootFull $taskCapsule "Task $taskId Capsule"
                     if ($null -eq $taskCapsulePath -or -not (Test-Path -LiteralPath $taskCapsulePath -PathType Leaf)) {
                         Add-ValidationError "Task $taskId capsule does not exist: $taskCapsule"
+                    } elseif ($taskRole -eq 'integrator') {
+                        # The integrator writes canonical truth, so its capsule
+                        # IS the canonical capsule. A separate integrator
+                        # capsule would be a second, unvalidated grant channel.
+                        if ($taskCapsule -ne 'CONTEXT.md') {
+                            Add-ValidationError "Task $taskId (integrator) capsule must be CONTEXT.md itself, found '$taskCapsule'; a separate integrator capsule would bypass Workset validation."
+                        }
                     } elseif ($taskRole -ne 'integrator') {
                         Test-TaskCapsule $taskCapsulePath $taskId $taskRole
                         foreach ($refId in $script:taskCapsuleAuthorityIds) {
@@ -1026,6 +1033,7 @@ if ($isPps12) {
                     } else {
                         $dispositionPaths[$pathEntry] = $setName
                     }
+                    $null = Resolve-ProjectFile $rootFull $pathEntry "Merge receipt $mergeId $setName path"
                 }
             }
             if ($fields['Status'] -eq 'integrated') {

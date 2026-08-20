@@ -113,19 +113,23 @@ capsule_sha="$(sha256_of "$root/CONTEXT.md")"
 
 worktree_content_id() {
   # Content-level fingerprint: HEAD plus, for every changed path, its status
-  # AND the SHA-256 of its current bytes. Porcelain text alone is blind to an
-  # already-dirty file changing again; this is not.
-  local head_sha entries status_line entry_status entry_path content_hash
+  # AND the SHA-256 of its current bytes. Porcelain is parsed in -z form so
+  # quoted/escaped paths (CJK, spaces, quotes) resolve to real files instead
+  # of silently hashing as absent.
+  local head_sha entries entry entry_status entry_path content_hash skip_next
   head_sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || echo 'no-commit')"
   entries=""
-  while IFS= read -r status_line; do
-    [[ -n "$status_line" ]] || continue
-    entry_status="${status_line:0:2}"
-    entry_path="${status_line:3}"
-    entry_path="${entry_path#\"}"
-    entry_path="${entry_path%\"}"
-    case "$entry_path" in
-      *" -> "*) entry_path="${entry_path##* -> }" ;;
+  skip_next=0
+  while IFS= read -r -d '' entry; do
+    if (( skip_next == 1 )); then
+      skip_next=0
+      continue
+    fi
+    [[ "${#entry}" -gt 3 ]] || continue
+    entry_status="${entry:0:2}"
+    entry_path="${entry:3}"
+    case "$entry_status" in
+      R*|C*) skip_next=1 ;;
     esac
     if [[ -f "$root/$entry_path" ]]; then
       content_hash="$(sha256_of "$root/$entry_path")"
@@ -133,7 +137,7 @@ worktree_content_id() {
       content_hash="absent"
     fi
     entries="${entries}${entry_status}"$'\t'"${entry_path}"$'\t'"${content_hash}"$'\n'
-  done < <(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null)
+  done < <(git -C "$root" status --porcelain -z --untracked-files=all 2>/dev/null)
   entries="$(printf '%s' "$entries" | LC_ALL=C sort)"
   printf '%s+%s' "$head_sha" "$(sha256_of_text "$entries")"
 }

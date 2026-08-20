@@ -141,16 +141,25 @@ if ($null -ne $git) {
         # Content-level fingerprint: HEAD plus, for every changed path, its
         # status AND the SHA-256 of its current bytes. Porcelain text alone is
         # blind to an already-dirty file changing again; this is not.
-        $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
+        $statusProbe = Invoke-NativeProbe {
+            $prevEnc = [Console]::OutputEncoding
+            try {
+                [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+                & $git.Source -C $rootFull status --porcelain -z --untracked-files=all
+            } finally {
+                [Console]::OutputEncoding = $prevEnc
+            }
+        }
         $entryLines = @()
-        foreach ($statusLine in $statusProbe.Output) {
-            $line = "$statusLine"
+        $rawStatus = ($statusProbe.Output | ForEach-Object { "$_" }) -join "`n"
+        $skipNext = $false
+        foreach ($statusEntry in $rawStatus.Split([char]0)) {
+            if ($skipNext) { $skipNext = $false; continue }
+            $line = "$statusEntry"
             if ($line.Length -le 3) { continue }
             $entryStatus = $line.Substring(0, 2)
-            $entryPath = $line.Substring(3).Trim('"')
-            if ($entryPath.Contains(' -> ')) {
-                $entryPath = $entryPath.Split(' -> ')[-1]
-            }
+            $entryPath = $line.Substring(3)
+            if ($entryStatus -match '^[RC]') { $skipNext = $true }
             $entryFile = Join-Path $rootFull $entryPath
             $contentHash = if (Test-Path -LiteralPath $entryFile -PathType Leaf) {
                 Get-FileSha256 $entryFile

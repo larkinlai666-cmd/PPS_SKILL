@@ -4,6 +4,21 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-20
+
+Third hardening round, driven by the reviewer's live layer-3 probing which found real misclassifications in 0.4.2's own fixes.
+
+### Fixed
+
+- **CJK / escaped-path blindness in content fingerprints**: `git status --porcelain` quotes and octal-escapes non-ASCII paths, so 0.4.2's fingerprint hashed nonexistent filenames and recorded them as `absent` — a CJK-named dirty file could change without voiding the stamp. All porcelain parsing (gate, readiness, boundary, both platforms) now uses `-z` NUL-separated records with rename-source skipping; PowerShell additionally forces UTF-8 console encoding around the probe. Cross-platform stamp parity with CJK paths is tested.
+- **Stamp survives `.git` removal**: readiness treated a missing repository as "nothing to compare" and passed any stamp. A stamp whose worktree identity is Git-bound is now rejected when the directory is no longer a Git worktree (or git is unavailable), on both platforms.
+- **Second Main-write channel via integrator capsules**: the validator only enforced full Workset grammar on worker/consumer capsules, so an integrator pointing at a separate, unvalidated capsule file got its Write claims trusted by boundary_check. Integrator tasks must now use `CONTEXT.md` itself as their capsule — enforced by both the validator and boundary_check.
+- **Receipt disposition paths escape the project**: Accepted/Rejected/Deferred entries now pass the same path-safety validation as every other manifest path; `../outside/...` fails.
+
+### Added
+
+- Negative tests on both platforms: CJK dirty file changing after the stamp, `.git` removed after the stamp, integrator with a separate capsule, and receipt disposition path escape.
+
 ## [0.4.2] - 2026-08-19
 
 Second hardening round closing all five blockers from the external upgrade review of 0.4.1 (REVIEW2-P0-001..004, REVIEW2-P1-005) plus the portability finding P2-006. The review's framing: 0.4.1 enforced that gates exist and run; 0.4.2 enforces that their evidence binds to content, not to shapes.

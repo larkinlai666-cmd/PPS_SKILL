@@ -159,16 +159,25 @@ if ($protocol -eq 'PPS/1.2') {
             } else {
                 'no-commit'
             }
-            $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
+            $statusProbe = Invoke-NativeProbe {
+                $prevEnc = [Console]::OutputEncoding
+                try {
+                    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+                    & $git.Source -C $rootFull status --porcelain -z --untracked-files=all
+                } finally {
+                    [Console]::OutputEncoding = $prevEnc
+                }
+            }
             $entryLines = @()
-            foreach ($statusLine in $statusProbe.Output) {
-                $line = "$statusLine"
+            $rawStatus = ($statusProbe.Output | ForEach-Object { "$_" }) -join "`n"
+            $skipNext = $false
+            foreach ($statusEntry in $rawStatus.Split([char]0)) {
+                if ($skipNext) { $skipNext = $false; continue }
+                $line = "$statusEntry"
                 if ($line.Length -le 3) { continue }
                 $entryStatus = $line.Substring(0, 2)
-                $changedPath = $line.Substring(3).Trim('"')
-                if ($changedPath.Contains(' -> ')) {
-                    $changedPath = $changedPath.Split(' -> ')[-1]
-                }
+                $changedPath = $line.Substring(3)
+                if ($entryStatus -match '^[RC]') { $skipNext = $true }
                 $changedFile = Join-Path $rootFull $changedPath
                 $contentHash = if (Test-Path -LiteralPath $changedFile -PathType Leaf) {
                     Get-StampFileSha256 $changedFile
@@ -186,6 +195,17 @@ if ($protocol -eq 'PPS/1.2') {
             if ($stamp['worktree'] -ne $currentWorktree) {
                 Deny-StaleStamp 'The worktree content changed after the stamp was written; the verified state is not the current state.'
             }
+        } else {
+            # A stamp minted inside a Git worktree is only meaningful inside
+            # that worktree. Losing .git after stamping destroys the identity
+            # the stamp was bound to.
+            if ($stamp['worktree'] -ne 'no-git') {
+                Deny-StaleStamp 'The stamp was written inside a Git worktree but this directory is no longer one; the stamped identity cannot be re-checked.'
+            }
+        }
+    } else {
+        if ($stamp['worktree'] -ne 'no-git') {
+            Deny-StaleStamp 'The stamp was written inside a Git worktree but git is unavailable here; the stamped identity cannot be re-checked.'
         }
     }
     Write-Output "Verify stamp: $($stamp['package']) ($($stamp['verified_at']), entry $entryRel)"

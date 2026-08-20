@@ -57,17 +57,22 @@ sha256_of_file() {
 }
 
 changed_entries() {
-  # Emits one record per change: "<status>\t<path>\t<content-hash>". A path is
-  # only "the same preexisting change" if status AND content still match.
-  local status_line entry_status entry_path content_hash
-  while IFS= read -r status_line; do
-    [[ -n "$status_line" ]] || continue
-    entry_status="${status_line:0:2}"
-    entry_path="${status_line:3}"
-    entry_path="${entry_path#\"}"
-    entry_path="${entry_path%\"}"
-    case "$entry_path" in
-      *" -> "*) entry_path="${entry_path##* -> }" ;;
+  # Emits one record per change: "<status>\t<path>\t<content-hash>". Porcelain
+  # is parsed in -z form so quoted/escaped paths (CJK, spaces, quotes) resolve
+  # to real files. A path is only "the same preexisting change" if status AND
+  # content still match.
+  local entry entry_status entry_path content_hash skip_next
+  skip_next=0
+  while IFS= read -r -d '' entry; do
+    if (( skip_next == 1 )); then
+      skip_next=0
+      continue
+    fi
+    [[ "${#entry}" -gt 3 ]] || continue
+    entry_status="${entry:0:2}"
+    entry_path="${entry:3}"
+    case "$entry_status" in
+      R*|C*) skip_next=1 ;;
     esac
     if [[ -f "$root/$entry_path" ]]; then
       content_hash="$(sha256_of_file "$root/$entry_path")"
@@ -75,7 +80,7 @@ changed_entries() {
       content_hash="absent"
     fi
     printf '%s\t%s\t%s\n' "$entry_status" "$entry_path" "$content_hash"
-  done < <(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null)
+  done < <(git -C "$root" status --porcelain -z --untracked-files=all 2>/dev/null)
 }
 
 changed_paths() {
@@ -149,6 +154,10 @@ if [[ -f "$task_index" ]]; then
   subject_role="$(task_block_field "$subject" "Role")"
   subject_capsule="$(task_block_field "$subject" "Capsule")"
   subject_output_root="$(task_block_field "$subject" "Output Root")"
+  if [[ "$subject_role" == "integrator" && "$subject_capsule" != "CONTEXT.md" ]]; then
+    echo "ERROR: integrator task '$subject' must use CONTEXT.md as its capsule, found '$subject_capsule'; a separate integrator capsule is an unvalidated grant channel." >&2
+    exit 1
+  fi
 else
   if [[ -n "$task_arg" ]]; then
     echo "ERROR: --task was given but TASK_INDEX.md does not exist." >&2

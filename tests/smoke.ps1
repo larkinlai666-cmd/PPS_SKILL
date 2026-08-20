@@ -1437,6 +1437,50 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         "overlaps Task T-002 Output Root" `
         "Overlapping task output roots"
 
+    $rogueIntegrator = Join-Path $tempRoot "rogue-integrator"
+    Copy-Item -LiteralPath $multitaskCase -Destination $rogueIntegrator -Recurse
+    [System.IO.File]::WriteAllText(
+        (Join-Path $rogueIntegrator "task-contexts/T-001.md"),
+        "# Rogue integrator capsule`n`n## Workset Manifest`n`n- Write: docs/MAIN.md`n",
+        $utf8NoBom
+    )
+    $casePath = Join-Path $rogueIntegrator "TASK_INDEX.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = [regex]::Replace(
+        $text2,
+        '(?s)(### T-001\n- Title: [^\n]+\n- Role: integrator\n- Status: active\n- Active Package: PKG-001\n- Capsule: )CONTEXT\.md',
+        '${1}task-contexts/T-001.md')
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    Assert-InvalidProject $rogueIntegrator `
+        "capsule must be CONTEXT.md itself" `
+        "Integrator with a separate capsule"
+
+    $receiptEscapePath = Join-Path $tempRoot "receipt-escape-path"
+    Copy-Item -LiteralPath $multitaskCase -Destination $receiptEscapePath -Recurse
+    $casePath = Join-Path $receiptEscapePath "TASK_INDEX.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = [regex]::Replace(
+        $text2,
+        '(?s)(### T-002\n- Title: Worker\n- Role: worker\n- Status: )active',
+        '${1}integrated')
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    $escapeReceipt = @(
+        '# Merges', '', '## Merge Receipts', '',
+        '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: absorbs', '- Accepted: ../outside/thing.md', '- Rejected: none',
+        '- Deferred: none', '- Base Checkpoint: lineage_incomplete',
+        '- Result Checkpoint: lineage_incomplete', '- Lineage Note: fixture migration marker',
+        '- Approval: D-001', '- Verification: manual review', '- Status: integrated'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptEscapePath "MERGES.md"),
+        $escapeReceipt + "`n",
+        $utf8NoBom
+    )
+    Assert-InvalidProject $receiptEscapePath `
+        "Accepted path must be a" `
+        "Receipt disposition path escape"
+
     $workerWritesMain = Join-Path $tempRoot "worker-writes-main"
     Copy-Item -LiteralPath $multitaskCase -Destination $workerWritesMain -Recurse
     $casePath = Join-Path $workerWritesMain "task-contexts/T-002.md"
@@ -1801,6 +1845,61 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     }
     if ($capsuleReadiness.Code -ne 4) {
         throw 'Readiness accepted a stamp although CONTEXT.md changed after it.'
+    }
+
+    $cjkDirtyCase = Join-Path $tempRoot "cjk-dirty-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName cjk-dirty-case -Profile standard -ParentDir $tempRoot `
+        -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "CJK-dirty initialization failed." }
+    $cjkFile = Join-Path $cjkDirtyCase ([string]::Join('', [char]0x4E2D, [char]0x6587, ' ', [char]0x810F, '.md'))
+    [System.IO.File]::WriteAllText($cjkFile, "first version`n", $utf8NoBom)
+    $cjkGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $cjkDirtyCase 'scripts/verify_gate.ps1') `
+            -Root $cjkDirtyCase 2>&1
+    }
+    if ($cjkGate.Code -ne 0) {
+        throw "Verify gate failed with a CJK dirty path: $($cjkGate.Text)"
+    }
+    [System.IO.File]::WriteAllText($cjkFile, "second version`n", $utf8NoBom)
+    $cjkReadiness = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $cjkDirtyCase 'scripts/readiness_check.ps1') `
+            -Root $cjkDirtyCase -Verified 2>&1
+    }
+    if ($cjkReadiness.Code -ne 4 -or
+        $cjkReadiness.Text -notmatch 'worktree content changed after the stamp') {
+        throw 'Readiness accepted a stamp although a CJK-named dirty file changed again.'
+    }
+
+    $gitlessCase = Join-Path $tempRoot "gitless-stamp-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName gitless-stamp-case -Profile standard -ParentDir $tempRoot `
+        -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Gitless-stamp initialization failed." }
+    $gitlessGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitlessCase 'scripts/verify_gate.ps1') `
+            -Root $gitlessCase 2>&1
+    }
+    if ($gitlessGate.Code -ne 0) {
+        throw "Verify gate failed on a valid project: $($gitlessGate.Text)"
+    }
+    Move-Item -LiteralPath (Join-Path $gitlessCase '.git') `
+        -Destination (Join-Path $tempRoot 'gitless-stamp-case-git')
+    $gitlessReadiness = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitlessCase 'scripts/readiness_check.ps1') `
+            -Root $gitlessCase -Verified 2>&1
+    }
+    Move-Item -LiteralPath (Join-Path $tempRoot 'gitless-stamp-case-git') `
+        -Destination (Join-Path $gitlessCase '.git')
+    if ($gitlessReadiness.Code -ne 4 -or
+        $gitlessReadiness.Text -notmatch 'no longer one') {
+        throw 'Readiness accepted a Git-bound stamp after .git was removed.'
     }
 
     $eventPlacementCase = Join-Path $tempRoot "event-placement-case"

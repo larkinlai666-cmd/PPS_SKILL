@@ -159,14 +159,17 @@ if [[ "$protocol" == "PPS/1.2" ]]; then
     git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     head_sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || echo 'no-commit')"
     worktree_entries=""
-    while IFS= read -r status_line; do
-      [[ -n "$status_line" ]] || continue
-      entry_status="${status_line:0:2}"
-      entry_path="${status_line:3}"
-      entry_path="${entry_path#\"}"
-      entry_path="${entry_path%\"}"
-      case "$entry_path" in
-        *" -> "*) entry_path="${entry_path##* -> }" ;;
+    skip_next=0
+    while IFS= read -r -d '' status_entry; do
+      if (( skip_next == 1 )); then
+        skip_next=0
+        continue
+      fi
+      [[ "${#status_entry}" -gt 3 ]] || continue
+      entry_status="${status_entry:0:2}"
+      entry_path="${status_entry:3}"
+      case "$entry_status" in
+        R*|C*) skip_next=1 ;;
       esac
       if [[ -f "$root/$entry_path" ]]; then
         content_hash="$(sha256_of_file "$root/$entry_path")"
@@ -174,11 +177,17 @@ if [[ "$protocol" == "PPS/1.2" ]]; then
         content_hash="absent"
       fi
       worktree_entries="${worktree_entries}${entry_status}"$'\t'"${entry_path}"$'\t'"${content_hash}"$'\n'
-    done < <(git -C "$root" status --porcelain --untracked-files=all 2>/dev/null)
+    done < <(git -C "$root" status --porcelain -z --untracked-files=all 2>/dev/null)
     worktree_entries="$(printf '%s' "$worktree_entries" | LC_ALL=C sort)"
     current_worktree="${head_sha}+$(sha256_of_string "$worktree_entries")"
     [[ "$stamp_worktree" == "$current_worktree" ]] ||
       reject_stale "The worktree content changed after the stamp was written; the verified state is not the current state."
+  else
+    # A stamp minted inside a Git worktree is only meaningful inside that
+    # worktree. Losing .git after stamping destroys the identity the stamp
+    # was bound to.
+    [[ "$stamp_worktree" == "no-git" ]] ||
+      reject_stale "The stamp was written inside a Git worktree but this directory is no longer one; the stamped identity cannot be re-checked."
   fi
   echo "Verify stamp: $stamp_package ($stamp_time, entry $stamp_entry)"
 fi

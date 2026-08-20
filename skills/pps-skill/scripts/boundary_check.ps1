@@ -53,18 +53,29 @@ function Get-PathSha256([string]$Path) {
 }
 
 function Get-ChangedEntries {
-    # One record per change: "<status>`t<path>`t<content-hash>". A path is only
-    # "the same preexisting change" if status AND content still match.
-    $statusProbe = Invoke-NativeProbe { & $git.Source -C $rootFull status --porcelain --untracked-files=all }
+    # One record per change: "<status>`t<path>`t<content-hash>". Porcelain is
+    # parsed in -z form with UTF-8 console encoding so quoted/escaped paths
+    # (CJK, spaces, quotes) resolve to real files. A path is only "the same
+    # preexisting change" if status AND content still match.
+    $statusProbe = Invoke-NativeProbe {
+        $prevEnc = [Console]::OutputEncoding
+        try {
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+            & $git.Source -C $rootFull status --porcelain -z --untracked-files=all
+        } finally {
+            [Console]::OutputEncoding = $prevEnc
+        }
+    }
     $entries = @()
-    foreach ($statusLine in $statusProbe.Output) {
-        $line = "$statusLine"
+    $rawStatus = ($statusProbe.Output | ForEach-Object { "$_" }) -join "`n"
+    $skipNext = $false
+    foreach ($statusEntry in $rawStatus.Split([char]0)) {
+        if ($skipNext) { $skipNext = $false; continue }
+        $line = "$statusEntry"
         if ($line.Length -le 3) { continue }
         $entryStatus = $line.Substring(0, 2)
-        $changed = $line.Substring(3).Trim('"')
-        if ($changed.Contains(' -> ')) {
-            $changed = $changed.Split(' -> ')[-1]
-        }
+        $changed = $line.Substring(3)
+        if ($entryStatus -match '^[RC]') { $skipNext = $true }
         $changedFile = Join-Path $rootFull $changed
         $contentHash = if (Test-Path -LiteralPath $changedFile -PathType Leaf) {
             Get-PathSha256 $changedFile
@@ -141,6 +152,10 @@ if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
     $subjectRole = Get-TaskBlockField $taskIndexText $subject 'Role'
     $subjectCapsule = Get-TaskBlockField $taskIndexText $subject 'Capsule'
     $subjectOutputRoot = Get-TaskBlockField $taskIndexText $subject 'Output Root'
+    if ($subjectRole -eq 'integrator' -and $subjectCapsule -ne 'CONTEXT.md') {
+        Write-Host "ERROR: integrator task '$subject' must use CONTEXT.md as its capsule, found '$subjectCapsule'; a separate integrator capsule is an unvalidated grant channel."
+        exit 1
+    }
 } else {
     if (-not [string]::IsNullOrWhiteSpace($Task)) {
         Write-Host "ERROR: -Task was given but TASK_INDEX.md does not exist."
