@@ -4,6 +4,21 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-08-20
+
+Fourth external-review round (PKG-027) accepted all fifteen previously closed bypasses, then advanced to receipt truthfulness and archived-state uniqueness. All four findings closed, each landed as failing field-level tests first on both platforms.
+
+### Fixed
+
+- **REVIEW3-P0-001 — receipts must bind to real evidence, not evidence-shaped text**: Target Package existence now requires a parsed EVENTS.md event line (`- YYYY-MM-DD: [PKG-*] ...`), not a substring in comments or prose; integrated Accepted paths must resolve to real artifacts in the worktree or inside the Result Checkpoint (`git cat-file -e result:path`); Approval must cite a decision whose status is `active` or `superseded` — citing a `[rejected]` decision is a forged grant and fails; Verification must be locatable evidence (gate/command with recorded result, stamp, event line, or in-repo evidence document), not arbitrary prose.
+- **REVIEW3-P0-002 — archived tasks keep exactly one final disposition**: an archived task with zero terminal receipts, contradictory terminal receipts (e.g. both integrated and rejected), or duplicate same-status receipts now fails validation on both platforms.
+- **REVIEW3-P1-003 — deferred/rejected receipts carry their own evidence**: deferred requires a non-empty Deferred set and a `Reactivate When` field; rejected requires a non-empty Rejected set and a `Reason` field; all terminal dispositions (not only integrated) require Approval and Verification.
+- **REVIEW3-P1-004 — lineage_incomplete gets a migration eligibility gate**: on projects with normal Git history, the marker now requires an active `D-*` migration decision cited in the Lineage Note or a recorded migration/adoption event; a convenience note alone fails. Projects without Git remain exempt (they have no checkpoints to bind).
+
+### Added
+
+- Field-level negative fixtures on both platforms: phantom package via comment, rejected-decision approval, prose-only verification, ghost Accepted artifact, lineage_incomplete without migration eligibility, archived contradiction, empty deferred (two diagnostics), empty rejected (two diagnostics) — plus a fully-evidenced positive control.
+
 ### Fixed
 
 - **Self-adversarial loop until convergence (three probe rounds, 14 vectors)**: round 1 hit 3 real gaps, now closed with negative tests on both platforms: (a) validator enforced task→receipt direction but not receipt→registry — a terminal-status receipt naming a still-`active` task passed; the two truth sources must now agree; (b) verify stamps with duplicated fields exploited first-match parsing so a prepended `result: pass` shadowed the real `result: fail`; readiness now rejects any stamp declaring a required field more than once; (c) `append_event.*` accepted multi-line segments — Bash awk failed silently while still reporting success, and forged chronicle lines or sections were possible; segments must now be single-line, enforced on both platforms. Rounds 2 and 3 (command-substitution injection via hot-state fields, dot-segment/trailing-slash path claims, concurrent gate runs, whitespace-only evidence cells, post-baseline self-granting capsule edits, archived-task escapes, cross-file package desync) scored zero hits: existing guards held.

@@ -930,6 +930,165 @@ expect_invalid "$temp_root/hollow-receipt" \
   "uses lineage_incomplete without a 'Lineage Note'" \
   "lineage_incomplete without note"
 
+receipt_base="$temp_root/receipt-evidence-base"
+cp -R "$multitask_case" "$receipt_base"
+perl -0pi -e 's/(### T-002\n- Title: Worker\n- Role: worker\n- Status: )active/${1}integrated/' \
+  "$receipt_base/TASK_INDEX.md"
+python3 - "$receipt_base" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/DECISIONS.md'
+t = open(p, encoding='utf-8').read()
+t = t.replace('<!-- PPS:ACTIVE:END -->', '- `D-001`\n<!-- PPS:ACTIVE:END -->')
+t = t.replace('## Status Events', '### D-001 [active]\n\n- Summary: Merge authorized.\n- Source: fixture.\n- Scope: MERGE-001.\n- Supersedes: none.\n- Affects: merges.\n\n### D-002 [rejected]\n\n- Summary: Merge NOT authorized.\n- Source: fixture.\n- Scope: MERGE-001.\n- Supersedes: none.\n- Affects: merges.\n\n## Status Events')
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+mkdir -p "$receipt_base/local-task-output/T-002"
+printf 'real artifact\n' >"$receipt_base/local-task-output/T-002/real.md"
+write_receipt() {
+  local dir="$1" approval="$2" verification="$3" accepted="$4" target="$5"
+  {
+    printf '# Merges\n\n## Merge Receipts\n\n'
+    printf '### MERGE-001\n- Target Package: %s\n- Source Tasks: T-002\n- Relation: absorbs\n- Accepted: %s\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: lineage_incomplete\n- Result Checkpoint: lineage_incomplete\n- Lineage Note: migration per D-001\n- Approval: %s\n- Verification: %s\n- Status: integrated\n' \
+      "$target" "$accepted" "$approval" "$verification"
+  } >"$dir/MERGES.md"
+}
+
+cp -R "$receipt_base" "$temp_root/receipt-phantom-package"
+printf '<!-- [PKG-999] -->\n' >>"$temp_root/receipt-phantom-package/EVENTS.md"
+write_receipt "$temp_root/receipt-phantom-package" D-001 "validate_project pass" local-task-output/T-002/real.md PKG-999
+expect_invalid "$temp_root/receipt-phantom-package" \
+  "nor recorded as a real event line" \
+  "Receipt targeting package only mentioned in a comment"
+
+cp -R "$receipt_base" "$temp_root/receipt-rejected-approval"
+write_receipt "$temp_root/receipt-rejected-approval" D-002 "validate_project pass" local-task-output/T-002/real.md PKG-001
+expect_invalid "$temp_root/receipt-rejected-approval" \
+  "a decision that never authorized the merge cannot approve it" \
+  "Receipt citing a rejected decision as approval"
+
+cp -R "$receipt_base" "$temp_root/receipt-prose-verification"
+write_receipt "$temp_root/receipt-prose-verification" D-001 "looked fine to me" local-task-output/T-002/real.md PKG-001
+expect_invalid "$temp_root/receipt-prose-verification" \
+  "is not locatable evidence" \
+  "Receipt with prose-only verification"
+
+cp -R "$receipt_base" "$temp_root/receipt-ghost-accepted"
+write_receipt "$temp_root/receipt-ghost-accepted" D-001 "validate_project pass" local-task-output/T-002/ghost.md PKG-001
+expect_invalid "$temp_root/receipt-ghost-accepted" \
+  "an integration must point at real merged artifacts" \
+  "Receipt accepting a nonexistent artifact"
+
+cp -R "$receipt_base" "$temp_root/receipt-lineage-no-migration"
+python3 - "$temp_root/receipt-lineage-no-migration" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/MERGES.md'
+open(p, 'w', encoding='utf-8').write('''# Merges
+
+## Merge Receipts
+
+### MERGE-001
+- Target Package: PKG-001
+- Source Tasks: T-002
+- Relation: absorbs
+- Accepted: local-task-output/T-002/real.md
+- Rejected: none
+- Deferred: none
+- Base Checkpoint: lineage_incomplete
+- Result Checkpoint: lineage_incomplete
+- Lineage Note: for convenience no checkpoint recorded
+- Approval: D-001
+- Verification: validate_project pass
+- Status: integrated
+''')
+PYEOF
+git -C "$temp_root/receipt-lineage-no-migration" init -q
+git -C "$temp_root/receipt-lineage-no-migration" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" add -A
+git -C "$temp_root/receipt-lineage-no-migration" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" commit -qm fixture
+expect_invalid "$temp_root/receipt-lineage-no-migration" \
+  "no recorded migration" \
+  "lineage_incomplete without migration eligibility"
+
+cp -R "$receipt_base" "$temp_root/archived-contradiction"
+perl -0pi -e 's/(- Status: )integrated/${1}archived/' \
+  "$temp_root/archived-contradiction/TASK_INDEX.md"
+head_ref="$(git -C "$temp_root/archived-contradiction" rev-parse HEAD 2>/dev/null || echo lineage_incomplete)"
+python3 - "$temp_root/archived-contradiction" <<'PYEOF'
+import subprocess, sys
+root = sys.argv[1]
+try:
+    head = subprocess.run(['git', '-C', root, 'rev-parse', 'HEAD'],
+                          capture_output=True, text=True).stdout.strip() or 'lineage_incomplete'
+except Exception:
+    head = 'lineage_incomplete'
+receipt = '''# Merges
+
+## Merge Receipts
+
+### MERGE-001
+- Target Package: PKG-001
+- Source Tasks: T-002
+- Relation: absorbs
+- Accepted: local-task-output/T-002/real.md
+- Rejected: none
+- Deferred: none
+- Base Checkpoint: {h}
+- Result Checkpoint: {h}
+- Approval: D-001
+- Verification: validate_project pass
+- Status: integrated
+
+### MERGE-002
+- Target Package: PKG-001
+- Source Tasks: T-002
+- Relation: rejected
+- Accepted: none
+- Rejected: local-task-output/T-002/real.md
+- Deferred: none
+- Base Checkpoint: {h}
+- Result Checkpoint: {h}
+- Approval: D-001
+- Verification: validate_project pass
+- Reason: contradiction fixture
+- Status: rejected
+'''.format(h=head)
+open(root + '/MERGES.md', 'w', encoding='utf-8').write(receipt)
+PYEOF
+expect_invalid "$temp_root/archived-contradiction" \
+  "contradictory terminal receipts" \
+  "Archived task with contradictory receipts"
+
+cp -R "$receipt_base" "$temp_root/empty-deferred"
+perl -0pi -e 's/(- Status: )integrated/${1}deferred/' \
+  "$temp_root/empty-deferred/TASK_INDEX.md"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: deferred\n- Accepted: none\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: none\n- Result Checkpoint: none\n- Approval: none\n- Verification: none\n- Status: deferred\n'
+} >"$temp_root/empty-deferred/MERGES.md"
+expect_invalid "$temp_root/empty-deferred" \
+  "a deferral that defers nothing records nothing" \
+  "Deferred receipt with no deferred set"
+expect_invalid "$temp_root/empty-deferred" \
+  "without a 'Reactivate When' field" \
+  "Deferred receipt without reactivation condition"
+
+cp -R "$receipt_base" "$temp_root/empty-rejected"
+perl -0pi -e 's/(- Status: )integrated/${1}rejected/' \
+  "$temp_root/empty-rejected/TASK_INDEX.md"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: rejected\n- Accepted: none\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: none\n- Result Checkpoint: none\n- Approval: none\n- Verification: none\n- Status: rejected\n'
+} >"$temp_root/empty-rejected/MERGES.md"
+expect_invalid "$temp_root/empty-rejected" \
+  "a rejection that rejects nothing records nothing" \
+  "Rejected receipt with no rejected set"
+expect_invalid "$temp_root/empty-rejected" \
+  "without a 'Reason' field" \
+  "Rejected receipt without reason"
+
 cp -R "$multitask_case" "$temp_root/phantom-refs"
 sed -i.bak 's|^- Methods: none$|- Methods: M-404|; s|^- Components: C-ROOT$|- Components: C-404|' \
   "$temp_root/phantom-refs/task-contexts/T-002.md"

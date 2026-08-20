@@ -818,6 +818,7 @@ if (( is_pps12 == 1 )); then
   all_task_asset_refs=""
   task_ids=""
   terminal_tasks=""
+  archived_tasks=""
   output_roots=""
   if [[ -f "$task_index" ]]; then
     task_ids="$(grep -E '^###[[:space:]]+T-' "$task_index" |
@@ -853,6 +854,9 @@ if (( is_pps12 == 1 )); then
       case "$task_status" in
         integrated|deferred|rejected)
           terminal_tasks="${terminal_tasks}${task_id}:${task_status}"$'\n'
+          ;;
+        archived)
+          archived_tasks="${archived_tasks}${task_id}"$'\n'
           ;;
       esac
       if [[ "$task_role" == "integrator" && "$task_status" == "active" ]]; then
@@ -1021,12 +1025,12 @@ if (( is_pps12 == 1 )); then
       [[ "$merge_target" =~ ^PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$ ]] ||
         add_error "Merge receipt $merge_id Target Package must be a PKG-* ID, found '$merge_target'."
       # The Target Package must be a real package: the current one or one
-      # recorded in the chronicle. A receipt into a phantom package is not
-      # evidence of integration.
+      # recorded in the chronicle as a parsed event line. A substring in a
+      # comment, heading, or prose is not evidence a package ever existed.
       if [[ "$merge_target" =~ ^PKG- && "$merge_target" != "$package" ]]; then
         if [[ ! -f "$root/EVENTS.md" ]] ||
-          ! grep -Eq "\\[${merge_target}\\]" "$root/EVENTS.md"; then
-          add_error "Merge receipt $merge_id Target Package '$merge_target' is neither the current package '$package' nor recorded in EVENTS.md."
+          ! grep -Eq "^-[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}:[[:space:]]+\\[${merge_target}\\][[:space:]]" "$root/EVENTS.md"; then
+          add_error "Merge receipt $merge_id Target Package '$merge_target' is neither the current package '$package' nor recorded as a real event line in EVENTS.md."
         fi
       fi
       if [[ "$merge_status" == "integrated" ]]; then
@@ -1035,13 +1039,39 @@ if (( is_pps12 == 1 )); then
         if [[ -z "$merge_accepted" || "$merge_accepted" == "none" ]]; then
           add_error "Merge receipt $merge_id is 'integrated' with an empty Accepted set; an integration that accepted nothing is not an integration."
         fi
-        if [[ -z "$merge_approval" || "$merge_approval" == "none" ]]; then
-          add_error "Merge receipt $merge_id is 'integrated' without an Approval decision; name the D-* record that authorized this merge."
+      elif [[ "$merge_status" == "deferred" ]]; then
+        # A deferral must record what was deferred and when to wake it up,
+        # or the work intent is unrecoverable after archiving.
+        if [[ -z "$merge_deferred" || "$merge_deferred" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'deferred' with an empty Deferred set; a deferral that defers nothing records nothing."
         fi
-        if [[ -z "$merge_verification" || "$merge_verification" == "none" ]]; then
-          add_error "Merge receipt $merge_id is 'integrated' without Verification evidence; name the command, test, or inspection that checked the merged result."
+        merge_reactivate="$(merge_field 'Reactivate When')"
+        if [[ -z "$merge_reactivate" || "$merge_reactivate" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'deferred' without a 'Reactivate When' field; a deferral without a reactivation condition is a silent abandonment."
+        fi
+      elif [[ "$merge_status" == "rejected" ]]; then
+        # A rejection must record what was rejected and why; rejection never
+        # deletes the record.
+        if [[ -z "$merge_rejected" || "$merge_rejected" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'rejected' with an empty Rejected set; a rejection that rejects nothing records nothing."
+        fi
+        merge_reason="$(merge_field 'Reason')"
+        if [[ -z "$merge_reason" || "$merge_reason" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'rejected' without a 'Reason' field; the excluded outputs and the why must survive."
         fi
       fi
+      case "$merge_status" in
+        integrated|deferred|rejected)
+          # Every terminal disposition needs authorization and checked
+          # evidence, not only integrations.
+          if [[ -z "$merge_approval" || "$merge_approval" == "none" ]]; then
+            add_error "Merge receipt $merge_id is '$merge_status' without an Approval decision; name the D-* record that authorized this disposition."
+          fi
+          if [[ -z "$merge_verification" || "$merge_verification" == "none" ]]; then
+            add_error "Merge receipt $merge_id is '$merge_status' without Verification evidence; name the command, test, or inspection that checked this disposition."
+          fi
+          ;;
+      esac
       if [[ -n "$merge_sources" && "$merge_sources" != "none" ]]; then
         while IFS= read -r src_task; do
           src_task="$(printf '%s' "$src_task" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -1084,8 +1114,28 @@ if (( is_pps12 == 1 )); then
             add_error "Merge receipt $merge_id Approval contains a non-D-* entry: '$approval_id'."
           elif ! grep -Eq "^###[[:space:]]+${approval_id}[[:space:]]+\[" "$decisions"; then
             add_error "Merge receipt $merge_id Approval references unknown decision '$approval_id'."
+          else
+            # A decision that was rejected never authorized anything; citing
+            # it as approval is a forged grant, not a stale one.
+            approval_status="$(grep -E "^###[[:space:]]+${approval_id}[[:space:]]+\[" "$decisions" |
+              head -n 1 | sed -E 's/^###[[:space:]]+[^[]+\[([^]]+)\].*/\1/')"
+            case "$approval_status" in
+              active|superseded) ;;
+              *)
+                add_error "Merge receipt $merge_id Approval cites $approval_id whose status is '[$approval_status]'; a decision that never authorized the merge cannot approve it."
+                ;;
+            esac
           fi
         done < <(printf '%s\n' "$merge_approval" | tr ',' '\n')
+      fi
+      if [[ -n "$merge_verification" && "$merge_verification" != "none" ]]; then
+        # Verification must be locatable evidence, not reassuring prose:
+        # a command/test with its recorded outcome, a verify stamp, an
+        # event line, or an in-repo evidence document.
+        if ! printf '%s\n' "$merge_verification" | grep -Eq \
+          '(^|[[:space:]])(verify_gate|readiness_check|validate_project|asset_check)([[:space:]]|$)|(^|[[:space:]])(pass|passed|exit 0|OK)([[:space:]]|$|\)|,|\.)|EVENTS\.md|docs/|\.pps/verify-stamp|^EVT-|^SRC-'; then
+          add_error "Merge receipt $merge_id Verification '$merge_verification' is not locatable evidence; name the gate/command with its recorded result, a stamp, an event line, or an in-repo evidence document."
+        fi
       fi
       overlap_sets="$(
         for set_value in "$merge_accepted" "$merge_rejected" "$merge_deferred"; do
@@ -1106,6 +1156,22 @@ if (( is_pps12 == 1 )); then
           disposition_path="$(printf '%s' "$disposition_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           [[ -n "$disposition_path" ]] || continue
           safe_project_path "$disposition_path" "Merge receipt $merge_id $set_name path" >/dev/null
+          if [[ "$set_name" == "Accepted" && "$merge_status" == "integrated" ]]; then
+            # An accepted artifact must be demonstrably real: present in the
+            # worktree or resolvable inside the Result Checkpoint. A ghost
+            # path proves nothing was merged.
+            accepted_real=0
+            if [[ -e "$root/$disposition_path" ]]; then
+              accepted_real=1
+            elif [[ "$merge_result" != "lineage_incomplete" && -n "$merge_result" ]] &&
+              command -v git >/dev/null 2>&1 &&
+              git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+              git -C "$root" cat-file -e "${merge_result}:${disposition_path}" 2>/dev/null; then
+              accepted_real=1
+            fi
+            (( accepted_real == 1 )) ||
+              add_error "Merge receipt $merge_id Accepted path '$disposition_path' does not exist in the worktree or in Result Checkpoint '$merge_result'; an integration must point at real merged artifacts."
+          fi
         done < <(printf '%s\n' "$set_value" | tr ',' '\n')
       done
       if [[ "$merge_status" == "integrated" ]]; then
@@ -1114,11 +1180,31 @@ if (( is_pps12 == 1 )); then
         checkpoint_ok "$merge_result" ||
           add_error "Merge receipt $merge_id Result Checkpoint '$merge_result' is not a resolvable Git object or the explicit lineage_incomplete marker."
         if [[ "$merge_base" == "lineage_incomplete" || "$merge_result" == "lineage_incomplete" ]]; then
-          # The migration escape hatch needs a reason on record; silent use
-          # on a project with normal Git history is forbidden.
+          # The migration escape hatch is for history that predates the
+          # layer. A project whose Git history already exists must use real
+          # checkpoints; a convenience note does not create eligibility.
           merge_lineage_note="$(merge_field 'Lineage Note')"
           if [[ -z "$merge_lineage_note" || "$merge_lineage_note" == "none" ]]; then
             add_error "Merge receipt $merge_id uses lineage_incomplete without a 'Lineage Note' field explaining why pre-layer history is unavailable; new projects must use real checkpoints."
+          fi
+          if command -v git >/dev/null 2>&1 &&
+            git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+            git -C "$root" rev-parse HEAD >/dev/null 2>&1; then
+            lineage_migration_ok=0
+            if grep -Eq "^-[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}:.*(migrat|adopt)" "$root/EVENTS.md" 2>/dev/null; then
+              lineage_migration_ok=1
+            fi
+            if printf '%s\n' "$merge_lineage_note" | grep -Eq '(^|[[:space:]])D-[A-Za-z0-9]' &&
+              [[ -f "$decisions" ]]; then
+              lineage_note_decision="$(printf '%s\n' "$merge_lineage_note" |
+                grep -Eo 'D-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?' | head -n 1)"
+              if [[ -n "$lineage_note_decision" ]] &&
+                grep -Eq "^###[[:space:]]+${lineage_note_decision}[[:space:]]+\[active\]" "$decisions"; then
+                lineage_migration_ok=1
+              fi
+            fi
+            (( lineage_migration_ok == 1 )) ||
+              add_error "Merge receipt $merge_id uses lineage_incomplete but this project has normal Git history and no recorded migration: cite an active D-* migration decision in the Lineage Note or record a migration/adoption event, otherwise use real checkpoints."
           fi
         fi
       fi
@@ -1156,6 +1242,45 @@ if (( is_pps12 == 1 )); then
       add_error "Task $terminal_id has $matching_receipts '$terminal_status' receipts; exactly one final disposition receipt is required."
     fi
   done <<< "$(printf '%s' "$terminal_tasks" | sed '/^$/d')"
+
+  # Archiving compresses the active surface; it must never blur the final
+  # disposition. An archived task keeps exactly one terminal receipt story.
+  while IFS= read -r archived_id; do
+    [[ -n "$archived_id" ]] || continue
+    archived_statuses=""
+    if [[ -f "$merges_file" ]]; then
+      while IFS= read -r merge_id; do
+        [[ -n "$merge_id" ]] || continue
+        merge_block="$(awk -v wanted="### $merge_id" '
+          index($0, wanted) == 1 { inside=1; next }
+          inside && /^###[[:space:]]/ { exit }
+          inside { print }
+        ' "$merges_file")"
+        block_status="$(printf '%s\n' "$merge_block" |
+          sed -n 's/^-[[:space:]]*Status:[[:space:]]*//p' | head -n 1)"
+        block_sources="$(printf '%s\n' "$merge_block" |
+          sed -n 's/^-[[:space:]]*Source Tasks:[[:space:]]*//p' | head -n 1)"
+        case "$block_status" in
+          integrated|deferred|rejected)
+            if printf '%s\n' "$block_sources" | tr ',' '\n' |
+              sed 's/^[[:space:]]*//;s/[[:space:]]*$//' |
+              grep -Fxq "$archived_id"; then
+              archived_statuses="${archived_statuses}${block_status}"$'\n'
+            fi
+            ;;
+        esac
+      done <<< "$(printf '%s\n' "$merge_ids" | awk '!seen[$0]++')"
+    fi
+    archived_distinct="$(printf '%s' "$archived_statuses" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')"
+    archived_total="$(printf '%s' "$archived_statuses" | sed '/^$/d' | wc -l | tr -d ' ')"
+    if [[ "$archived_total" == "0" ]]; then
+      add_error "Task $archived_id is 'archived' but no terminal receipt names it; archiving compresses history, it does not erase the final disposition."
+    elif [[ "$archived_distinct" != "1" ]]; then
+      add_error "Task $archived_id is 'archived' with contradictory terminal receipts ($(printf '%s' "$archived_statuses" | sed '/^$/d' | sort -u | tr '\n' ',' | sed 's/,$//')); an archived task keeps exactly one final disposition."
+    elif [[ "$archived_total" != "1" ]]; then
+      add_error "Task $archived_id is 'archived' with $archived_total terminal receipts of the same status; exactly one final disposition receipt is required."
+    fi
+  done <<< "$(printf '%s' "$archived_tasks" | sed '/^$/d' | awk '!seen[$0]++')"
 fi
 if [[ "$profile" == "evidence" && -f "$root/docs/CURRENT_REVIEW_EVIDENCE.md" ]]; then
   evidence_file="$root/docs/CURRENT_REVIEW_EVIDENCE.md"

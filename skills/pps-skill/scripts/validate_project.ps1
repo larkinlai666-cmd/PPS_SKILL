@@ -695,6 +695,24 @@ function Test-TaskCapsule([string]$CapsulePath, [string]$TaskId, [string]$TaskRo
     }
 }
 
+function Invoke-NativeProbe([scriptblock]$Command) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5 promotes native stderr to error records; a
+        # negative probe result is normal, not a terminating error.
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = @(& $Command 2>$null)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return @{
+        Code = $exitCode
+        Output = $output
+        Text = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+    }
+}
+
 function Test-CheckpointResolvable([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value -eq 'none') { return $false }
     if ($Value -eq 'lineage_incomplete') { return $true }
@@ -801,6 +819,7 @@ if ($isPps12) {
     $allTaskAssetRefs = @()
     $taskIds = @()
     $terminalTasks = @()
+    $archivedTasks = @()
     $outputRoots = @()
     if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
         $taskIndexText = Read-Utf8File $taskIndexPath
@@ -829,6 +848,9 @@ if ($isPps12) {
             }
             if ($taskStatus -in @('integrated', 'deferred', 'rejected')) {
                 $terminalTasks += [pscustomobject]@{ Id = $taskId; Status = $taskStatus }
+            }
+            if ($taskStatus -eq 'archived') {
+                $archivedTasks += $taskId
             }
             if ($taskRole -eq 'integrator' -and $taskStatus -eq 'active') {
                 $activeIntegrators += $taskId
@@ -970,31 +992,71 @@ if ($isPps12) {
                 Add-ValidationError "Merge receipt $mergeId Target Package must be a PKG-* ID, found '$($fields['Target Package'])'."
             }
             # The Target Package must be a real package: the current one or
-            # one recorded in the chronicle.
+            # one recorded in the chronicle as a parsed event line. A substring
+            # in a comment, heading, or prose is not evidence.
             if ($fields['Target Package'] -match '^PKG-' -and $fields['Target Package'] -ne $package) {
                 $eventsFile = Join-Path $rootFull 'EVENTS.md'
                 $targetKnown = $false
                 if (Test-Path -LiteralPath $eventsFile -PathType Leaf) {
                     $eventsBody = Read-Utf8File $eventsFile
-                    if ($eventsBody -match [regex]::Escape('[' + $fields['Target Package'] + ']')) {
+                    $eventLinePattern = '(?m)^-\s+\d{4}-\d{2}-\d{2}:\s+' +
+                        [regex]::Escape('[' + $fields['Target Package'] + ']') + '\s'
+                    if ($eventsBody -match $eventLinePattern) {
                         $targetKnown = $true
                     }
                 }
                 if (-not $targetKnown) {
-                    Add-ValidationError "Merge receipt $mergeId Target Package '$($fields['Target Package'])' is neither the current package '$package' nor recorded in EVENTS.md."
+                    Add-ValidationError "Merge receipt $mergeId Target Package '$($fields['Target Package'])' is neither the current package '$package' nor recorded as a real event line in EVENTS.md."
                 }
             }
             if ($fields['Status'] -eq 'integrated') {
-                # An integration without accepted content, approval, or
-                # verification is a claim, not a receipt.
+                # An integration without accepted content is a claim, not a
+                # receipt.
                 if ([string]::IsNullOrWhiteSpace($fields['Accepted']) -or $fields['Accepted'] -eq 'none') {
                     Add-ValidationError "Merge receipt $mergeId is 'integrated' with an empty Accepted set; an integration that accepted nothing is not an integration."
                 }
+            } elseif ($fields['Status'] -eq 'deferred') {
+                # A deferral must record what was deferred and when to wake it
+                # up, or the work intent is unrecoverable after archiving.
+                if ([string]::IsNullOrWhiteSpace($fields['Deferred']) -or $fields['Deferred'] -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'deferred' with an empty Deferred set; a deferral that defers nothing records nothing."
+                }
+                $reactivateMatch = [regex]::Match($body, '(?m)^-\s+Reactivate When:\s*(.*?)\s*$')
+                $reactivateValue = if ($reactivateMatch.Success) { $reactivateMatch.Groups[1].Value } else { '' }
+                if ([string]::IsNullOrWhiteSpace($reactivateValue) -or $reactivateValue -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'deferred' without a 'Reactivate When' field; a deferral without a reactivation condition is a silent abandonment."
+                }
+            } elseif ($fields['Status'] -eq 'rejected') {
+                # A rejection must record what was rejected and why; rejection
+                # never deletes the record.
+                if ([string]::IsNullOrWhiteSpace($fields['Rejected']) -or $fields['Rejected'] -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'rejected' with an empty Rejected set; a rejection that rejects nothing records nothing."
+                }
+                $reasonMatch = [regex]::Match($body, '(?m)^-\s+Reason:\s*(.*?)\s*$')
+                $reasonValue = if ($reasonMatch.Success) { $reasonMatch.Groups[1].Value } else { '' }
+                if ([string]::IsNullOrWhiteSpace($reasonValue) -or $reasonValue -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'rejected' without a 'Reason' field; the excluded outputs and the why must survive."
+                }
+            }
+            if ($fields['Status'] -in @('integrated', 'deferred', 'rejected')) {
+                # Every terminal disposition needs authorization and checked
+                # evidence, not only integrations.
                 if ([string]::IsNullOrWhiteSpace($fields['Approval']) -or $fields['Approval'] -eq 'none') {
-                    Add-ValidationError "Merge receipt $mergeId is 'integrated' without an Approval decision; name the D-* record that authorized this merge."
+                    Add-ValidationError "Merge receipt $mergeId is '$($fields['Status'])' without an Approval decision; name the D-* record that authorized this disposition."
                 }
                 if ([string]::IsNullOrWhiteSpace($fields['Verification']) -or $fields['Verification'] -eq 'none') {
-                    Add-ValidationError "Merge receipt $mergeId is 'integrated' without Verification evidence; name the command, test, or inspection that checked the merged result."
+                    Add-ValidationError "Merge receipt $mergeId is '$($fields['Status'])' without Verification evidence; name the command, test, or inspection that checked this disposition."
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($fields['Verification']) -and $fields['Verification'] -ne 'none') {
+                # Verification must be locatable evidence, not reassuring
+                # prose.
+                $verificationOk = $fields['Verification'] -match '(^|\s)(verify_gate|readiness_check|validate_project|asset_check)(\s|$)' -or
+                    $fields['Verification'] -match '(^|\s)(pass|passed|exit 0|OK)(\s|$|\)|,|\.)' -or
+                    $fields['Verification'] -match 'EVENTS\.md|docs/|\.pps/verify-stamp' -or
+                    $fields['Verification'] -match '^(EVT|SRC)-'
+                if (-not $verificationOk) {
+                    Add-ValidationError "Merge receipt $mergeId Verification '$($fields['Verification'])' is not locatable evidence; name the gate/command with its recorded result, a stamp, an event line, or an in-repo evidence document."
                 }
             }
             $sourceTasks = @()
@@ -1036,6 +1098,16 @@ if ($isPps12) {
                         Add-ValidationError "Merge receipt $mergeId Approval contains a non-D-* entry: '$approvalId'."
                     } elseif ($decisionText -notmatch ('(?m)^###\s+' + [regex]::Escape($approvalId) + '\s+\[')) {
                         Add-ValidationError "Merge receipt $mergeId Approval references unknown decision '$approvalId'."
+                    } else {
+                        # A decision that was rejected never authorized
+                        # anything; citing it as approval is a forged grant.
+                        $approvalStatusMatch = [regex]::Match(
+                            $decisionText,
+                            '(?m)^###\s+' + [regex]::Escape($approvalId) + '\s+\[(?<status>[^\]]+)\]')
+                        if ($approvalStatusMatch.Success -and
+                            $approvalStatusMatch.Groups['status'].Value -notin @('active', 'superseded')) {
+                            Add-ValidationError "Merge receipt $mergeId Approval cites $approvalId whose status is '[$($approvalStatusMatch.Groups['status'].Value)]'; a decision that never authorized the merge cannot approve it."
+                        }
                     }
                 }
             }
@@ -1051,6 +1123,28 @@ if ($isPps12) {
                         $dispositionPaths[$pathEntry] = $setName
                     }
                     $null = Resolve-ProjectFile $rootFull $pathEntry "Merge receipt $mergeId $setName path"
+                    if ($setName -eq 'Accepted' -and $fields['Status'] -eq 'integrated') {
+                        # An accepted artifact must be demonstrably real:
+                        # present in the worktree or resolvable inside the
+                        # Result Checkpoint. A ghost path proves nothing.
+                        $acceptedReal = $false
+                        $acceptedFull = Join-Path $rootFull $pathEntry
+                        if (Test-Path -LiteralPath $acceptedFull) {
+                            $acceptedReal = $true
+                        } elseif ($fields['Result Checkpoint'] -ne 'lineage_incomplete' -and
+                            -not [string]::IsNullOrWhiteSpace($fields['Result Checkpoint'])) {
+                            $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+                            if ($null -ne $gitCmd) {
+                                $catProbe = Invoke-NativeProbe {
+                                    & $gitCmd.Source -C $rootFull cat-file -e "$($fields['Result Checkpoint']):$pathEntry"
+                                }
+                                if ($catProbe.Code -eq 0) { $acceptedReal = $true }
+                            }
+                        }
+                        if (-not $acceptedReal) {
+                            Add-ValidationError "Merge receipt $mergeId Accepted path '$pathEntry' does not exist in the worktree or in Result Checkpoint '$($fields['Result Checkpoint'])'; an integration must point at real merged artifacts."
+                        }
+                    }
                 }
             }
             if ($fields['Status'] -eq 'integrated') {
@@ -1068,6 +1162,38 @@ if ($isPps12) {
                     $lineageNote = if ($lineageNoteMatch.Success) { $lineageNoteMatch.Groups[1].Value } else { '' }
                     if ([string]::IsNullOrWhiteSpace($lineageNote) -or $lineageNote -eq 'none') {
                         Add-ValidationError "Merge receipt $mergeId uses lineage_incomplete without a 'Lineage Note' field explaining why pre-layer history is unavailable; new projects must use real checkpoints."
+                    }
+                    # The escape hatch is for history that predates the layer.
+                    # A project with normal Git history must show a recorded
+                    # migration decision or event to qualify.
+                    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+                    $hasGitHistory = $false
+                    if ($null -ne $gitCmd) {
+                        $repoProbe2 = Invoke-NativeProbe { & $gitCmd.Source -C $rootFull rev-parse --is-inside-work-tree }
+                        if ($repoProbe2.Code -eq 0 -and $repoProbe2.Text -eq 'true') {
+                            $headProbe2 = Invoke-NativeProbe { & $gitCmd.Source -C $rootFull rev-parse HEAD }
+                            if ($headProbe2.Code -eq 0) { $hasGitHistory = $true }
+                        }
+                    }
+                    if ($hasGitHistory) {
+                        $migrationOk = $false
+                        $eventsFile2 = Join-Path $rootFull 'EVENTS.md'
+                        if (Test-Path -LiteralPath $eventsFile2 -PathType Leaf) {
+                            $eventsBody2 = Read-Utf8File $eventsFile2
+                            if ($eventsBody2 -match '(?m)^-\s+\d{4}-\d{2}-\d{2}:.*(migrat|adopt)') {
+                                $migrationOk = $true
+                            }
+                        }
+                        if (-not $migrationOk) {
+                            $noteDecisionMatch = [regex]::Match($lineageNote, 'D-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?')
+                            if ($noteDecisionMatch.Success -and
+                                $decisionText -match ('(?m)^###\s+' + [regex]::Escape($noteDecisionMatch.Value) + '\s+\[active\]')) {
+                                $migrationOk = $true
+                            }
+                        }
+                        if (-not $migrationOk) {
+                            Add-ValidationError "Merge receipt $mergeId uses lineage_incomplete but this project has normal Git history and no recorded migration: cite an active D-* migration decision in the Lineage Note or record a migration/adoption event, otherwise use real checkpoints."
+                        }
                     }
                 }
             }
@@ -1087,6 +1213,22 @@ if ($isPps12) {
             Add-ValidationError "Task $($terminal.Id) is '$($terminal.Status)' but no merge receipt with matching status names it; only a receipt proves disposition."
         } elseif ($matching.Count -ne 1) {
             Add-ValidationError "Task $($terminal.Id) has $($matching.Count) '$($terminal.Status)' receipts; exactly one final disposition receipt is required."
+        }
+    }
+
+    # Archiving compresses the active surface; it must never blur the final
+    # disposition. An archived task keeps exactly one terminal receipt story.
+    foreach ($archivedId in $archivedTasks) {
+        $archivedReceipts = @($mergeRecords | Where-Object {
+            $_.Status -in @('integrated', 'deferred', 'rejected') -and $archivedId -in $_.SourceTasks
+        })
+        $distinctStatuses = @($archivedReceipts | ForEach-Object { $_.Status } | Sort-Object -Unique)
+        if ($archivedReceipts.Count -eq 0) {
+            Add-ValidationError "Task $archivedId is 'archived' but no terminal receipt names it; archiving compresses history, it does not erase the final disposition."
+        } elseif ($distinctStatuses.Count -ne 1) {
+            Add-ValidationError "Task $archivedId is 'archived' with contradictory terminal receipts ($($distinctStatuses -join ', ')); an archived task keeps exactly one final disposition."
+        } elseif ($archivedReceipts.Count -ne 1) {
+            Add-ValidationError "Task $archivedId is 'archived' with $($archivedReceipts.Count) terminal receipts of the same status; exactly one final disposition receipt is required."
         }
     }
 

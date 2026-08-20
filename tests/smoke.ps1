@@ -1591,6 +1591,142 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         "uses lineage_incomplete without a 'Lineage Note'" `
         "lineage_incomplete without note"
 
+    $receiptBase = Join-Path $tempRoot "receipt-evidence-base"
+    Copy-Item -LiteralPath $multitaskCase -Destination $receiptBase -Recurse
+    $casePath = Join-Path $receiptBase "TASK_INDEX.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = [regex]::Replace(
+        $text2,
+        '(?s)(### T-002\n- Title: Worker\n- Role: worker\n- Status: )active',
+        '${1}integrated')
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    $casePath = Join-Path $receiptBase "DECISIONS.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = $text2.Replace('<!-- PPS:ACTIVE:END -->', "- ``D-001``" + "`n" + '<!-- PPS:ACTIVE:END -->')
+    $decisionBlocks = @(
+        '### D-001 [active]', '', '- Summary: Merge authorized.', '- Source: fixture.',
+        '- Scope: MERGE-001.', '- Supersedes: none.', '- Affects: merges.', '',
+        '### D-002 [rejected]', '', '- Summary: Merge NOT authorized.', '- Source: fixture.',
+        '- Scope: MERGE-001.', '- Supersedes: none.', '- Affects: merges.', '',
+        '## Status Events'
+    ) -join "`n"
+    $text2 = $text2.Replace('## Status Events', $decisionBlocks)
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    New-Item -ItemType Directory -Path (Join-Path $receiptBase "local-task-output/T-002") -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptBase "local-task-output/T-002/real.md"),
+        "real artifact`n", $utf8NoBom)
+    function Write-FixtureReceipt([string]$Dir, [string]$Approval, [string]$Verification, [string]$Accepted, [string]$Target) {
+        $receiptText = @(
+            '# Merges', '', '## Merge Receipts', '',
+            '### MERGE-001', "- Target Package: $Target", '- Source Tasks: T-002',
+            '- Relation: absorbs', "- Accepted: $Accepted", '- Rejected: none',
+            '- Deferred: none', '- Base Checkpoint: lineage_incomplete',
+            '- Result Checkpoint: lineage_incomplete', '- Lineage Note: migration per D-001',
+            "- Approval: $Approval", "- Verification: $Verification", '- Status: integrated'
+        ) -join "`n"
+        [System.IO.File]::WriteAllText((Join-Path $Dir "MERGES.md"), $receiptText + "`n", $utf8NoBom)
+    }
+
+    $receiptPhantomPackage = Join-Path $tempRoot "receipt-phantom-package"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptPhantomPackage -Recurse
+    [System.IO.File]::AppendAllText(
+        (Join-Path $receiptPhantomPackage "EVENTS.md"), "<!-- [PKG-999] -->`n", $utf8NoBom)
+    Write-FixtureReceipt $receiptPhantomPackage 'D-001' 'validate_project pass' 'local-task-output/T-002/real.md' 'PKG-999'
+    Assert-InvalidProject $receiptPhantomPackage `
+        "nor recorded as a real event line" `
+        "Receipt targeting package only mentioned in a comment"
+
+    $receiptRejectedApproval = Join-Path $tempRoot "receipt-rejected-approval"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptRejectedApproval -Recurse
+    Write-FixtureReceipt $receiptRejectedApproval 'D-002' 'validate_project pass' 'local-task-output/T-002/real.md' 'PKG-001'
+    Assert-InvalidProject $receiptRejectedApproval `
+        "a decision that never authorized the merge cannot approve it" `
+        "Receipt citing a rejected decision as approval"
+
+    $receiptProseVerification = Join-Path $tempRoot "receipt-prose-verification"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptProseVerification -Recurse
+    Write-FixtureReceipt $receiptProseVerification 'D-001' 'looked fine to me' 'local-task-output/T-002/real.md' 'PKG-001'
+    Assert-InvalidProject $receiptProseVerification `
+        "is not locatable evidence" `
+        "Receipt with prose-only verification"
+
+    $receiptGhostAccepted = Join-Path $tempRoot "receipt-ghost-accepted"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptGhostAccepted -Recurse
+    Write-FixtureReceipt $receiptGhostAccepted 'D-001' 'validate_project pass' 'local-task-output/T-002/ghost.md' 'PKG-001'
+    Assert-InvalidProject $receiptGhostAccepted `
+        "an integration must point at real merged artifacts" `
+        "Receipt accepting a nonexistent artifact"
+
+    $archivedContradiction = Join-Path $tempRoot "archived-contradiction"
+    Copy-Item -LiteralPath $receiptBase -Destination $archivedContradiction -Recurse
+    $casePath = Join-Path $archivedContradiction "TASK_INDEX.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = $text2.Replace('- Status: integrated', '- Status: archived')
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    $contradictionReceipts = @(
+        '# Merges', '', '## Merge Receipts', '',
+        '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: absorbs', '- Accepted: local-task-output/T-002/real.md', '- Rejected: none',
+        '- Deferred: none', '- Base Checkpoint: lineage_incomplete',
+        '- Result Checkpoint: lineage_incomplete', '- Lineage Note: migration per D-001',
+        '- Approval: D-001', '- Verification: validate_project pass', '- Status: integrated', '',
+        '### MERGE-002', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: rejected', '- Accepted: none', '- Rejected: local-task-output/T-002/real.md',
+        '- Deferred: none', '- Base Checkpoint: none', '- Result Checkpoint: none',
+        '- Approval: D-001', '- Verification: validate_project pass',
+        '- Reason: contradiction fixture', '- Status: rejected'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $archivedContradiction "MERGES.md"), $contradictionReceipts + "`n", $utf8NoBom)
+    Assert-InvalidProject $archivedContradiction `
+        "contradictory terminal receipts" `
+        "Archived task with contradictory receipts"
+
+    $emptyDeferred = Join-Path $tempRoot "empty-deferred"
+    Copy-Item -LiteralPath $receiptBase -Destination $emptyDeferred -Recurse
+    $casePath = Join-Path $emptyDeferred "TASK_INDEX.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = $text2.Replace('- Status: integrated', '- Status: deferred')
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    $emptyDeferredReceipt = @(
+        '# Merges', '', '## Merge Receipts', '',
+        '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: deferred', '- Accepted: none', '- Rejected: none',
+        '- Deferred: none', '- Base Checkpoint: none', '- Result Checkpoint: none',
+        '- Approval: none', '- Verification: none', '- Status: deferred'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $emptyDeferred "MERGES.md"), $emptyDeferredReceipt + "`n", $utf8NoBom)
+    Assert-InvalidProject $emptyDeferred `
+        "a deferral that defers nothing records nothing" `
+        "Deferred receipt with no deferred set"
+    Assert-InvalidProject $emptyDeferred `
+        "without a 'Reactivate When' field" `
+        "Deferred receipt without reactivation condition"
+
+    $emptyRejected = Join-Path $tempRoot "empty-rejected"
+    Copy-Item -LiteralPath $receiptBase -Destination $emptyRejected -Recurse
+    $casePath = Join-Path $emptyRejected "TASK_INDEX.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = $text2.Replace('- Status: integrated', '- Status: rejected')
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    $emptyRejectedReceipt = @(
+        '# Merges', '', '## Merge Receipts', '',
+        '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: rejected', '- Accepted: none', '- Rejected: none',
+        '- Deferred: none', '- Base Checkpoint: none', '- Result Checkpoint: none',
+        '- Approval: none', '- Verification: none', '- Status: rejected'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $emptyRejected "MERGES.md"), $emptyRejectedReceipt + "`n", $utf8NoBom)
+    Assert-InvalidProject $emptyRejected `
+        "a rejection that rejects nothing records nothing" `
+        "Rejected receipt with no rejected set"
+    Assert-InvalidProject $emptyRejected `
+        "without a 'Reason' field" `
+        "Rejected receipt without reason"
+
     $phantomRefs = Join-Path $tempRoot "phantom-refs"
     Copy-Item -LiteralPath $multitaskCase -Destination $phantomRefs -Recurse
     $casePath = Join-Path $phantomRefs "task-contexts/T-002.md"
