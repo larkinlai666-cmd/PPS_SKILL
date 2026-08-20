@@ -1648,7 +1648,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     Copy-Item -LiteralPath $receiptBase -Destination $receiptProseVerification -Recurse
     Write-FixtureReceipt $receiptProseVerification 'D-001' 'looked fine to me' 'local-task-output/T-002/real.md' 'PKG-001'
     Assert-InvalidProject $receiptProseVerification `
-        "is not locatable evidence" `
+        "is not a resolvable evidence reference" `
         "Receipt with prose-only verification"
 
     $receiptGhostAccepted = Join-Path $tempRoot "receipt-ghost-accepted"
@@ -1657,6 +1657,94 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     Assert-InvalidProject $receiptGhostAccepted `
         "an integration must point at real merged artifacts" `
         "Receipt accepting a nonexistent artifact"
+
+    $receiptMissingDoc = Join-Path $tempRoot "receipt-missing-evidence-doc"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptMissingDoc -Recurse
+    Write-FixtureReceipt $receiptMissingDoc 'D-001' 'docs/nonexistent-evidence.md' 'local-task-output/T-002/real.md' 'PKG-001'
+    Assert-InvalidProject $receiptMissingDoc `
+        "which does not exist" `
+        "Receipt citing a nonexistent evidence document"
+
+    $receiptBareGate = Join-Path $tempRoot "receipt-bare-gate-name"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptBareGate -Recurse
+    Write-FixtureReceipt $receiptBareGate 'D-001' 'verify_gate' 'local-task-output/T-002/real.md' 'PKG-001'
+    Assert-InvalidProject $receiptBareGate `
+        "names a gate without a recorded outcome" `
+        "Receipt naming a gate without an outcome"
+
+    $receiptUnowned = Join-Path $tempRoot "receipt-unowned-accepted"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptUnowned -Recurse
+    Write-FixtureReceipt $receiptUnowned 'D-001' 'validate_project pass' 'PROJECT_MAP.md' 'PKG-001'
+    Assert-InvalidProject $receiptUnowned `
+        "not inside any Source Task Output Root" `
+        "Receipt accepting an artifact outside every source task root"
+
+    $receiptSameCheckpoints = Join-Path $tempRoot "receipt-same-checkpoints"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptSameCheckpoints -Recurse
+    $gitTool = Get-Command git -ErrorAction SilentlyContinue
+    if ($null -ne $gitTool) {
+        & $gitTool.Source -C $receiptSameCheckpoints init -q 2>$null | Out-Null
+        & $gitTool.Source -C $receiptSameCheckpoints -c user.name="PPS Smoke" -c user.email="pps-smoke@example.invalid" add -A 2>$null | Out-Null
+        & $gitTool.Source -C $receiptSameCheckpoints -c user.name="PPS Smoke" -c user.email="pps-smoke@example.invalid" commit -qm fixture 2>$null | Out-Null
+        $sameHead = (& $gitTool.Source -C $receiptSameCheckpoints rev-parse HEAD 2>$null | Select-Object -First 1)
+        $sameReceipt = @(
+            '# Merges', '', '## Merge Receipts', '',
+            '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+            '- Relation: absorbs', '- Accepted: local-task-output/T-002/real.md',
+            '- Rejected: none', '- Deferred: none', "- Base Checkpoint: $sameHead",
+            "- Result Checkpoint: $sameHead", '- Approval: D-001',
+            '- Verification: validate_project pass', '- Status: integrated'
+        ) -join "`n"
+        [System.IO.File]::WriteAllText(
+            (Join-Path $receiptSameCheckpoints "MERGES.md"), $sameReceipt + "`n", $utf8NoBom)
+        Assert-InvalidProject $receiptSameCheckpoints `
+            "integration that changed nothing integrated nothing" `
+            "Receipt with identical base and result checkpoints"
+
+        $receiptNonMigration = Join-Path $tempRoot "receipt-nonmigration-decision"
+        Copy-Item -LiteralPath $receiptBase -Destination $receiptNonMigration -Recurse
+        & $gitTool.Source -C $receiptNonMigration init -q 2>$null | Out-Null
+        & $gitTool.Source -C $receiptNonMigration -c user.name="PPS Smoke" -c user.email="pps-smoke@example.invalid" add -A 2>$null | Out-Null
+        & $gitTool.Source -C $receiptNonMigration -c user.name="PPS Smoke" -c user.email="pps-smoke@example.invalid" commit -qm fixture 2>$null | Out-Null
+        Write-FixtureReceipt $receiptNonMigration 'D-001' 'validate_project pass' 'local-task-output/T-002/real.md' 'PKG-001'
+        Assert-InvalidProject $receiptNonMigration `
+            "does not authorize migrating or adopting pre-layer history" `
+            "lineage_incomplete citing a non-migration decision"
+    }
+
+    $taskBogusPackage = Join-Path $tempRoot "task-bogus-package"
+    Copy-Item -LiteralPath $multitaskCase -Destination $taskBogusPackage -Recurse
+    $casePath = Join-Path $taskBogusPackage "TASK_INDEX.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = $text2.Replace('- Active Package: PKG-001', '- Active Package: NOT-A-PACKAGE-ID')
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    Assert-InvalidProject $taskBogusPackage `
+        "Active Package must be a PKG" `
+        "Task with a malformed Active Package"
+
+    $taskDuplicateStatus = Join-Path $tempRoot "task-duplicate-status"
+    Copy-Item -LiteralPath $multitaskCase -Destination $taskDuplicateStatus -Recurse
+    $casePath = Join-Path $taskDuplicateStatus "TASK_INDEX.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = [regex]::Replace(
+        $text2,
+        '(?s)(### T-002\n- Title: Worker\n- Role: worker\n- Status: active)',
+        "`${1}`n- Status: integrated")
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    Assert-InvalidProject $taskDuplicateStatus `
+        "declares 'Status' 2 times" `
+        "Task declaring Status twice"
+
+    $receiptDuplicateStatus = Join-Path $tempRoot "receipt-duplicate-status"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptDuplicateStatus -Recurse
+    Write-FixtureReceipt $receiptDuplicateStatus 'D-001' 'validate_project pass' 'local-task-output/T-002/real.md' 'PKG-001'
+    $casePath = Join-Path $receiptDuplicateStatus "MERGES.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = $text2.Replace('- Status: integrated', "- Status: integrated`n- Status: rejected")
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    Assert-InvalidProject $receiptDuplicateStatus `
+        "declares 'Status' 2 times" `
+        "Receipt declaring Status twice"
 
     $archivedContradiction = Join-Path $tempRoot "archived-contradiction"
     Copy-Item -LiteralPath $receiptBase -Destination $archivedContradiction -Recurse

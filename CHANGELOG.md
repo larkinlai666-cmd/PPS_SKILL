@@ -4,6 +4,23 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-08-20
+
+Fifth review round. The reviewer switched to a full mutation matrix ("one legal field replaced at a time") instead of compound fixtures, which exposed that 0.4.4's evidence checks matched keywords rather than resolving references. Eight distinct misclassifications closed, plus two high-risk surfaces the earlier reports never touched.
+
+### Fixed
+
+- **Verification became a resolvable reference, not a keyword match**: exactly three accepted forms — `<gate> <outcome>` where the gate is a real PPS gate and the outcome is recorded, an existing `docs/` or `.pps/` evidence path, or an `EVENTS.md` reference whose date exists as an event line. A bare gate name (`verify_gate`), a nonexistent `docs/...` document, and prose all now fail with distinct diagnostics.
+- **Accepted paths must belong to a Source Task**: an integrated receipt's Accepted entries must sit inside one of the named Source Tasks' Output Roots. A real but unrelated artifact (e.g. `PROJECT_MAP.md`) can no longer masquerade as absorbed task output.
+- **Base and Result Checkpoints must differ**: identical checkpoints mean the tree never changed, so nothing was integrated.
+- **lineage_incomplete eligibility no longer keyword-matched**: event-prose matching is removed entirely (a line saying "explicitly forbid adopt" satisfied the old check). Eligibility now requires the Lineage Note to cite an `active` `D-*` decision whose record explicitly authorizes migrating or adopting pre-layer history; citing an unrelated decision fails with its own diagnostic.
+- **TASK_INDEX `Active Package` was completely unvalidated**: it must now be a well-formed `PKG-*` ID that is either the current package or recorded as a parsed EVENTS.md event line.
+- **Duplicate fields are rejected in task records and receipts**: first-match parsing let a second, contradictory line (e.g. a second `Status:`) hide in plain sight. Every field must be declared exactly once, on both platforms.
+
+### Added
+
+- Mutation-style negative fixtures on both platforms, one per diagnostic: missing evidence document, bare gate name, unowned Accepted path, identical checkpoints, non-migration decision cited for lineage, malformed Active Package, duplicate Status in a task record, duplicate Status in a receipt.
+
 ## [0.4.4] - 2026-08-20
 
 Fourth external-review round (PKG-027) accepted all fifteen previously closed bypasses, then advanced to receipt truthfulness and archived-state uniqueness. All four findings closed, each landed as failing field-level tests first on both platforms.

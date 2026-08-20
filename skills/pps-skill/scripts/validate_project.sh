@@ -843,6 +843,26 @@ if (( is_pps12 == 1 )); then
         sed -n 's/^-[[:space:]]*Capsule:[[:space:]]*//p' | head -n 1)"
       task_output_root="$(printf '%s\n' "$task_block" |
         sed -n 's/^-[[:space:]]*Output Root:[[:space:]]*//p' | head -n 1)"
+      # Duplicate fields make the record ambiguous: every parser picks one
+      # line and the other silently becomes a lie.
+      for task_field_name in Title Role Status "Active Package" Capsule "Output Root"; do
+        task_field_count="$(printf '%s\n' "$task_block" |
+          grep -Ec "^-[[:space:]]*${task_field_name}:" || true)"
+        (( task_field_count <= 1 )) ||
+          add_error "Task $task_id declares '$task_field_name' $task_field_count times; a task record must declare each field exactly once."
+      done
+      task_active_package="$(printf '%s\n' "$task_block" |
+        sed -n 's/^-[[:space:]]*Active Package:[[:space:]]*//p' | head -n 1)"
+      if [[ -z "$task_active_package" ]]; then
+        add_error "Task $task_id has no Active Package field."
+      elif ! printf '%s\n' "$task_active_package" |
+        grep -Eq '^PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$'; then
+        add_error "Task $task_id Active Package must be a PKG-* ID, found '$task_active_package'."
+      elif [[ "$task_active_package" != "$package" ]] &&
+        { [[ ! -f "$root/EVENTS.md" ]] ||
+          ! grep -Eq "^-[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}:[[:space:]]+\\[${task_active_package}\\][[:space:]]" "$root/EVENTS.md"; }; then
+        add_error "Task $task_id Active Package '$task_active_package' is neither the current package '$package' nor recorded as a real event line in EVENTS.md."
+      fi
       case "$task_role" in
         integrator|worker|consumer) ;;
         *) add_error "Task $task_id has invalid Role '$task_role'." ;;
@@ -997,6 +1017,16 @@ if (( is_pps12 == 1 )); then
         [[ -n "${required_pair#*:}" ]] ||
           add_error "Merge receipt $merge_id is missing the '${required_pair%%:*}' field."
       done
+      # Duplicate fields make the receipt ambiguous: first-match parsing lets
+      # a second, contradictory line hide in plain sight.
+      for merge_field_name in "Target Package" "Source Tasks" Relation Accepted \
+        Rejected Deferred "Base Checkpoint" "Result Checkpoint" Approval \
+        Verification Status "Lineage Note" "Reactivate When" Reason; do
+        merge_field_count="$(printf '%s\n' "$merge_block" |
+          grep -Ec "^-[[:space:]]*${merge_field_name}:" || true)"
+        (( merge_field_count <= 1 )) ||
+          add_error "Merge receipt $merge_id declares '$merge_field_name' $merge_field_count times; a receipt must declare each field exactly once."
+      done
       case "$merge_relation" in
         absorbs|layers_on|consumes_only|deferred|supersedes|rejected|rollback_to) ;;
         *) add_error "Merge receipt $merge_id has invalid Relation '$merge_relation'." ;;
@@ -1129,13 +1159,53 @@ if (( is_pps12 == 1 )); then
         done < <(printf '%s\n' "$merge_approval" | tr ',' '\n')
       fi
       if [[ -n "$merge_verification" && "$merge_verification" != "none" ]]; then
-        # Verification must be locatable evidence, not reassuring prose:
-        # a command/test with its recorded outcome, a verify stamp, an
-        # event line, or an in-repo evidence document.
-        if ! printf '%s\n' "$merge_verification" | grep -Eq \
-          '(^|[[:space:]])(verify_gate|readiness_check|validate_project|asset_check)([[:space:]]|$)|(^|[[:space:]])(pass|passed|exit 0|OK)([[:space:]]|$|\)|,|\.)|EVENTS\.md|docs/|\.pps/verify-stamp|^EVT-|^SRC-'; then
-          add_error "Merge receipt $merge_id Verification '$merge_verification' is not locatable evidence; name the gate/command with its recorded result, a stamp, an event line, or an in-repo evidence document."
+        # Verification must be a resolvable evidence reference, not text that
+        # merely looks like evidence. Three accepted forms:
+        #   1. "<gate/command> <outcome>"  e.g. "validate_project pass"
+        #   2. an in-repo evidence path that actually exists
+        #   3. an EVENTS.md event date that actually exists
+        verification_ok=0
+        verification_reason=""
+        if printf '%s\n' "$merge_verification" | grep -Eq \
+          '(^|[[:space:]])(verify_gate|readiness_check|validate_project|asset_check|boundary_check)([[:space:]]|$)'; then
+          # A named gate must carry a recorded outcome; a bare command name is
+          # an intention, not a result.
+          if printf '%s\n' "$merge_verification" | grep -Eq \
+            '(^|[[:space:]])(pass|passed|fail|failed|exit[[:space:]]+[0-9]+|OK)([[:space:]]|$|\)|,|\.|;)'; then
+            verification_ok=1
+          else
+            verification_reason="names a gate without a recorded outcome; add its result (for example 'validate_project pass')"
+          fi
+        elif printf '%s\n' "$merge_verification" | grep -Eq '(^|[[:space:]])(docs/|\.pps/)[^[:space:],]+'; then
+          # A document reference must resolve to a real file.
+          verification_missing=""
+          while IFS= read -r evidence_ref; do
+            [[ -n "$evidence_ref" ]] || continue
+            if [[ ! -e "$root/$evidence_ref" ]]; then
+              verification_missing="$evidence_ref"
+              break
+            fi
+          done < <(printf '%s\n' "$merge_verification" |
+            grep -Eo '(docs/|\.pps/)[^[:space:],]+')
+          if [[ -z "$verification_missing" ]]; then
+            verification_ok=1
+          else
+            verification_reason="cites evidence document '$verification_missing' which does not exist"
+          fi
+        elif printf '%s\n' "$merge_verification" | grep -Eq 'EVENTS\.md'; then
+          verification_event_date="$(printf '%s\n' "$merge_verification" |
+            grep -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)"
+          if [[ -n "$verification_event_date" ]] && [[ -f "$root/EVENTS.md" ]] &&
+            grep -Eq "^-[[:space:]]+${verification_event_date}:" "$root/EVENTS.md"; then
+            verification_ok=1
+          else
+            verification_reason="cites EVENTS.md without naming a date that exists as an event line"
+          fi
+        else
+          verification_reason="is not a resolvable evidence reference"
         fi
+        (( verification_ok == 1 )) ||
+          add_error "Merge receipt $merge_id Verification '$merge_verification' $verification_reason; use '<gate> <outcome>', an existing docs/ or .pps/ evidence path, or an EVENTS.md date that exists."
       fi
       overlap_sets="$(
         for set_value in "$merge_accepted" "$merge_rejected" "$merge_deferred"; do
@@ -1171,6 +1241,30 @@ if (( is_pps12 == 1 )); then
             fi
             (( accepted_real == 1 )) ||
               add_error "Merge receipt $merge_id Accepted path '$disposition_path' does not exist in the worktree or in Result Checkpoint '$merge_result'; an integration must point at real merged artifacts."
+            # An integration absorbs SOURCE TASK output. An accepted path that
+            # belongs to no named source task's Output Root cannot have come
+            # from this merge.
+            accepted_owned=0
+            while IFS= read -r owning_task; do
+              [[ -n "$owning_task" ]] || continue
+              owning_root="$(awk -v wanted="### $owning_task" '
+                index($0, wanted) == 1 { inside=1; next }
+                inside && /^###[[:space:]]/ { exit }
+                inside && index($0, "- Output Root:") == 1 {
+                  sub("^- Output Root:[[:space:]]*", "")
+                  print
+                  exit
+                }
+              ' "$task_index")"
+              [[ -n "$owning_root" && "$owning_root" != "none" ]] || continue
+              case "$disposition_path" in
+                "$owning_root" | "$owning_root"/*) accepted_owned=1; break ;;
+              esac
+            done < <(printf '%s\n' "$merge_sources" | tr ',' '\n' |
+              sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
+            if (( accepted_owned == 0 )); then
+              add_error "Merge receipt $merge_id Accepted path '$disposition_path' is not inside any Source Task Output Root ($merge_sources); an integration must absorb output produced by the named tasks."
+            fi
           fi
         done < <(printf '%s\n' "$set_value" | tr ',' '\n')
       done
@@ -1179,6 +1273,12 @@ if (( is_pps12 == 1 )); then
           add_error "Merge receipt $merge_id Base Checkpoint '$merge_base' is not a resolvable Git object or the explicit lineage_incomplete marker."
         checkpoint_ok "$merge_result" ||
           add_error "Merge receipt $merge_id Result Checkpoint '$merge_result' is not a resolvable Git object or the explicit lineage_incomplete marker."
+        # An integration moves the tree from one state to another. Identical
+        # base and result checkpoints mean nothing was integrated.
+        if [[ "$merge_base" != "lineage_incomplete" && "$merge_result" != "lineage_incomplete" &&
+          -n "$merge_base" && "$merge_base" == "$merge_result" ]]; then
+          add_error "Merge receipt $merge_id has identical Base and Result Checkpoints ('$merge_base'); an integration that changed nothing integrated nothing."
+        fi
         if [[ "$merge_base" == "lineage_incomplete" || "$merge_result" == "lineage_incomplete" ]]; then
           # The migration escape hatch is for history that predates the
           # layer. A project whose Git history already exists must use real
@@ -1190,21 +1290,33 @@ if (( is_pps12 == 1 )); then
           if command -v git >/dev/null 2>&1 &&
             git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
             git -C "$root" rev-parse HEAD >/dev/null 2>&1; then
+            # Eligibility must come from an explicit, reviewable decision.
+            # Keyword matching on event prose is not a gate: a line saying
+            # "forbid adopt" contains the same keyword as one granting it.
             lineage_migration_ok=0
-            if grep -Eq "^-[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}:.*(migrat|adopt)" "$root/EVENTS.md" 2>/dev/null; then
-              lineage_migration_ok=1
-            fi
             if printf '%s\n' "$merge_lineage_note" | grep -Eq '(^|[[:space:]])D-[A-Za-z0-9]' &&
               [[ -f "$decisions" ]]; then
               lineage_note_decision="$(printf '%s\n' "$merge_lineage_note" |
                 grep -Eo 'D-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?' | head -n 1)"
               if [[ -n "$lineage_note_decision" ]] &&
                 grep -Eq "^###[[:space:]]+${lineage_note_decision}[[:space:]]+\[active\]" "$decisions"; then
-                lineage_migration_ok=1
+                lineage_decision_block="$(awk -v wanted="### $lineage_note_decision " '
+                  index($0, wanted) == 1 { inside=1; next }
+                  inside && /^###[[:space:]]/ { exit }
+                  inside { print }
+                ' "$decisions")"
+                # The cited decision must actually be about migrating or
+                # adopting pre-layer history.
+                if printf '%s\n' "$lineage_decision_block" |
+                  grep -Eiq 'migrat|adopt|pre-layer|predates'; then
+                  lineage_migration_ok=1
+                else
+                  add_error "Merge receipt $merge_id Lineage Note cites $lineage_note_decision, but that decision does not authorize migrating or adopting pre-layer history."
+                fi
               fi
             fi
             (( lineage_migration_ok == 1 )) ||
-              add_error "Merge receipt $merge_id uses lineage_incomplete but this project has normal Git history and no recorded migration: cite an active D-* migration decision in the Lineage Note or record a migration/adoption event, otherwise use real checkpoints."
+              add_error "Merge receipt $merge_id uses lineage_incomplete but this project has normal Git history: cite an active D-* decision that explicitly authorizes migrating or adopting pre-layer history, otherwise use real checkpoints."
           fi
         fi
       fi

@@ -970,7 +970,7 @@ expect_invalid "$temp_root/receipt-rejected-approval" \
 cp -R "$receipt_base" "$temp_root/receipt-prose-verification"
 write_receipt "$temp_root/receipt-prose-verification" D-001 "looked fine to me" local-task-output/T-002/real.md PKG-001
 expect_invalid "$temp_root/receipt-prose-verification" \
-  "is not locatable evidence" \
+  "is not a resolvable evidence reference" \
   "Receipt with prose-only verification"
 
 cp -R "$receipt_base" "$temp_root/receipt-ghost-accepted"
@@ -978,6 +978,73 @@ write_receipt "$temp_root/receipt-ghost-accepted" D-001 "validate_project pass" 
 expect_invalid "$temp_root/receipt-ghost-accepted" \
   "an integration must point at real merged artifacts" \
   "Receipt accepting a nonexistent artifact"
+
+cp -R "$receipt_base" "$temp_root/receipt-missing-evidence-doc"
+write_receipt "$temp_root/receipt-missing-evidence-doc" D-001 "docs/nonexistent-evidence.md" local-task-output/T-002/real.md PKG-001
+expect_invalid "$temp_root/receipt-missing-evidence-doc" \
+  "which does not exist" \
+  "Receipt citing a nonexistent evidence document"
+
+cp -R "$receipt_base" "$temp_root/receipt-bare-gate-name"
+write_receipt "$temp_root/receipt-bare-gate-name" D-001 "verify_gate" local-task-output/T-002/real.md PKG-001
+expect_invalid "$temp_root/receipt-bare-gate-name" \
+  "names a gate without a recorded outcome" \
+  "Receipt naming a gate without an outcome"
+
+cp -R "$receipt_base" "$temp_root/receipt-unowned-accepted"
+write_receipt "$temp_root/receipt-unowned-accepted" D-001 "validate_project pass" PROJECT_MAP.md PKG-001
+expect_invalid "$temp_root/receipt-unowned-accepted" \
+  "not inside any Source Task Output Root" \
+  "Receipt accepting an artifact outside every source task root"
+
+cp -R "$receipt_base" "$temp_root/receipt-same-checkpoints"
+git -C "$temp_root/receipt-same-checkpoints" init -q
+git -C "$temp_root/receipt-same-checkpoints" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" add -A
+git -C "$temp_root/receipt-same-checkpoints" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" commit -qm fixture
+same_head="$(git -C "$temp_root/receipt-same-checkpoints" rev-parse HEAD)"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: absorbs\n- Accepted: local-task-output/T-002/real.md\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: %s\n- Result Checkpoint: %s\n- Approval: D-001\n- Verification: validate_project pass\n- Status: integrated\n' \
+    "$same_head" "$same_head"
+} >"$temp_root/receipt-same-checkpoints/MERGES.md"
+expect_invalid "$temp_root/receipt-same-checkpoints" \
+  "integration that changed nothing integrated nothing" \
+  "Receipt with identical base and result checkpoints"
+
+cp -R "$receipt_base" "$temp_root/receipt-nonmigration-decision"
+git -C "$temp_root/receipt-nonmigration-decision" init -q
+git -C "$temp_root/receipt-nonmigration-decision" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" add -A
+git -C "$temp_root/receipt-nonmigration-decision" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" commit -qm fixture
+write_receipt "$temp_root/receipt-nonmigration-decision" D-001 "validate_project pass" local-task-output/T-002/real.md PKG-001
+expect_invalid "$temp_root/receipt-nonmigration-decision" \
+  "does not authorize migrating or adopting pre-layer history" \
+  "lineage_incomplete citing a non-migration decision"
+
+cp -R "$multitask_case" "$temp_root/task-bogus-package"
+sed -i.bak 's|^- Active Package: PKG-001$|- Active Package: NOT-A-PACKAGE-ID|' \
+  "$temp_root/task-bogus-package/TASK_INDEX.md"
+expect_invalid "$temp_root/task-bogus-package" \
+  "Active Package must be a PKG-\* ID" \
+  "Task with a malformed Active Package"
+
+cp -R "$multitask_case" "$temp_root/task-duplicate-status"
+perl -0pi -e 's/(### T-002\n- Title: Worker\n- Role: worker\n- Status: active)/${1}\n- Status: integrated/' \
+  "$temp_root/task-duplicate-status/TASK_INDEX.md"
+expect_invalid "$temp_root/task-duplicate-status" \
+  "declares 'Status' 2 times" \
+  "Task declaring Status twice"
+
+cp -R "$receipt_base" "$temp_root/receipt-duplicate-status"
+write_receipt "$temp_root/receipt-duplicate-status" D-001 "validate_project pass" local-task-output/T-002/real.md PKG-001
+perl -0pi -e 's/(- Status: integrated)/${1}\n- Status: rejected/' \
+  "$temp_root/receipt-duplicate-status/MERGES.md"
+expect_invalid "$temp_root/receipt-duplicate-status" \
+  "declares 'Status' 2 times" \
+  "Receipt declaring Status twice"
 
 cp -R "$receipt_base" "$temp_root/receipt-lineage-no-migration"
 python3 - "$temp_root/receipt-lineage-no-migration" <<'PYEOF'
@@ -1009,7 +1076,7 @@ git -C "$temp_root/receipt-lineage-no-migration" -c user.name="PPS Smoke" \
 git -C "$temp_root/receipt-lineage-no-migration" -c user.name="PPS Smoke" \
   -c user.email="pps-smoke@example.invalid" commit -qm fixture
 expect_invalid "$temp_root/receipt-lineage-no-migration" \
-  "no recorded migration" \
+  "explicitly authorizes migrating or adopting pre-layer history" \
   "lineage_incomplete without migration eligibility"
 
 cp -R "$receipt_base" "$temp_root/archived-contradiction"

@@ -840,6 +840,34 @@ if ($isPps12) {
             $taskStatus = [regex]::Match($body, '(?m)^-\s+Status:\s*(.*?)\s*$').Groups[1].Value
             $taskCapsule = [regex]::Match($body, '(?m)^-\s+Capsule:\s*(.*?)\s*$').Groups[1].Value
             $taskOutputRoot = [regex]::Match($body, '(?m)^-\s+Output Root:\s*(.*?)\s*$').Groups[1].Value
+            # Duplicate fields make the record ambiguous: every parser picks
+            # one line and the other silently becomes a lie.
+            foreach ($dupTaskField in @('Title', 'Role', 'Status', 'Active Package', 'Capsule', 'Output Root')) {
+                $dupTaskCount = [regex]::Matches(
+                    $body, '(?m)^-\s+' + [regex]::Escape($dupTaskField) + ':').Count
+                if ($dupTaskCount -gt 1) {
+                    Add-ValidationError "Task $taskId declares '$dupTaskField' $dupTaskCount times; a task record must declare each field exactly once."
+                }
+            }
+            $taskActivePackage = [regex]::Match($body, '(?m)^-\s+Active Package:\s*(.*?)\s*$').Groups[1].Value
+            if ([string]::IsNullOrWhiteSpace($taskActivePackage)) {
+                Add-ValidationError "Task $taskId has no Active Package field."
+            } elseif ($taskActivePackage -notmatch '^PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$') {
+                Add-ValidationError "Task $taskId Active Package must be a PKG-* ID, found '$taskActivePackage'."
+            } elseif ($taskActivePackage -ne $package) {
+                $eventsFile4 = Join-Path $rootFull 'EVENTS.md'
+                $taskPackageKnown = $false
+                if (Test-Path -LiteralPath $eventsFile4 -PathType Leaf) {
+                    $taskEventPattern = '(?m)^-\s+\d{4}-\d{2}-\d{2}:\s+' +
+                        [regex]::Escape('[' + $taskActivePackage + ']') + '\s'
+                    if ((Read-Utf8File $eventsFile4) -match $taskEventPattern) {
+                        $taskPackageKnown = $true
+                    }
+                }
+                if (-not $taskPackageKnown) {
+                    Add-ValidationError "Task $taskId Active Package '$taskActivePackage' is neither the current package '$package' nor recorded as a real event line in EVENTS.md."
+                }
+            }
             if ($taskRole -notin @('integrator', 'worker', 'consumer')) {
                 Add-ValidationError "Task $taskId has invalid Role '$taskRole'."
             }
@@ -952,6 +980,20 @@ if ($isPps12) {
                 '(?ms)^###\s+' + [regex]::Escape($mergeId) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
             $body = if ($blockMatch.Success) { $blockMatch.Groups['body'].Value } else { '' }
             $fields = @{}
+            foreach ($dupField in @(
+                'Target Package', 'Source Tasks', 'Relation', 'Accepted',
+                'Rejected', 'Deferred', 'Base Checkpoint', 'Result Checkpoint',
+                'Approval', 'Verification', 'Status', 'Lineage Note',
+                'Reactivate When', 'Reason'
+            )) {
+                # Duplicate fields make the receipt ambiguous: first-match
+                # parsing lets a second, contradictory line hide in plain sight.
+                $dupCount = [regex]::Matches(
+                    $body, '(?m)^-\s+' + [regex]::Escape($dupField) + ':').Count
+                if ($dupCount -gt 1) {
+                    Add-ValidationError "Merge receipt $mergeId declares '$dupField' $dupCount times; a receipt must declare each field exactly once."
+                }
+            }
             foreach ($fieldName in @(
                 'Target Package', 'Source Tasks', 'Relation', 'Accepted',
                 'Rejected', 'Deferred', 'Base Checkpoint', 'Result Checkpoint',
@@ -1049,14 +1091,46 @@ if ($isPps12) {
                 }
             }
             if (-not [string]::IsNullOrWhiteSpace($fields['Verification']) -and $fields['Verification'] -ne 'none') {
-                # Verification must be locatable evidence, not reassuring
-                # prose.
-                $verificationOk = $fields['Verification'] -match '(^|\s)(verify_gate|readiness_check|validate_project|asset_check)(\s|$)' -or
-                    $fields['Verification'] -match '(^|\s)(pass|passed|exit 0|OK)(\s|$|\)|,|\.)' -or
-                    $fields['Verification'] -match 'EVENTS\.md|docs/|\.pps/verify-stamp' -or
-                    $fields['Verification'] -match '^(EVT|SRC)-'
+                # Verification must be a resolvable evidence reference, not
+                # text that merely looks like evidence.
+                $verificationValue = $fields['Verification']
+                $verificationOk = $false
+                $verificationReason = ''
+                if ($verificationValue -match '(^|\s)(verify_gate|readiness_check|validate_project|asset_check|boundary_check)(\s|$)') {
+                    # A named gate must carry a recorded outcome.
+                    if ($verificationValue -match '(^|\s)(pass|passed|fail|failed|exit\s+\d+|OK)(\s|$|\)|,|\.|;)') {
+                        $verificationOk = $true
+                    } else {
+                        $verificationReason = "names a gate without a recorded outcome; add its result (for example 'validate_project pass')"
+                    }
+                } elseif ($verificationValue -match '(^|\s)(docs/|\.pps/)[^\s,]+') {
+                    $verificationMissing = $null
+                    foreach ($refMatch in [regex]::Matches($verificationValue, '(docs/|\.pps/)[^\s,]+')) {
+                        $refPath = Join-Path $rootFull $refMatch.Value
+                        if (-not (Test-Path -LiteralPath $refPath)) {
+                            $verificationMissing = $refMatch.Value
+                            break
+                        }
+                    }
+                    if ($null -eq $verificationMissing) {
+                        $verificationOk = $true
+                    } else {
+                        $verificationReason = "cites evidence document '$verificationMissing' which does not exist"
+                    }
+                } elseif ($verificationValue -match 'EVENTS\.md') {
+                    $eventDateMatch = [regex]::Match($verificationValue, '\d{4}-\d{2}-\d{2}')
+                    $eventsFile3 = Join-Path $rootFull 'EVENTS.md'
+                    if ($eventDateMatch.Success -and (Test-Path -LiteralPath $eventsFile3 -PathType Leaf) -and
+                        (Read-Utf8File $eventsFile3) -match ('(?m)^-\s+' + [regex]::Escape($eventDateMatch.Value) + ':')) {
+                        $verificationOk = $true
+                    } else {
+                        $verificationReason = 'cites EVENTS.md without naming a date that exists as an event line'
+                    }
+                } else {
+                    $verificationReason = 'is not a resolvable evidence reference'
+                }
                 if (-not $verificationOk) {
-                    Add-ValidationError "Merge receipt $mergeId Verification '$($fields['Verification'])' is not locatable evidence; name the gate/command with its recorded result, a stamp, an event line, or an in-repo evidence document."
+                    Add-ValidationError "Merge receipt $mergeId Verification '$verificationValue' $verificationReason; use '<gate> <outcome>', an existing docs/ or .pps/ evidence path, or an EVENTS.md date that exists."
                 }
             }
             $sourceTasks = @()
@@ -1144,6 +1218,27 @@ if ($isPps12) {
                         if (-not $acceptedReal) {
                             Add-ValidationError "Merge receipt $mergeId Accepted path '$pathEntry' does not exist in the worktree or in Result Checkpoint '$($fields['Result Checkpoint'])'; an integration must point at real merged artifacts."
                         }
+                        # An integration absorbs SOURCE TASK output.
+                        $acceptedOwned = $false
+                        foreach ($owningTask in @($fields['Source Tasks'].Split(',') | ForEach-Object { $_.Trim() })) {
+                            if ([string]::IsNullOrWhiteSpace($owningTask)) { continue }
+                            $owningBlock = [regex]::Match(
+                                $taskIndexText,
+                                '(?ms)^###\s+' + [regex]::Escape($owningTask) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
+                            if (-not $owningBlock.Success) { continue }
+                            $owningRootMatch = [regex]::Match(
+                                $owningBlock.Groups['body'].Value, '(?m)^-\s+Output Root:\s*(.*?)\s*$')
+                            if (-not $owningRootMatch.Success) { continue }
+                            $owningRoot = $owningRootMatch.Groups[1].Value
+                            if ([string]::IsNullOrWhiteSpace($owningRoot) -or $owningRoot -eq 'none') { continue }
+                            if ($pathEntry -eq $owningRoot -or $pathEntry.StartsWith("$owningRoot/")) {
+                                $acceptedOwned = $true
+                                break
+                            }
+                        }
+                        if (-not $acceptedOwned) {
+                            Add-ValidationError "Merge receipt $mergeId Accepted path '$pathEntry' is not inside any Source Task Output Root ($($fields['Source Tasks'])); an integration must absorb output produced by the named tasks."
+                        }
                     }
                 }
             }
@@ -1153,6 +1248,13 @@ if ($isPps12) {
                 }
                 if (-not (Test-CheckpointResolvable $fields['Result Checkpoint'])) {
                     Add-ValidationError "Merge receipt $mergeId Result Checkpoint '$($fields['Result Checkpoint'])' is not a resolvable Git object or the explicit lineage_incomplete marker."
+                }
+                # An integration moves the tree from one state to another.
+                if ($fields['Base Checkpoint'] -ne 'lineage_incomplete' -and
+                    $fields['Result Checkpoint'] -ne 'lineage_incomplete' -and
+                    -not [string]::IsNullOrWhiteSpace($fields['Base Checkpoint']) -and
+                    $fields['Base Checkpoint'] -eq $fields['Result Checkpoint']) {
+                    Add-ValidationError "Merge receipt $mergeId has identical Base and Result Checkpoints ('$($fields['Base Checkpoint'])'); an integration that changed nothing integrated nothing."
                 }
                 if ($fields['Base Checkpoint'] -eq 'lineage_incomplete' -or
                     $fields['Result Checkpoint'] -eq 'lineage_incomplete') {
@@ -1176,23 +1278,26 @@ if ($isPps12) {
                         }
                     }
                     if ($hasGitHistory) {
+                        # Eligibility must come from an explicit, reviewable
+                        # decision. Keyword matching on event prose is not a
+                        # gate: "forbid adopt" contains the same keyword as a
+                        # line granting it.
                         $migrationOk = $false
-                        $eventsFile2 = Join-Path $rootFull 'EVENTS.md'
-                        if (Test-Path -LiteralPath $eventsFile2 -PathType Leaf) {
-                            $eventsBody2 = Read-Utf8File $eventsFile2
-                            if ($eventsBody2 -match '(?m)^-\s+\d{4}-\d{2}-\d{2}:.*(migrat|adopt)') {
+                        $noteDecisionMatch = [regex]::Match($lineageNote, 'D-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?')
+                        if ($noteDecisionMatch.Success -and
+                            $decisionText -match ('(?m)^###\s+' + [regex]::Escape($noteDecisionMatch.Value) + '\s+\[active\]')) {
+                            $decisionBlockMatch = [regex]::Match(
+                                $decisionText,
+                                '(?ms)^###\s+' + [regex]::Escape($noteDecisionMatch.Value) + '\s+\[[^\]]+\]\s*\r?\n(?<body>.*?)(?=^###\s+|^##\s+|\z)')
+                            $decisionBody = if ($decisionBlockMatch.Success) { $decisionBlockMatch.Groups['body'].Value } else { '' }
+                            if ($decisionBody -match '(?i)migrat|adopt|pre-layer|predates') {
                                 $migrationOk = $true
+                            } else {
+                                Add-ValidationError "Merge receipt $mergeId Lineage Note cites $($noteDecisionMatch.Value), but that decision does not authorize migrating or adopting pre-layer history."
                             }
                         }
                         if (-not $migrationOk) {
-                            $noteDecisionMatch = [regex]::Match($lineageNote, 'D-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?')
-                            if ($noteDecisionMatch.Success -and
-                                $decisionText -match ('(?m)^###\s+' + [regex]::Escape($noteDecisionMatch.Value) + '\s+\[active\]')) {
-                                $migrationOk = $true
-                            }
-                        }
-                        if (-not $migrationOk) {
-                            Add-ValidationError "Merge receipt $mergeId uses lineage_incomplete but this project has normal Git history and no recorded migration: cite an active D-* migration decision in the Lineage Note or record a migration/adoption event, otherwise use real checkpoints."
+                            Add-ValidationError "Merge receipt $mergeId uses lineage_incomplete but this project has normal Git history: cite an active D-* decision that explicitly authorizes migrating or adopting pre-layer history, otherwise use real checkpoints."
                         }
                     }
                 }
