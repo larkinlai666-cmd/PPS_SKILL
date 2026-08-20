@@ -1005,6 +1005,29 @@ bash "$boundary_case/scripts/boundary_check.sh" "$boundary_case" \
 grep -q 'claimed: docs/MAIN.md' "$temp_root/boundary-claimed.out"
 grep -q '^PPS boundary check: OK$' "$temp_root/boundary-claimed.out"
 
+terminal_subject="$temp_root/boundary-terminal-subject"
+bash "$skill/scripts/init_project.sh" boundary-terminal-subject \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+mkdir -p "$terminal_subject/task-contexts"
+{
+  printf '# T-002 Capsule\n\n## Workset Manifest\n\n'
+  printf -- '- Methods: none\n- Facts: none\n- Decisions: none\n- Sources: none\n- Assets: none\n'
+  printf -- '- Components: C-ROOT\n- Read: PROJECT_MAP.md\n- Write: local-task-output/T-002/out.md\n'
+  printf -- '- Verify: scripts/verify_gate.sh\n- Excluded: none\n- Coverage: CONTEXT.md\n'
+} >"$terminal_subject/task-contexts/T-002.md"
+{
+  printf '# Task Index\n\n## Task Index\n\n'
+  printf '### T-001\n- Title: I\n- Role: integrator\n- Status: active\n- Active Package: PKG-001\n- Capsule: CONTEXT.md\n- Output Root: none\n\n'
+  printf '### T-002\n- Title: W\n- Role: worker\n- Status: rejected\n- Active Package: PKG-001\n- Capsule: task-contexts/T-002.md\n- Output Root: local-task-output/T-002\n'
+} >"$terminal_subject/TASK_INDEX.md"
+if bash "$terminal_subject/scripts/boundary_check.sh" "$terminal_subject" \
+  --task T-002 >"$temp_root/boundary-terminal.out" 2>&1; then
+  echo "Boundary check granted write authority to a terminal-status task." >&2
+  exit 1
+fi
+grep -q "only an active task holds write authority" "$temp_root/boundary-terminal.out"
+
 unclaimed_canonical="$temp_root/boundary-canonical"
 bash "$skill/scripts/init_project.sh" boundary-canonical \
   --profile standard --parent "$temp_root" \

@@ -150,8 +150,13 @@ if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
         exit 1
     }
     $subjectRole = Get-TaskBlockField $taskIndexText $subject 'Role'
+    $subjectStatus = Get-TaskBlockField $taskIndexText $subject 'Status'
     $subjectCapsule = Get-TaskBlockField $taskIndexText $subject 'Capsule'
     $subjectOutputRoot = Get-TaskBlockField $taskIndexText $subject 'Output Root'
+    if ($subjectStatus -ne 'active') {
+        Write-Host "ERROR: acting task '$subject' has status '$subjectStatus'; only an active task holds write authority. A terminal or handoff task must not write again - reactivate it explicitly or act as the integrator."
+        exit 1
+    }
     if ($subjectRole -eq 'integrator' -and $subjectCapsule -ne 'CONTEXT.md') {
         Write-Host "ERROR: integrator task '$subject' must use CONTEXT.md as its capsule, found '$subjectCapsule'; a separate integrator capsule is an unvalidated grant channel."
         exit 1

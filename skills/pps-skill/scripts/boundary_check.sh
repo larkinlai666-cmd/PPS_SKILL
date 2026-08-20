@@ -152,8 +152,16 @@ if [[ -f "$task_index" ]]; then
     exit 1
   }
   subject_role="$(task_block_field "$subject" "Role")"
+  subject_status="$(task_block_field "$subject" "Status")"
   subject_capsule="$(task_block_field "$subject" "Capsule")"
   subject_output_root="$(task_block_field "$subject" "Output Root")"
+  case "$subject_status" in
+    active) ;;
+    *)
+      echo "ERROR: acting task '$subject' has status '$subject_status'; only an active task holds write authority. A terminal or handoff task must not write again — reactivate it explicitly or act as the integrator." >&2
+      exit 1
+      ;;
+  esac
   if [[ "$subject_role" == "integrator" && "$subject_capsule" != "CONTEXT.md" ]]; then
     echo "ERROR: integrator task '$subject' must use CONTEXT.md as its capsule, found '$subject_capsule'; a separate integrator capsule is an unvalidated grant channel." >&2
     exit 1

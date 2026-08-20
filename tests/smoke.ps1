@@ -1692,6 +1692,44 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw 'Boundary check rejected a claimed write.'
     }
 
+    $terminalSubject = Join-Path $tempRoot "boundary-terminal-subject"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName boundary-terminal-subject -Profile standard -ParentDir $tempRoot `
+        -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Boundary-terminal initialization failed." }
+    New-Item -ItemType Directory -Path (Join-Path $terminalSubject "task-contexts") -Force | Out-Null
+    $terminalCapsule = @(
+        '# T-002 Capsule', '', '## Workset Manifest', '',
+        '- Methods: none', '- Facts: none', '- Decisions: none',
+        '- Sources: none', '- Assets: none', '- Components: C-ROOT',
+        '- Read: PROJECT_MAP.md', '- Write: local-task-output/T-002/out.md',
+        '- Verify: scripts/verify_gate.ps1', '- Excluded: none', '- Coverage: CONTEXT.md'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $terminalSubject "task-contexts/T-002.md"),
+        $terminalCapsule + "`n", $utf8NoBom)
+    $terminalIndex = @(
+        '# Task Index', '', '## Task Index', '',
+        '### T-001', '- Title: I', '- Role: integrator', '- Status: active',
+        '- Active Package: PKG-001', '- Capsule: CONTEXT.md', '- Output Root: none', '',
+        '### T-002', '- Title: W', '- Role: worker', '- Status: rejected',
+        '- Active Package: PKG-001', '- Capsule: task-contexts/T-002.md',
+        '- Output Root: local-task-output/T-002'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $terminalSubject "TASK_INDEX.md"),
+        $terminalIndex + "`n", $utf8NoBom)
+    $terminalResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $terminalSubject 'scripts/boundary_check.ps1') `
+            -Root $terminalSubject -Task T-002 2>&1
+    }
+    if ($terminalResult.Code -eq 0 -or
+        $terminalResult.Text -notmatch 'only an active task holds write authority') {
+        throw 'Boundary check granted write authority to a terminal-status task.'
+    }
+
     $boundaryCanonical = Join-Path $tempRoot "boundary-canonical"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `

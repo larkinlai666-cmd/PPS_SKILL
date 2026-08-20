@@ -4,6 +4,10 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+### Fixed
+
+- **Self-adversarial round (no external report)**: predicted the fourth attack layer from the escalation pattern of the three external rounds and probed four candidate vectors. Three were already blocked by existing guards (unrouted-but-plausible Verify wrapper declarations, symlinked Output Root, `|` injection in event fields). One was real and is now closed: a terminal-status task (`rejected`/`integrated`/`deferred`/`handoff_ready`) could still act as the boundary subject via `--task`/`-Task` and reclaim its old write authority — boundary_check now requires the acting subject to be `active` on both platforms, with negative tests.
+
 ## [0.4.3] - 2026-08-20
 
 Third hardening round, driven by the reviewer's live layer-3 probing which found real misclassifications in 0.4.2's own fixes.
