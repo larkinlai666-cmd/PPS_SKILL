@@ -25,6 +25,10 @@ foreach ($segment in @($Title, $Files, $Verify, $Pending)) {
         Write-Host "ERROR: event segments must not contain the '|' separator character."
         exit 1
     }
+    if ($segment.Contains("`n") -or $segment.Contains("`r")) {
+        Write-Host "ERROR: event segments must be single-line; newlines could forge extra chronicle lines or sections."
+        exit 1
+    }
 }
 
 $eventsPath = Join-Path $rootFull 'EVENTS.md'

@@ -103,6 +103,14 @@ if [[ "$protocol" == "PPS/1.2" ]]; then
   stamp_field() {
     sed -n "s/^$1:[[:space:]]*//p" "$stamp_file" | head -n 1
   }
+  for stamp_field_name in package entry entry_sha256 capsule_sha256 platform result worktree verified_at; do
+    stamp_field_count="$(grep -c "^${stamp_field_name}:" "$stamp_file" || true)"
+    if [[ "$stamp_field_count" != "1" ]]; then
+      echo "PPS readiness: VERIFY EVIDENCE STALE" >&2
+      echo "Verify stamp declares the '$stamp_field_name' field $stamp_field_count times; an ambiguous stamp is not evidence. Rerun scripts/verify_gate.* on this device." >&2
+      exit 4
+    fi
+  done
   stamp_package="$(stamp_field package)"
   stamp_entry="$(stamp_field entry)"
   stamp_entry_sha="$(stamp_field entry_sha256)"

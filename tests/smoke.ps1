@@ -1481,6 +1481,68 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         "Accepted path must be a" `
         "Receipt disposition path escape"
 
+    $receiptStatusMismatch = Join-Path $tempRoot "receipt-status-mismatch"
+    Copy-Item -LiteralPath $multitaskCase -Destination $receiptStatusMismatch -Recurse
+    $casePath = Join-Path $receiptStatusMismatch "DECISIONS.md"
+    $text2 = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
+    $text2 = $text2.Replace('<!-- PPS:ACTIVE:END -->', "- ``D-001``" + "`n" + "<!-- PPS:ACTIVE:END -->")
+    $text2 = $text2.Replace('## Status Events', (@("### D-001 [active]", "", "- Summary: Fixture approval.", "- Source: fixture.", "- Scope: MERGE-001.", "- Supersedes: none.", "- Affects: merges.", "", "## Status Events") -join "`n"))
+    [System.IO.File]::WriteAllText($casePath, $text2, $utf8NoBom)
+    $mismatchReceipt = @(
+        '# Merges', '', '## Merge Receipts', '',
+        '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: absorbs', '- Accepted: docs/MAIN.md', '- Rejected: none',
+        '- Deferred: none', '- Base Checkpoint: lineage_incomplete',
+        '- Result Checkpoint: lineage_incomplete', '- Lineage Note: fixture migration marker',
+        '- Approval: D-001', '- Verification: manual review', '- Status: integrated'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptStatusMismatch "MERGES.md"),
+        $mismatchReceipt + "`n", $utf8NoBom)
+    Assert-InvalidProject $receiptStatusMismatch `
+        "the registry and the receipt must agree" `
+        "Receipt terminal status vs active registry"
+
+    $ambiguousStampCase = Join-Path $tempRoot "ambiguous-stamp-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName ambiguous-stamp-case -Profile standard -ParentDir $tempRoot `
+        -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Ambiguous-stamp initialization failed." }
+    $ambGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $ambiguousStampCase 'scripts/verify_gate.ps1') `
+            -Root $ambiguousStampCase 2>&1
+    }
+    if ($ambGate.Code -ne 0) { throw "Verify gate failed: $($ambGate.Text)" }
+    $ambStampPath = Join-Path $ambiguousStampCase '.pps/verify-stamp'
+    $ambText = [System.IO.File]::ReadAllText($ambStampPath, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText(
+        $ambStampPath,
+        "result: pass`npackage: PKG-001`n" + $ambText.Replace('result: pass', 'result: fail'),
+        $utf8NoBom)
+    $ambReadiness = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $ambiguousStampCase 'scripts/readiness_check.ps1') `
+            -Root $ambiguousStampCase -Verified 2>&1
+    }
+    if ($ambReadiness.Code -ne 4 -or
+        $ambReadiness.Text -notmatch 'ambiguous stamp is not evidence') {
+        throw 'Readiness accepted a stamp with duplicated fields.'
+    }
+
+    $newlineEventCase = Join-Path $tempRoot "newline-event-case"
+    Copy-Item -LiteralPath $standard -Destination $newlineEventCase -Recurse
+    $newlineResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $newlineEventCase 'scripts/append_event.ps1') `
+            -Root $newlineEventCase -Title "clean`n## Forged Section" 2>&1
+    }
+    if ($newlineResult.Code -eq 0 -or
+        $newlineResult.Text -notmatch 'single-line') {
+        throw 'Event appender accepted a multi-line segment.'
+    }
+
     $workerWritesMain = Join-Path $tempRoot "worker-writes-main"
     Copy-Item -LiteralPath $multitaskCase -Destination $workerWritesMain -Recurse
     $casePath = Join-Path $workerWritesMain "task-contexts/T-002.md"

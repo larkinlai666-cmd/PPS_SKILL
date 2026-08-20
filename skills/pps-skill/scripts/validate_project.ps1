@@ -1007,6 +1007,23 @@ if ($isPps12) {
                         Add-ValidationError "Merge receipt $mergeId references unknown Source Task '$srcTask'."
                     } else {
                         $sourceTasks += $srcTask
+                        # Consistency must hold in both directions: a terminal
+                        # receipt about a task the registry still lists as
+                        # active means the two truth sources disagree.
+                        if ($fields['Status'] -in @('integrated', 'deferred', 'rejected')) {
+                            $srcBlock = [regex]::Match(
+                                $taskIndexText,
+                                '(?ms)^###\s+' + [regex]::Escape($srcTask) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
+                            $srcStatus = ''
+                            if ($srcBlock.Success) {
+                                $srcStatusMatch = [regex]::Match(
+                                    $srcBlock.Groups['body'].Value, '(?m)^-\s+Status:\s*(.*?)\s*$')
+                                if ($srcStatusMatch.Success) { $srcStatus = $srcStatusMatch.Groups[1].Value }
+                            }
+                            if ($srcStatus -ne $fields['Status'] -and $srcStatus -ne 'archived') {
+                                Add-ValidationError "Merge receipt $mergeId says Task $srcTask is '$($fields['Status'])' but TASK_INDEX.md records status '$srcStatus'; the registry and the receipt must agree."
+                            }
+                        }
                     }
                 }
             } else {

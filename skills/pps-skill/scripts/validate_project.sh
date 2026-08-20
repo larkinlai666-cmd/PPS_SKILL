@@ -1051,6 +1051,25 @@ if (( is_pps12 == 1 )); then
             add_error "Merge receipt $merge_id Source Tasks contains a non-T-* entry: '$src_task'."
           elif ! printf '%s\n' "$task_ids" | grep -Fxq "$src_task"; then
             add_error "Merge receipt $merge_id references unknown Source Task '$src_task'."
+          else
+            # Consistency must hold in both directions: a terminal receipt
+            # about a task that the registry still lists as active means the
+            # two truth sources disagree.
+            case "$merge_status" in
+              integrated|deferred|rejected)
+                src_status="$(awk -v wanted="### $src_task" '
+                  index($0, wanted) == 1 { inside=1; next }
+                  inside && /^###[[:space:]]/ { exit }
+                  inside && index($0, "- Status:") == 1 {
+                    sub("^- Status:[[:space:]]*", "")
+                    print
+                    exit
+                  }
+                ' "$task_index")"
+                [[ "$src_status" == "$merge_status" || "$src_status" == "archived" ]] ||
+                  add_error "Merge receipt $merge_id says Task $src_task is '$merge_status' but TASK_INDEX.md records status '$src_status'; the registry and the receipt must agree."
+                ;;
+            esac
           fi
         done < <(printf '%s\n' "$merge_sources" | tr ',' '\n')
       else

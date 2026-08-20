@@ -63,6 +63,12 @@ case "$title$files_value$verify_value$pending_value" in
     exit 1
     ;;
 esac
+case "$title$files_value$verify_value$pending_value" in
+  *$'\n'* | *$'\r'*)
+    echo "ERROR: event segments must be single-line; newlines could forge extra chronicle lines or sections." >&2
+    exit 1
+    ;;
+esac
 
 events_file="$root/EVENTS.md"
 [[ -f "$events_file" ]] || {

@@ -6,6 +6,10 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ### Fixed
 
+- **Self-adversarial loop until convergence (three probe rounds, 14 vectors)**: round 1 hit 3 real gaps, now closed with negative tests on both platforms: (a) validator enforced task→receipt direction but not receipt→registry — a terminal-status receipt naming a still-`active` task passed; the two truth sources must now agree; (b) verify stamps with duplicated fields exploited first-match parsing so a prepended `result: pass` shadowed the real `result: fail`; readiness now rejects any stamp declaring a required field more than once; (c) `append_event.*` accepted multi-line segments — Bash awk failed silently while still reporting success, and forged chronicle lines or sections were possible; segments must now be single-line, enforced on both platforms. Rounds 2 and 3 (command-substitution injection via hot-state fields, dot-segment/trailing-slash path claims, concurrent gate runs, whitespace-only evidence cells, post-baseline self-granting capsule edits, archived-task escapes, cross-file package desync) scored zero hits: existing guards held.
+
+### Fixed
+
 - **Self-adversarial round (no external report)**: predicted the fourth attack layer from the escalation pattern of the three external rounds and probed four candidate vectors. Three were already blocked by existing guards (unrouted-but-plausible Verify wrapper declarations, symlinked Output Root, `|` injection in event fields). One was real and is now closed: a terminal-status task (`rejected`/`integrated`/`deferred`/`handoff_ready`) could still act as the boundary subject via `--task`/`-Task` and reclaim its old write authority — boundary_check now requires the acting subject to be `active` on both platforms, with negative tests.
 
 ## [0.4.3] - 2026-08-20

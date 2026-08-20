@@ -882,6 +882,24 @@ expect_invalid "$temp_root/receipt-escape-path" \
   "Accepted path must be a safe project-relative path" \
   "Receipt disposition path escape"
 
+cp -R "$multitask_case" "$temp_root/receipt-status-mismatch"
+python3 - "$temp_root/receipt-status-mismatch" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/DECISIONS.md'
+t = open(p, encoding='utf-8').read()
+t = t.replace('<!-- PPS:ACTIVE:END -->', '- `D-001`\n<!-- PPS:ACTIVE:END -->')
+t = t.replace('## Status Events', '### D-001 [active]\n\n- Summary: Fixture approval.\n- Source: fixture.\n- Scope: MERGE-001.\n- Supersedes: none.\n- Affects: merges.\n\n## Status Events')
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: absorbs\n- Accepted: docs/MAIN.md\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: lineage_incomplete\n- Result Checkpoint: lineage_incomplete\n- Lineage Note: fixture migration marker\n- Approval: D-001\n- Verification: manual review\n- Status: integrated\n'
+} >"$temp_root/receipt-status-mismatch/MERGES.md"
+expect_invalid "$temp_root/receipt-status-mismatch" \
+  "the registry and the receipt must agree" \
+  "Receipt terminal status vs active registry"
+
 cp -R "$multitask_case" "$temp_root/worker-writes-main"
 sed -i.bak 's|^- Write: local-task-output/T-002/out.md$|- Write: docs/MAIN.md|' \
   "$temp_root/worker-writes-main/task-contexts/T-002.md"
@@ -1151,6 +1169,36 @@ bash "$capsule_drift_case/scripts/readiness_check.sh" "$capsule_drift_case" --ve
 capsule_drift_code=$?
 set -e
 [[ "$capsule_drift_code" == "4" ]]
+
+ambiguous_stamp_case="$temp_root/ambiguous-stamp-case"
+bash "$skill/scripts/init_project.sh" ambiguous-stamp-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+bash "$ambiguous_stamp_case/scripts/verify_gate.sh" "$ambiguous_stamp_case" >/dev/null
+python3 - "$ambiguous_stamp_case/.pps/verify-stamp" <<'PYEOF'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+open(p, 'w').write('result: pass\npackage: PKG-001\n' + t.replace('result: pass', 'result: fail'))
+PYEOF
+set +e
+bash "$ambiguous_stamp_case/scripts/readiness_check.sh" "$ambiguous_stamp_case" --verified \
+  >"$temp_root/ambiguous-stamp.out" 2>&1
+ambiguous_code=$?
+set -e
+[[ "$ambiguous_code" == "4" ]]
+grep -q 'ambiguous stamp is not evidence' "$temp_root/ambiguous-stamp.out"
+
+newline_event_case="$temp_root/newline-event-case"
+cp -R "$temp_root/standard-case" "$newline_event_case"
+set +e
+bash "$newline_event_case/scripts/append_event.sh" "$newline_event_case" \
+  --title "$(printf 'clean\n## Forged Section')" \
+  >"$temp_root/newline-event.out" 2>&1
+newline_code=$?
+set -e
+[[ "$newline_code" != "0" ]]
+grep -q 'single-line' "$temp_root/newline-event.out"
 
 event_placement_case="$temp_root/event-placement-case"
 cp -R "$temp_root/standard-case" "$event_placement_case"

@@ -79,10 +79,26 @@ if ($protocol -eq 'PPS/1.2') {
         exit 4
     }
     $stamp = @{}
+    $stampFieldCounts = @{}
     foreach ($line in [System.IO.File]::ReadAllLines($stampPath, [System.Text.Encoding]::UTF8)) {
         $sep = $line.IndexOf(':')
         if ($sep -gt 0) {
-            $stamp[$line.Substring(0, $sep).Trim()] = $line.Substring($sep + 1).Trim()
+            $key = $line.Substring(0, $sep).Trim()
+            if (-not $stampFieldCounts.ContainsKey($key)) { $stampFieldCounts[$key] = 0 }
+            $stampFieldCounts[$key]++
+            if (-not $stamp.ContainsKey($key)) {
+                $stamp[$key] = $line.Substring($sep + 1).Trim()
+            }
+        }
+    }
+    foreach ($fieldName in @(
+        'package', 'entry', 'entry_sha256', 'capsule_sha256',
+        'platform', 'result', 'worktree', 'verified_at'
+    )) {
+        if ($stampFieldCounts.ContainsKey($fieldName) -and $stampFieldCounts[$fieldName] -ne 1) {
+            Write-Output 'PPS readiness: VERIFY EVIDENCE STALE'
+            Write-Output "Verify stamp declares the '$fieldName' field $($stampFieldCounts[$fieldName]) times; an ambiguous stamp is not evidence. Rerun scripts/verify_gate.* on this device."
+            exit 4
         }
     }
     function Deny-StaleStamp([string]$Reason) {
