@@ -59,6 +59,94 @@ if ! printf '%s' "$verify_decl" | grep -Eq 'scripts/(verify_gate|project_verify)
 fi
 echo "Verify routing: declaration routes through the gate entry"
 
+echo "-- Step 2b/4: gate substance"
+verify_entry="$root/scripts/project_verify.sh"
+[[ -f "$verify_entry" ]] || {
+  echo "ERROR: missing verification entry: scripts/project_verify.sh" >&2
+  echo "PPS verify gate: FAILED (missing verification entry)" >&2
+  exit 1
+}
+# A gate that executes an empty entry proves execution of nothing. Refuse the
+# hollow entry outright: this is the "knowing is not doing" failure the stamp
+# exists to prevent.
+substantive_lines="$(grep -vE '^[[:space:]]*(#|$)' "$verify_entry" |
+  grep -vE '^[[:space:]]*(exit[[:space:]]+0|true|:)[[:space:]]*$' |
+  grep -vE '^[[:space:]]*echo[[:space:]]' | wc -l | tr -d '[:space:]')"
+if ! grep -Eq '(^|[^[:alnum:]_])check[[:space:]]+"' "$verify_entry" ||
+  (( substantive_lines < 5 )); then
+  echo "ERROR: scripts/project_verify.sh has no real checks; an unconditional 'exit 0' or an echo-only entry defeats the gate." >&2
+  echo "Declare at least one check that fails non-zero when the project is broken." >&2
+  echo "PPS verify gate: FAILED (hollow verification entry)" >&2
+  exit 1
+fi
+mode_value="$(
+  awk '
+    $0 ~ "^##[[:space:]]+Hot State[[:space:]]*$" { inside=1; next }
+    inside && /^##[[:space:]]/ { exit }
+    inside && index($0, "- Mode:") == 1 {
+      sub("^- Mode:[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$root/PROJECT_STATE.md"
+)"
+case "$mode_value" in
+  software | hybrid)
+    # Unit tests can pass while the caller path is broken: a software package
+    # needs at least one check that is not the structural validator itself.
+    behavioral_checks="$(grep -E '(^|[^[:alnum:]_])check[[:space:]]+"' "$verify_entry" |
+      grep -vE 'validate_project|validate_skill' | wc -l | tr -d '[:space:]')"
+    if (( behavioral_checks < 1 )); then
+      echo "ERROR: software package needs a behavioral check: scripts/project_verify.sh declares only structural validation." >&2
+      echo "Add at least one check that exercises the product the way a user reaches it." >&2
+      echo "PPS verify gate: FAILED (no behavioral check)" >&2
+      exit 1
+    fi
+    ;;
+esac
+echo "gate substance: entry declares real checks"
+
+echo "-- Step 2c/4: red line wiring"
+# Red lines may name the check that enforces them: "(verify: path)". When a
+# red line names one, the gate entry must actually reference that path, or the
+# red line is a wish rather than a rule.
+redline_targets=""
+if [[ -f "$root/AGENTS.md" ]]; then
+  redline_targets="$(
+    awk '
+      $0 ~ "^##[[:space:]]+Red Lines[[:space:]]*$" { inside=1; next }
+      inside && /^##[[:space:]]/ { exit }
+      inside { print }
+    ' "$root/AGENTS.md" | grep -Eo '\(verify:[[:space:]]*[^)]+\)' |
+      sed -E 's/^\(verify:[[:space:]]*//; s/\)$//' |
+      sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | sort -u
+  )"
+fi
+if [[ -n "$redline_targets" ]]; then
+  manifest_file="$root/.pps/verify-manifest.txt"
+  redline_unwired=0
+  while IFS= read -r redline_target; do
+    [[ -n "$redline_target" ]] || continue
+    if grep -Fq "$redline_target" "$verify_entry"; then
+      continue
+    fi
+    if [[ -f "$manifest_file" ]] && grep -Fq "$redline_target" "$manifest_file" &&
+      grep -Fq "verify-manifest" "$verify_entry"; then
+      continue
+    fi
+    echo "ERROR: red line names '(verify: $redline_target)' but scripts/project_verify.sh does not reference it." >&2
+    redline_unwired=1
+  done <<< "$redline_targets"
+  if (( redline_unwired == 1 )); then
+    echo "Wire the named check into the gate entry (or list it in .pps/verify-manifest.txt and read that manifest)." >&2
+    echo "PPS verify gate: FAILED (red line not wired to the gate)" >&2
+    exit 1
+  fi
+  echo "red line wiring: all named checks are wired into the gate entry"
+else
+  echo "red line wiring: no red line names a machine check (human-only red lines are allowed)"
+fi
+
 echo "-- Step 3/4: project verification entry"
 entry_rel="scripts/project_verify.sh"
 entry="$root/$entry_rel"

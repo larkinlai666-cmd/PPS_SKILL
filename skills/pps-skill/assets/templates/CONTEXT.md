@@ -45,6 +45,21 @@
 | M-001 | Stable IDs and explicit workset retrieval | `CONTEXT.md` / Workset Manifest | verify_gate: structural validation checks manifest IDs |
 | M-002 | Close only after propagation and validation | `AGENTS.md` / 写入与并发 | verify_gate: close requires gate pass and verify stamp |
 
+## Runtime Surfaces
+
+<!--
+Optional (PPS/1.2). Declare surfaces where the product actually runs outside
+this repository: an installed copy, a user-profile config directory, a deployed
+service. Git synchronization cannot prove a deployed system loaded the new
+bytes; a probe can. Record the environment VARIABLE NAME, never an absolute
+path (absolute paths in Git are machine-specific lies). The probe must be
+referenced by scripts/project_verify.* or it never runs. Delete this section if
+the product lives entirely inside the repository.
+
+| ID | Repo path | Runtime path env | Probe |
+| R-001 | live-workbench/ | WEZTERM_CONFIG_DIR | scripts/runtime_probe.sh |
+-->
+
 ## Next Action
 
 Replace the placeholder objective with a concrete deliverable and prepare PKG-001 for review.

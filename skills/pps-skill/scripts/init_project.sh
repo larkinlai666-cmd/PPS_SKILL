@@ -219,6 +219,7 @@ for script_name in \
   project_verify.ps1 project_verify.sh \
   append_event.ps1 append_event.sh \
   boundary_check.ps1 boundary_check.sh \
+  session_begin.ps1 session_begin.sh \
   pre-commit pre-commit.ps1; do
   cp "$script_dir/$script_name" "$target/scripts/$script_name"
 done

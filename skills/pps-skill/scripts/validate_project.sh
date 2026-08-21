@@ -749,6 +749,53 @@ if (( is_pps12 == 1 )); then
     fi
   fi
 
+  # --- Runtime surfaces (DUTY-E: deployment is not loading) ------------------
+  # Git synchronization cannot prove a deployed system loaded the new bytes.
+  # A project whose product lives partly outside the repository needs a legal
+  # place to declare that surface plus the probe that checks it. Repo-relative
+  # syntax stays intact: only an environment variable NAME may be recorded.
+  if grep -Eq '^##[[:space:]]+Runtime Surfaces[[:space:]]*$' "$context"; then
+    # Rows inside an HTML comment are template guidance, not declarations.
+    # Scan every Runtime Surfaces section: the template ships one commented
+    # example, and a real declaration may be appended in another.
+    runtime_rows="$(awk '
+      $0 ~ "^##[[:space:]]+Runtime Surfaces[[:space:]]*$" { inside=1; commented=0; next }
+      inside && /^##[[:space:]]/ { inside=0 }
+      inside && /<!--/ { commented=1 }
+      inside && /-->/ { commented=0; next }
+      inside && commented == 0 && /^\|/ { print }
+    ' "$context")"
+    while IFS= read -r runtime_row; do
+      [[ -n "$runtime_row" ]] || continue
+      runtime_id="$(printf '%s\n' "$runtime_row" | awk -F'|' '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2 }')"
+      case "$runtime_id" in
+        "" | ID | ---* | :---* ) continue ;;
+      esac
+      printf '%s\n' "$runtime_id" | grep -Eq '^R-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$' || {
+        add_error "Runtime Surfaces row ID must be an R-* identifier, found '$runtime_id'."
+        continue
+      }
+      runtime_repo="$(printf '%s\n' "$runtime_row" | awk -F'|' '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3); print $3 }')"
+      runtime_env="$(printf '%s\n' "$runtime_row" | awk -F'|' '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4); print $4 }')"
+      runtime_probe="$(printf '%s\n' "$runtime_row" | awk -F'|' '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $5); print $5 }')"
+      safe_project_path "$runtime_repo" "Runtime surface $runtime_id repo path" >/dev/null
+      # An absolute path in Git is a machine-specific lie; only the variable
+      # name is portable.
+      printf '%s\n' "$runtime_env" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' ||
+        add_error "Runtime surface $runtime_id must name an environment VARIABLE (e.g. WEZTERM_CONFIG_DIR), not a path, found '$runtime_env'."
+      if [[ -z "$runtime_probe" || "$runtime_probe" == "none" ]]; then
+        add_error "Runtime surface $runtime_id has no Probe; a declared runtime surface without a probe cannot answer whether the deployed copy loaded."
+      else
+        safe_project_path "$runtime_probe" "Runtime surface $runtime_id probe" >/dev/null
+        [[ -e "$root/$runtime_probe" ]] ||
+          add_error "Runtime surface $runtime_id probe '$runtime_probe' does not exist."
+        verify_entry_file="$root/scripts/project_verify.sh"
+        [[ ! -f "$verify_entry_file" ]] || grep -Fq "$runtime_probe" "$verify_entry_file" ||
+          add_error "Runtime surface $runtime_id probe '$runtime_probe' is not referenced by scripts/project_verify.sh; an unwired probe never runs."
+      fi
+    done <<< "$runtime_rows"
+  fi
+
   events_file="$root/EVENTS.md"
   if [[ -f "$events_file" ]]; then
     grep -Eq '^##[[:space:]]+Events[[:space:]]*$' "$events_file" ||
@@ -758,6 +805,30 @@ if (( is_pps12 == 1 )); then
       printf '%s\n' "$event_line" |
         grep -Eq '^- [0-9]{4}-[0-9]{2}-[0-9]{2}: \[PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$' ||
         add_error "Malformed event line in EVENTS.md at line $line_number: $event_line"
+      if (( is_pps12 == 1 )); then
+        event_files="$(printf '%s\n' "$event_line" | sed -n 's/.*| files:[[:space:]]*\(.*\)| verify:.*/\1/p' |
+          sed 's/[[:space:]]*$//')"
+        event_verify="$(printf '%s\n' "$event_line" | sed -n 's/.*| verify:[[:space:]]*\(.*\)| pending:.*/\1/p' |
+          sed 's/[[:space:]]*$//')"
+        event_pending="$(printf '%s\n' "$event_line" | sed -n 's/.*| pending:[[:space:]]*\(.*\)$/\1/p' |
+          sed 's/[[:space:]]*$//')"
+        event_title="$(printf '%s\n' "$event_line" |
+          sed -n 's/^- [0-9-]*: \[[^]]*\][[:space:]]*\(.*\)| files:.*/\1/p' |
+          sed 's/[[:space:]]*$//')"
+        if [[ -n "$event_files" && "$event_files" != "none" ]]; then
+          while IFS= read -r event_path; do
+            event_path="$(printf '%s' "$event_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [[ -n "$event_path" ]] || continue
+            safe_project_path "$event_path" "EVENTS.md line $line_number files entry" >/dev/null
+          done < <(printf '%s\n' "$event_files" | tr ',' '\n')
+        fi
+        if [[ "$event_verify" == "none" && "$event_pending" == "none" ]] &&
+          ! printf '%s\n' "$event_title" | grep -Eiq '^(abandoned|note|chat|plan)([[:space:]]|:|$)'; then
+          # An event that verified nothing and left nothing pending records
+          # nothing: this is how a chronicle rots into a changelog of noise.
+          add_error "Event at EVENTS.md line $line_number has 'verify: none' and 'pending: none'; a closing event must name its verification or keep something pending (prefix the title with note/chat/plan/abandoned for informational entries)."
+        fi
+      fi
     done < <(awk '
       $0 ~ "^##[[:space:]]+Events[[:space:]]*$" { inside=1; next }
       inside && /^##[[:space:]]/ { inside=0 }
@@ -786,9 +857,18 @@ if (( is_pps12 == 1 )); then
       a = int((14 - $2) / 12); y = $1 + 4800 - a; m = $2 + 12 * a - 3
       print $3 + int((153 * m + 2) / 5) + 365 * y + int(y / 4) - int(y / 100) + int(y / 400) - 32045
     }')"
+    if printf '%s\n' "$proposal_line" | grep -Eq '\[(abandoned|closed)\]'; then
+      # An explicitly abandoned proposal has been decided; it no longer ages.
+      continue
+    fi
     if (( today_jdn - opened_jdn > 7 )); then
       if printf '%s' "$next" | grep -Fq "$proposal_id"; then
-        : # restated in Next; aging discipline satisfied
+        : # restated in Next by ID; aging discipline satisfied
+      elif (( is_pps12 == 1 )); then
+        # "Silence means abandonment" has to cost something, or a proposal
+        # rots forever behind a warning nobody reads. Restate it by ID, close
+        # it, or mark it [abandoned].
+        add_error "Proposal $proposal_id has been pending for more than 7 days and is not restated in Hot State Next by ID; restate it, close it, or mark it '[abandoned]'."
       else
         add_warning "Proposal $proposal_id has been pending for more than 7 days and is not restated in Next; state kept, closed, or split."
       fi
@@ -798,6 +878,7 @@ if (( is_pps12 == 1 )); then
     inside && /^##[[:space:]]/ { inside=0 }
     inside && /^- P-/ { print }
   ' "$context")
+
 
   writer_value="$(printf '%s\n' "$hot_state" |
     sed -n 's/^-[[:space:]]*Writer:[[:space:]]*//p' | head -n 1)"
@@ -820,7 +901,13 @@ if (( is_pps12 == 1 )); then
   terminal_tasks=""
   archived_tasks=""
   output_roots=""
-  if [[ -f "$task_index" ]]; then
+  if [[ -f "$task_index" ]] && ! grep -Eq '^###[[:space:]]+T-' "$task_index"; then
+    # A half-present registry is the worst of both worlds: multitask semantics
+    # activate but nothing is declared. Single-task projects must not have the
+    # file at all. Report this alone: the cascade of "no integrator / no
+    # Writer" errors would bury the actual cause.
+    add_error "TASK_INDEX.md exists but registers no task: empty registry not allowed; delete the file to stay single-task, or register the tasks."
+  elif [[ -f "$task_index" ]]; then
     task_ids="$(grep -E '^###[[:space:]]+T-' "$task_index" |
       grep -Eo 'T-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?' || true)"
     duplicate_tasks="$(printf '%s\n' "$task_ids" | sed '/^$/d' | sort | uniq -d)"
@@ -1516,6 +1603,48 @@ while IFS= read -r id; do
       }')"
     if [[ -z "$coverage_evidence" || "$coverage_evidence" == "Present" || "$coverage_evidence" == "present" ]]; then
       add_error "Coverage row for $id needs an evidence cell naming the command, test, or inspection; bare 'Present' cannot distinguish checked from unchecked."
+    else
+      # Evidence must be a resolvable reference, not prose. A table of
+      # unparseable sentences stays green forever and answers nothing. Same
+      # semantics as merge receipt Verification: one evidence grammar only.
+      coverage_evidence_ok=0
+      coverage_evidence_reason=""
+      if printf '%s\n' "$coverage_evidence" | grep -Eq \
+        '(^|[[:space:]])(validate_project|verify_gate|readiness_check|asset_check|boundary_check)([[:space:]]|:|$)'; then
+        coverage_evidence_ok=1
+      elif printf '%s\n' "$coverage_evidence" | grep -Eq '^manual:[[:space:]]*[^[:space:]]'; then
+        # A manual attestation is only honest while the item is still openly
+        # pending; otherwise it is a way to paint the whole table green.
+        coverage_pending="$next"
+        if printf '%s\n' "$coverage_pending" | grep -Fq "$id"; then
+          coverage_evidence_ok=1
+        else
+          coverage_evidence_reason="uses 'manual:' but $id is not restated in Hot State Next; a manual attestation must stay openly pending"
+        fi
+      elif printf '%s\n' "$coverage_evidence" | grep -Eq '(^|[[:space:]])[0-9]{4}-[0-9]{2}-[0-9]{2}([[:space:]]|$)'; then
+        coverage_event_date="$(printf '%s\n' "$coverage_evidence" |
+          grep -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)"
+        if [[ -f "$root/EVENTS.md" ]] &&
+          grep -Eq "^-[[:space:]]+${coverage_event_date}:" "$root/EVENTS.md"; then
+          coverage_evidence_ok=1
+        else
+          coverage_evidence_reason="names date $coverage_event_date which is not an event line in EVENTS.md"
+        fi
+      else
+        # Otherwise it must name a real in-repo check.
+        coverage_ref="$(printf '%s\n' "$coverage_evidence" |
+          grep -Eo '[A-Za-z0-9_./-]+\.(sh|ps1|py|js|ts|mjs|cjs|bat|cmd|exe|rb|go|rs|java|kt|php|pl|lua)' |
+          head -n 1)"
+        if [[ -z "$coverage_ref" ]]; then
+          coverage_evidence_reason="is not a resolvable evidence reference"
+        elif [[ ! -e "$root/$coverage_ref" ]]; then
+          coverage_evidence_reason="names '$coverage_ref' which does not exist in the project"
+        else
+          coverage_evidence_ok=1
+        fi
+      fi
+      (( coverage_evidence_ok == 1 )) ||
+        add_error "Coverage row for $id has evidence '$coverage_evidence' that $coverage_evidence_reason; use a PPS gate name, an existing in-repo check path, an EVENTS.md date, or 'manual: <reason>' while the item stays in Next."
     fi
   fi
 done <<< "$required_ids"

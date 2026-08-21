@@ -4,6 +4,29 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-08-21
+
+Core-duty round. An external core-duty review (2026-08-20) stopped attacking the optional multitask layer and audited the nine duties PPS claims for itself, with five real incidents from a 13-day relay project as evidence. Its verdict: the sentences are right, the machines behind them are still skippable. All eleven D-CORE defects are addressed; ten fully closed, one partially (the 1.1→1.2 upgrade command stays on the 0.5 roadmap).
+
+### Added
+
+- `scripts/session_begin.*`: turns "run `git status` first" into an artifact. Records `.pps/session-snapshot` with porcelain `-z` entries plus a content SHA per dirty path, and refuses to start a second session over an unexpired snapshot without `--takeover` / `-Takeover` (a warning-with-teeth, deliberately not a lock). Closes D-CORE-009.
+- `boundary_check.* --discard-handover / -DiscardHandover PATH`: the explicit, recorded way to abandon a predecessor's uncommitted work.
+- Optional `## Runtime Surfaces` table in `CONTEXT.md` (`R-*` id, repo path, environment VARIABLE name, probe path): a legal declaration slot for the part of the product that lives outside the repository. Absolute paths remain illegal; the probe must exist and be wired into the gate entry. Closes D-CORE-005.
+- Red lines may carry a machine tail `(verify: path)`; the gate then requires the entry to reference that path. Human-only red lines stay legal without a tail.
+
+### Fixed
+
+- **Handover overwrite now has a machine lock (D-CORE-001, DUTY-F)**: `boundary_check.*` fails with `protected_overwrite` when a path that carried uncommitted work at session start has changed since. "Claimed by the Write set" answered the wrong question; Git protects committed history only, so a wholesale rewrite of a dirty Write-set file used to be silently legal.
+- **Hollow verification entries and unwired red lines are refused (D-CORE-002, DUTY-E/H)**: an `exit 0` or echo-only `project_verify.*` fails the gate with no stamp, and a red line naming a check must be referenced by the entry (directly or through `.pps/verify-manifest.txt`).
+- **Coverage evidence must resolve, not merely look like evidence (D-CORE-003, DUTY-D)**: the coverage cell now uses the same grammar as merge receipt Verification — a PPS gate name, an existing in-repo check path, an EVENTS.md date that exists, or `manual: <reason>` while the ID stays restated in Next. Prose and nonexistent test paths fail.
+- **Resume packets stop hiding the handover (D-CORE-004, DUTY-A)**: red lines are extracted by byte budget and keep numbered/bold entries (the old "`- ` bullets only, max 12" rule could empty the section entirely); a new `## Handover` section names uncommitted paths, warns when a dirty tree has no explicit handover in `Next`, and reports `Relay: SNAPSHOT MISSING`.
+- **Software packages must assert behavior (D-CORE-006, DUTY-E)**: a software/hybrid entry consisting only of structural validation fails. Unit tests can pass while the caller path is broken.
+- **Aged proposals cost something (D-CORE-007, DUTY-B)**: on PPS/1.2 a proposal pending over 7 days and not restated in `Next` by ID is an error; `[abandoned]` and `[closed]` are accepted terminal markers.
+- **Zero-information events are rejected (D-CORE-008, DUTY-G)**: `verify: none` together with `pending: none` fails unless the title is prefixed `note`/`chat`/`plan`/`abandoned`; `files:` entries pass path safety.
+- **Review text can no longer lag the code (D-CORE-010, DUTY-I)**: `validate_skill` fails unless `ADVERSARIAL_REVIEW.md` names the current VERSION in its opening lines. The review now carries an explicit open/closed table for the D-CORE series.
+- **Half-activated multitask layer fails loudly (D-CORE-011)**: an empty `TASK_INDEX.md` reports "empty registry not allowed; delete the file to stay single-task" on its own, instead of cascading into confusing integrator/Writer errors.
+
 ## [0.4.5] - 2026-08-20
 
 Fifth review round. The reviewer switched to a full mutation matrix ("one legal field replaced at a time") instead of compound fixtures, which exposed that 0.4.4's evidence checks matched keywords rather than resolving references. Eight distinct misclassifications closed, plus two high-risk surfaces the earlier reports never touched.

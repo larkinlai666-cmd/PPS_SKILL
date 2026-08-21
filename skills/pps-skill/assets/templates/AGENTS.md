@@ -6,6 +6,13 @@
 
 - 暂无项目红线。第一次事故复盘后在此追加，勿删除本节。
 
+- A red line may bind itself to the check that enforces it by ending with a
+  parenthesised `verify:` tail naming an in-repo path. When a red line carries
+  such a tail, `scripts/verify_gate.*` refuses to stamp unless
+  `scripts/project_verify.*` actually references that path — see
+  `references/retrieval-and-gates.md` for the exact spelling. Red lines about
+  feel and judgement stay human-only and need no tail.
+
 ## 接力规则（刚性）
 
 Git 只保护已提交的历史，不保护会话交接瞬间的工作区。

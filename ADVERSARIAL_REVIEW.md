@@ -1,9 +1,27 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-19 (updated for the 0.4.2 hardening round)
-- Scope: skill 0.4.2, PPS/1.2 field distillation + two external-review blocker rounds
-- Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of all ten external bypass fixtures (PKG-024 five + PKG-025 five) on both platforms, cross-platform stamp parity, full regression
+- Review date: 2026-08-21 (updated for the 0.4.6 core-duty round)
+- Scope: skill 0.4.6, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
+- Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
+
+## Open / closed core defects (D-CORE series, core-duty report 2026-08-20)
+
+| ID | Duty | Status in 0.4.6 |
+|---|---|---|
+| D-CORE-001 handover overwrite has no machine lock | DUTY-F | **Closed**: `session_begin.*` writes `.pps/session-snapshot` (porcelain -z + per-path content SHA); `boundary_check.*` fails with `protected_overwrite` when a path that carried uncommitted work at session start has changed, unless discarded explicitly with `--discard-handover` / `-DiscardHandover` |
+| D-CORE-002 hollow `project_verify`, red lines not wired | DUTY-E/H | **Closed**: the gate refuses an echo-only or `exit 0` entry, and a red line annotated `(verify: path)` must be referenced by the gate entry (or by a manifest the entry reads) |
+| D-CORE-003 coverage evidence was shape, not reference | DUTY-D | **Closed**: coverage evidence uses the receipt grammar — a PPS gate name, an existing in-repo check path, an EVENTS.md date that exists, or `manual: <reason>` only while the ID stays restated in Next |
+| D-CORE-004 packet dropped handover detail and numbered red lines | DUTY-A | **Closed**: red lines are extracted by byte budget and keep numbering/bold; a `## Handover` section lists uncommitted paths, flags "dirty without explicit handover", and reports a missing session snapshot |
+| D-CORE-005 "deployment is not loading" had no declaration slot | DUTY-E | **Closed**: optional `## Runtime Surfaces` table (`R-*`, repo path, environment VARIABLE name, probe); the probe must exist and be referenced by the gate entry; absolute paths stay illegal |
+| D-CORE-006 behavioral assertion legal but not required | DUTY-E | **Closed**: software/hybrid packages must declare at least one check that is not the structural validator |
+| D-CORE-007 proposal aging only warned | DUTY-B | **Closed**: on PPS/1.2 an aged proposal not restated in Next by ID is an error; `[abandoned]` / `[closed]` is an accepted terminal marker |
+| D-CORE-008 zero-information events | DUTY-G | **Closed**: `verify: none` with `pending: none` fails unless the title is prefixed `note/chat/plan/abandoned`; `files:` entries must pass path safety |
+| D-CORE-009 single writer never checked in tooling | DUTY-F | **Closed**: an unexpired snapshot forces `--takeover`, which must then be recorded as an event; deliberately not a lock |
+| D-CORE-010 review text lagged the code | DUTY-I | **Closed**: `validate_skill` fails when `ADVERSARIAL_REVIEW.md` does not name the current VERSION in its opening lines |
+| D-CORE-011 half-activated multitask layer | DUTY-A/I | **Partially closed**: an empty `TASK_INDEX.md` now fails with an explicit "delete the file to stay single-task" diagnostic. The 1.1→1.2 upgrade command remains on the 0.5 roadmap; field 1.1 projects must not be force-migrated yet |
+
+Residual risk, stated plainly: the gate now refuses an empty verification entry and an unwired red line, but it still cannot prove a check is *sufficient*. A project owner can satisfy every structural requirement with weak assertions. The gate enforces execution and wiring, not sincerity.
 
 ## 0.4.2 hardening round
 

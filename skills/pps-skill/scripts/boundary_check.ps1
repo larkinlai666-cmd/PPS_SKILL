@@ -3,7 +3,8 @@ param(
     [string]$Root,
     [string]$Task,
     [switch]$RecordBaseline,
-    [switch]$AllowPreexisting
+    [switch]$AllowPreexisting,
+    [string[]]$DiscardHandover = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -235,6 +236,46 @@ if (Test-Path -LiteralPath $baselinePath -PathType Leaf) {
         $parts = $record.Split("`t")
         if ($parts.Count -ge 2) { $baselinePathsOnly += $parts[1] }
     }
+}
+
+# --- Handover protection (DUTY-F) -----------------------------------------
+# "Claimed" only answers "was this path allowed to change". Handover answers a
+# different question: does this path already carry the PREVIOUS session's
+# uncommitted work? Git protects committed history only, so a wholesale
+# overwrite of a dirty Write-set file destroys work silently.
+$snapshotPath = Join-Path $rootFull '.pps/session-snapshot'
+$protectedViolations = 0
+if (Test-Path -LiteralPath $snapshotPath -PathType Leaf) {
+    $snapshotLines = [System.IO.File]::ReadAllLines($snapshotPath, [System.Text.Encoding]::UTF8)
+    $inDirty = $false
+    foreach ($snapLine in $snapshotLines) {
+        if ($snapLine -eq '-- dirty --') { $inDirty = $true; continue }
+        if (-not $inDirty) { continue }
+        if ([string]::IsNullOrWhiteSpace($snapLine)) { continue }
+        $snapParts = $snapLine -split "`t"
+        if ($snapParts.Count -lt 3) { continue }
+        $protectedPath = $snapParts[1]
+        $protectedHash = $snapParts[2]
+        $protectedFull = Join-Path $rootFull $protectedPath
+        $currentHash = if (Test-Path -LiteralPath $protectedFull -PathType Leaf) {
+            Get-PathSha256 $protectedFull
+        } else {
+            'absent'
+        }
+        if ($currentHash -eq $protectedHash) { continue }
+        if ($DiscardHandover -contains $protectedPath) {
+            Write-Host "handover_discarded: $protectedPath (explicitly discarded; record it with scripts/append_event.*)"
+            continue
+        }
+        Write-Host "protected_overwrite: $protectedPath (carried uncommitted work at session start and has changed since)"
+        $protectedViolations++
+    }
+}
+if ($protectedViolations -gt 0) {
+    Write-Host "PPS boundary check: FAILED ($protectedViolations protected_overwrite)"
+    Write-Host 'These paths held the previous session''s uncommitted work. Git was not protecting them.'
+    Write-Host 'Commit or preserve that work, or discard it explicitly with -DiscardHandover PATH and record the discard as an event.'
+    exit 1
 }
 
 $changedEntries = @(Get-ChangedEntries)

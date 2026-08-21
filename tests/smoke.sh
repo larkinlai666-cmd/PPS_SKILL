@@ -1289,9 +1289,209 @@ if bash "$unclaimed_canonical/scripts/boundary_check.sh" "$unclaimed_canonical" 
 fi
 grep -q 'unclaimed_write: DECISIONS.md' "$temp_root/boundary-canonical.out"
 
+# --- Core duty fixtures (D-CORE series) ------------------------------------
+hollow_gate_case="$temp_root/hollow-gate-case"
+cp -R "$temp_root/software-case" "$hollow_gate_case"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$hollow_gate_case/scripts/project_verify.sh"
+chmod +x "$hollow_gate_case/scripts/project_verify.sh"
+rm -f "$hollow_gate_case/.pps/verify-stamp"
+set +e
+bash "$hollow_gate_case/scripts/verify_gate.sh" "$hollow_gate_case" \
+  >"$temp_root/hollow-gate.out" 2>&1
+hollow_gate_code=$?
+set -e
+[[ "$hollow_gate_code" != "0" ]]
+grep -q 'hollow verification entry' "$temp_root/hollow-gate.out"
+[[ ! -f "$hollow_gate_case/.pps/verify-stamp" ]]
+
+struct_only_case="$temp_root/struct-only-case"
+cp -R "$temp_root/software-case" "$struct_only_case"
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'root="${1:-.}"\nfailures=0\n'
+  printf 'check() {\n  local label="$1"\n  shift\n  if "$@"; then echo "PASS: $label"; else echo "FAIL: $label" >&2; failures=$((failures + 1)); fi\n}\n'
+  printf 'structural() { bash "$root/scripts/validate_project.sh" "$root" --quiet; }\n'
+  printf 'check "validate_project structural" structural\n'
+  printf 'if (( failures > 0 )); then exit 1; fi\necho ok\n'
+} >"$struct_only_case/scripts/project_verify.sh"
+chmod +x "$struct_only_case/scripts/project_verify.sh"
+rm -f "$struct_only_case/.pps/verify-stamp"
+set +e
+bash "$struct_only_case/scripts/verify_gate.sh" "$struct_only_case" \
+  >"$temp_root/struct-only.out" 2>&1
+struct_only_code=$?
+set -e
+[[ "$struct_only_code" != "0" ]]
+grep -q 'software package needs a behavioral check' "$temp_root/struct-only.out"
+
+redline_unwired_case="$temp_root/redline-unwired-case"
+cp -R "$temp_root/software-case" "$redline_unwired_case"
+python3 - "$redline_unwired_case" <<'PYEOF2'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+tail = '- Never ship without the parity harness. (verify: tests/parity-harness.sh)\n'
+t = t[:j] + '\n' + tail + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+rm -f "$redline_unwired_case/.pps/verify-stamp"
+set +e
+bash "$redline_unwired_case/scripts/verify_gate.sh" "$redline_unwired_case" \
+  >"$temp_root/redline-unwired.out" 2>&1
+redline_unwired_code=$?
+set -e
+[[ "$redline_unwired_code" != "0" ]]
+grep -q 'red line not wired to the gate' "$temp_root/redline-unwired.out"
+[[ ! -f "$redline_unwired_case/.pps/verify-stamp" ]]
+
+coverage_prose_case="$temp_root/coverage-prose-case"
+cp -R "$temp_root/standard-case" "$coverage_prose_case"
+python3 - "$coverage_prose_case" <<'PYEOF2'
+import re, sys
+root = sys.argv[1]
+p = root + '/CONTEXT.md'
+t = open(p, encoding='utf-8').read()
+t = re.sub(r'(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', r'\1 looks fine to me |', t, count=1)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+expect_invalid "$coverage_prose_case" \
+  "is not a resolvable evidence reference" \
+  "Coverage evidence written as prose"
+
+coverage_ghost_case="$temp_root/coverage-ghost-case"
+cp -R "$temp_root/standard-case" "$coverage_ghost_case"
+python3 - "$coverage_ghost_case" <<'PYEOF2'
+import re, sys
+root = sys.argv[1]
+p = root + '/CONTEXT.md'
+t = open(p, encoding='utf-8').read()
+t = re.sub(r'(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', r'\1 tests/does-not-exist.sh |', t, count=1)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+expect_invalid "$coverage_ghost_case" \
+  "which does not exist in the project" \
+  "Coverage evidence naming a nonexistent check"
+
+aged_proposal_case="$temp_root/aged-proposal-case"
+cp -R "$temp_root/standard-case" "$aged_proposal_case"
+python3 - "$aged_proposal_case" <<'PYEOF2'
+import re, sys
+root = sys.argv[1]
+p = root + '/CONTEXT.md'
+t = open(p, encoding='utf-8').read()
+t = re.sub(r'(?m)^- P-001.*$', '- P-001 (opened 2026-01-01): stale proposal never restated', t)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+expect_invalid "$aged_proposal_case" \
+  "not restated in Hot State Next by ID" \
+  "Aged proposal without restatement"
+
+abandoned_proposal_case="$temp_root/abandoned-proposal-case"
+cp -R "$temp_root/standard-case" "$abandoned_proposal_case"
+python3 - "$abandoned_proposal_case" <<'PYEOF2'
+import re, sys
+root = sys.argv[1]
+p = root + '/CONTEXT.md'
+t = open(p, encoding='utf-8').read()
+t = re.sub(r'(?m)^- P-001.*$', '- P-001 (opened 2026-01-01) [abandoned]: dropped deliberately', t)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+bash "$abandoned_proposal_case/scripts/validate_project.sh" "$abandoned_proposal_case" --quiet
+
+zero_info_event_case="$temp_root/zero-info-event-case"
+cp -R "$temp_root/standard-case" "$zero_info_event_case"
+bash "$zero_info_event_case/scripts/append_event.sh" "$zero_info_event_case" \
+  --title "closed the package" --files none --verify none --pending none >/dev/null
+expect_invalid "$zero_info_event_case" \
+  "must name its verification or keep something pending" \
+  "Zero-information closing event"
+
+empty_registry_case="$temp_root/empty-registry-case"
+cp -R "$temp_root/standard-case" "$empty_registry_case"
+printf '# Task Index\n\n## Task Index\n' >"$empty_registry_case/TASK_INDEX.md"
+expect_invalid "$empty_registry_case" \
+  "empty registry not allowed" \
+  "Half-activated multitask registry"
+
+runtime_unwired_case="$temp_root/runtime-unwired-case"
+cp -R "$temp_root/software-case" "$runtime_unwired_case"
+{
+  printf '\n## Runtime Surfaces\n\n'
+  printf '| ID | Repo path | Runtime path env | Probe |\n'
+  printf '| R-001 | docs/MAIN.md | WZ_RUNTIME_DIR | scripts/runtime_probe.sh |\n'
+} >>"$runtime_unwired_case/CONTEXT.md"
+expect_invalid "$runtime_unwired_case" \
+  "does not exist" \
+  "Runtime surface probe that does not exist"
+
+handover_case="$temp_root/handover-case"
+bash "$skill/scripts/init_project.sh" handover-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+printf 'session A hardening not committed\n' >"$handover_case/docs/MAIN.md"
+bash "$handover_case/scripts/session_begin.sh" "$handover_case" >"$temp_root/session-begin.out" 2>&1
+grep -q 'docs/MAIN.md' "$temp_root/session-begin.out"
+printf 'session B wholesale overwrite\n' >"$handover_case/docs/MAIN.md"
+set +e
+bash "$handover_case/scripts/boundary_check.sh" "$handover_case" \
+  >"$temp_root/handover-overwrite.out" 2>&1
+handover_code=$?
+set -e
+[[ "$handover_code" != "0" ]]
+grep -q 'protected_overwrite: docs/MAIN.md' "$temp_root/handover-overwrite.out"
+set +e
+bash "$handover_case/scripts/boundary_check.sh" "$handover_case" \
+  --discard-handover docs/MAIN.md >"$temp_root/handover-discard.out" 2>&1
+set -e
+grep -q 'handover_discarded: docs/MAIN.md' "$temp_root/handover-discard.out"
+set +e
+bash "$handover_case/scripts/session_begin.sh" "$handover_case" \
+  >"$temp_root/session-second.out" 2>&1
+session_second_code=$?
+set -e
+[[ "$session_second_code" == "3" ]]
+grep -q 'unexpired session snapshot' "$temp_root/session-second.out"
+bash "$handover_case/scripts/session_begin.sh" "$handover_case" --takeover \
+  >"$temp_root/session-takeover.out" 2>&1
+grep -q 'Takeover: yes' "$temp_root/session-takeover.out"
+
+packet_relay_case="$temp_root/packet-relay-case"
+bash "$skill/scripts/init_project.sh" packet-relay-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+python3 - "$packet_relay_case" <<'PYEOF2'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+numbered = '\n**R0 - Agent parity is non-negotiable.**\n\n1. Never swallow errors in an empty catch block.\n2. Never use array splatting for path arguments.\n'
+t = t[:j] + numbered + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+printf 'uncommitted relay work\n' >"$packet_relay_case/Install-WZ.ps1"
+bash "$packet_relay_case/scripts/resume_packet.sh" "$packet_relay_case" \
+  >"$temp_root/packet-relay.out" 2>&1
+grep -q 'R0 - Agent parity is non-negotiable' "$temp_root/packet-relay.out"
+grep -q '1. Never swallow errors in an empty catch block' "$temp_root/packet-relay.out"
+grep -q 'protected: Install-WZ.ps1' "$temp_root/packet-relay.out"
+grep -q 'dirty worktree without explicit handover' "$temp_root/packet-relay.out"
+grep -q 'SNAPSHOT MISSING' "$temp_root/packet-relay.out"
+
 gate_fail_case="$temp_root/gate-fail-case"
 cp -R "$temp_root/standard-case" "$gate_fail_case"
-printf '#!/usr/bin/env bash\nexit 9\n' >"$gate_fail_case/scripts/project_verify.sh"
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'root="${1:-.}"\nfailures=0\n'
+  printf 'check() {\n  local label="$1"\n  shift\n  if "$@"; then echo "PASS: $label"; else echo "FAIL: $label" >&2; failures=$((failures + 1)); fi\n}\n'
+  printf 'impossible() { [[ -e "$root/this-artifact-cannot-exist" ]]; }\n'
+  printf 'check "behavioral end-to-end assertion" impossible\n'
+  printf 'if (( failures > 0 )); then exit 9; fi\necho ok\n'
+} >"$gate_fail_case/scripts/project_verify.sh"
 chmod +x "$gate_fail_case/scripts/project_verify.sh"
 rm -f "$gate_fail_case/.pps/verify-stamp"
 if bash "$gate_fail_case/scripts/verify_gate.sh" "$gate_fail_case" \
@@ -1431,7 +1631,7 @@ cp -R "$temp_root/standard-case" "$event_placement_case"
 printf '\n## Trailing Notes\n\n- unrelated trailing content\n' \
   >>"$event_placement_case/EVENTS.md"
 bash "$event_placement_case/scripts/append_event.sh" "$event_placement_case" \
-  --title "Placement test"
+  --title "note Placement test"
 awk '
   /^## Events$/ { inside=1; next }
   inside && /^## / { inside=0 }

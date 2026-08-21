@@ -17,7 +17,7 @@ PPS is a Personal Project State protocol for one owner working serially across d
 6. **Synchronize across devices**: read [git-sync.md](references/git-sync.md). Pull before work and push only when the user asks to sync.
 7. **Cold-start an environment**: before clone, run `environment_doctor --core`/`-Core` from the installed skill; after clone, use the project manifest. Read [environment-bootstrap.md](references/environment-bootstrap.md) and request one approval before any system install.
 8. **Govern large assets**: classify files as `core`, `supporting`, or `reference`; keep metadata in `ASSETS.md`, external bytes under ignored `local-assets/`, and current dependencies in Workset `Assets`. Read [asset-management.md](references/asset-management.md).
-9. **Track coexisting tasks**: when several long-lived tasks share one project, create `TASK_INDEX.md` to activate the single-owner multitask layer. Read [multitask.md](references/multitask.md). Single-task projects skip this entirely.
+9. **Track coexisting tasks**: when several long-lived tasks share one project, create `TASK_INDEX.md` to activate the single-owner multitask layer. Read [multitask.md](references/multitask.md). **A single-package relay project must not create `TASK_INDEX.md`** — a half-present registry activates multitask semantics with nothing declared and raises recovery cost for no benefit; the validator rejects an empty registry outright.
 
 Map the user's short commands consistently as intent → action, and accept natural-language phrasings that carry the same intent: “同步并继续” (or "拉最新的接着做") means inspect and safely pull before resuming; “保存并同步” (or "存档推上去") means close the package, validate, commit, reconcile, and push; “这个定了” (or "就按这个来") means record an explicitly approved `D-*` decision and propagate it through the active write set. The intent governs, not the exact wording.
 
@@ -118,7 +118,8 @@ Run the project-local validator before claiming closure. A clean prose summary i
 - `scripts/asset_check.ps1` and `.sh`: distinguish Git sync from required asset materialization; verify size/hash and tracked-binary risk.
 - `scripts/verify_gate.ps1` and `.sh`: one entry for structural validation plus declared project checks; writes the device-local verify stamp.
 - `scripts/append_event.ps1` and `.sh`: append a format-stable event line for the current package.
-- `scripts/boundary_check.ps1` and `.sh`: classify every worktree change as claimed by a Write set / task output root, or flag it as an `unclaimed_write`.
+- `scripts/session_begin.ps1` and `.sh`: run this **before writing anything** in a session. It records `.pps/session-snapshot` (the dirty paths and their content hashes at session start), so a wholesale overwrite of a predecessor's uncommitted work becomes detectable. A second session over an unexpired snapshot needs `--takeover` / `-Takeover`, which must then be recorded as an event.
+- `scripts/boundary_check.ps1` and `.sh`: classify every worktree change as claimed by a Write set / task output root, or flag it as an `unclaimed_write`. It also fails with `protected_overwrite` when a path that carried uncommitted work at session start has changed; discard that work deliberately with `--discard-handover PATH` / `-DiscardHandover PATH` and record the discard.
 - `scripts/readiness_check.ps1` and `.sh`: combine structural, asset, verify-stamp, and caller-attested project verification without auto-executing untrusted commands.
 - `scripts/validate_skill.ps1` and `.sh`: verify an installed skill bundle without repository tooling.
 - `scripts/`: cross-platform initializer, status, bounded resume packet, environment doctor, audit, validators, and pre-commit gate.

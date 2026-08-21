@@ -58,6 +58,87 @@ if ($verifyDecl -notmatch 'scripts/(verify_gate|project_verify)') {
 }
 Write-Host "Verify routing: declaration routes through the gate entry"
 
+Write-Host "-- Step 2b/4: gate substance"
+$verifyEntry = Join-Path $rootFull 'scripts/project_verify.ps1'
+if (-not (Test-Path -LiteralPath $verifyEntry -PathType Leaf)) {
+    Write-Host "ERROR: missing verification entry: scripts/project_verify.ps1"
+    Write-Host "PPS verify gate: FAILED (missing verification entry)"
+    exit 1
+}
+# A gate that executes an empty entry proves execution of nothing. Refuse the
+# hollow entry outright: this is the "knowing is not doing" failure the stamp
+# exists to prevent.
+$entryLinesAll = [System.IO.File]::ReadAllLines($verifyEntry, [System.Text.Encoding]::UTF8)
+$substantive = @($entryLinesAll | Where-Object {
+    $trimmed = $_.Trim()
+    $trimmed -ne '' -and -not $trimmed.StartsWith('#') -and
+    $trimmed -notmatch '^(exit\s+0|return|Write-(Host|Output)\s)' 
+})
+$hasCheckCalls = ($entryLinesAll | Where-Object { $_ -match 'Invoke-Check\s|check\s+"' }).Count -gt 0
+if (-not $hasCheckCalls -or $substantive.Count -lt 5) {
+    Write-Host "ERROR: scripts/project_verify.ps1 has no real checks; an unconditional 'exit 0' or an echo-only entry defeats the gate."
+    Write-Host "Declare at least one check that fails non-zero when the project is broken."
+    Write-Host "PPS verify gate: FAILED (hollow verification entry)"
+    exit 1
+}
+$entryText = [System.IO.File]::ReadAllText($verifyEntry, [System.Text.Encoding]::UTF8)
+$stateText = [System.IO.File]::ReadAllText((Join-Path $rootFull 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+$modeMatch = [regex]::Match($stateText, '(?m)^-\s+Mode:\s*(.*?)\s*$')
+$modeValue = if ($modeMatch.Success) { $modeMatch.Groups[1].Value } else { '' }
+if ($modeValue -in @('software', 'hybrid')) {
+    # Unit tests can pass while the caller path is broken: a software package
+    # needs at least one check that is not the structural validator itself.
+    $behavioral = @($entryLinesAll | Where-Object {
+        ($_ -match 'Invoke-Check\s|check\s+"') -and ($_ -notmatch 'validate_project|validate_skill')
+    })
+    if ($behavioral.Count -lt 1) {
+        Write-Host "ERROR: software package needs a behavioral check: scripts/project_verify.ps1 declares only structural validation."
+        Write-Host "Add at least one check that exercises the product the way a user reaches it."
+        Write-Host "PPS verify gate: FAILED (no behavioral check)"
+        exit 1
+    }
+}
+Write-Host "gate substance: entry declares real checks"
+
+Write-Host "-- Step 2c/4: red line wiring"
+# Red lines may name the check that enforces them: "(verify: path)". When a
+# red line names one, the gate entry must actually reference that path, or the
+# red line is a wish rather than a rule.
+$redlineTargets = @()
+$agentsPath = Join-Path $rootFull 'AGENTS.md'
+if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
+    $agentsText = [System.IO.File]::ReadAllText($agentsPath, [System.Text.Encoding]::UTF8)
+    $redlineSection = [regex]::Match(
+        $agentsText, '(?ms)^##\s+Red Lines\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
+    if ($redlineSection.Success) {
+        foreach ($m in [regex]::Matches($redlineSection.Groups['body'].Value, '\(verify:\s*([^)]+)\)')) {
+            $candidate = $m.Groups[1].Value.Trim()
+            if ($candidate -and ($candidate -notin $redlineTargets)) { $redlineTargets += $candidate }
+        }
+    }
+}
+if ($redlineTargets.Count -gt 0) {
+    $manifestPath = Join-Path $rootFull '.pps/verify-manifest.txt'
+    $manifestText = if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        [System.IO.File]::ReadAllText($manifestPath, [System.Text.Encoding]::UTF8)
+    } else { '' }
+    $unwired = $false
+    foreach ($target in $redlineTargets) {
+        if ($entryText.Contains($target)) { continue }
+        if ($manifestText.Contains($target) -and $entryText.Contains('verify-manifest')) { continue }
+        Write-Host "ERROR: red line names '(verify: $target)' but scripts/project_verify.ps1 does not reference it."
+        $unwired = $true
+    }
+    if ($unwired) {
+        Write-Host "Wire the named check into the gate entry (or list it in .pps/verify-manifest.txt and read that manifest)."
+        Write-Host "PPS verify gate: FAILED (red line not wired to the gate)"
+        exit 1
+    }
+    Write-Host "red line wiring: all named checks are wired into the gate entry"
+} else {
+    Write-Host "red line wiring: no red line names a machine check (human-only red lines are allowed)"
+}
+
 Write-Host "-- Step 3/4: project verification entry"
 $entryRel = 'scripts/project_verify.ps1'
 $entryPath = Join-Path $rootFull $entryRel

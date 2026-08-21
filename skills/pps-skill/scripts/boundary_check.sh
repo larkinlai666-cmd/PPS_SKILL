@@ -2,7 +2,7 @@
 set -uo pipefail
 
 usage() {
-  echo "Usage: boundary_check.sh [ROOT] [--task T-ID] [--record-baseline] [--allow-preexisting]"
+  echo "Usage: boundary_check.sh [ROOT] [--task T-ID] [--record-baseline] [--allow-preexisting] [--discard-handover PATH]"
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -10,11 +10,17 @@ root="$(cd "$script_dir/.." && pwd -P)"
 allow_preexisting=0
 record_baseline=0
 task_arg=""
+discard_handover=""
 root_seen=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --allow-preexisting) allow_preexisting=1; shift ;;
     --record-baseline) record_baseline=1; shift ;;
+    --discard-handover)
+      [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+      discard_handover="${discard_handover}${2}"$'\n'
+      shift 2
+      ;;
     --task)
       [[ $# -ge 2 ]] || { usage >&2; exit 2; }
       task_arg="$2"
@@ -47,6 +53,7 @@ git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
 }
 
 baseline_file="$root/.pps/boundary-baseline"
+snapshot_file="$root/.pps/session-snapshot"
 
 sha256_of_file() {
   if command -v shasum >/dev/null 2>&1; then
@@ -244,6 +251,50 @@ in_baseline() {
   [[ -f "$baseline_file" ]] || return 1
   grep -Fxq "$record" "$baseline_file"
 }
+
+# --- Handover protection (DUTY-F) -------------------------------------------
+# "Claimed" only answers "was this path allowed to change". Handover answers a
+# different question: does this path already carry the PREVIOUS session's
+# uncommitted work? Git protects committed history only, so a wholesale
+# overwrite of a dirty Write-set file destroys work silently. The session
+# snapshot makes that instant checkable.
+protected_records=""
+if [[ -f "$snapshot_file" ]]; then
+  protected_records="$(sed -n '/^-- dirty --$/,$p' "$snapshot_file" | sed '1d' | sed '/^$/d')"
+fi
+
+is_discarded() {
+  local candidate="$1"
+  [[ -n "$discard_handover" ]] || return 1
+  printf '%s\n' "$discard_handover" | sed '/^$/d' | grep -Fxq "$candidate"
+}
+
+protected_violations=0
+if [[ -n "$protected_records" ]]; then
+  while IFS= read -r protected_record; do
+    [[ -n "$protected_record" ]] || continue
+    protected_path="$(printf '%s' "$protected_record" | awk -F'\t' '{ print $2 }')"
+    protected_hash="$(printf '%s' "$protected_record" | awk -F'\t' '{ print $3 }')"
+    if [[ -f "$root/$protected_path" ]]; then
+      current_hash="$(sha256_of_file "$root/$protected_path")"
+    else
+      current_hash="absent"
+    fi
+    [[ "$current_hash" != "$protected_hash" ]] || continue
+    if is_discarded "$protected_path"; then
+      echo "handover_discarded: $protected_path (explicitly discarded; record it with scripts/append_event.*)"
+      continue
+    fi
+    echo "protected_overwrite: $protected_path (carried uncommitted work at session start and has changed since)" >&2
+    protected_violations=$((protected_violations + 1))
+  done <<< "$protected_records"
+fi
+if (( protected_violations > 0 )); then
+  echo "PPS boundary check: FAILED ($protected_violations protected_overwrite)" >&2
+  echo "These paths held the previous session's uncommitted work. Git was not protecting them." >&2
+  echo "Commit or preserve that work, or discard it explicitly with --discard-handover PATH and record the discard as an event." >&2
+  exit 1
+fi
 
 unclaimed=0
 all_changes="$(changed_entries)"

@@ -2040,11 +2040,266 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw 'Boundary check auto-claimed an undeclared canonical file.'
     }
 
+    # --- Core duty fixtures (D-CORE series) --------------------------------
+    $hollowGateCase = Join-Path $tempRoot "hollow-gate-case"
+    Copy-Item -LiteralPath $software -Destination $hollowGateCase -Recurse
+    [System.IO.File]::WriteAllText(
+        (Join-Path $hollowGateCase "scripts/project_verify.ps1"), "exit 0`n", $utf8NoBom)
+    $hollowStamp = Join-Path $hollowGateCase '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $hollowStamp) { Remove-Item -LiteralPath $hollowStamp }
+    $hollowResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $hollowGateCase 'scripts/verify_gate.ps1') `
+            -Root $hollowGateCase 2>&1
+    }
+    if ($hollowResult.Code -eq 0 -or $hollowResult.Text -notmatch 'hollow verification entry') {
+        throw 'Verify gate accepted a hollow project_verify entry.'
+    }
+    if (Test-Path -LiteralPath $hollowStamp) {
+        throw 'Verify gate stamped despite a hollow verification entry.'
+    }
+
+    $structOnlyCase = Join-Path $tempRoot "struct-only-case"
+    Copy-Item -LiteralPath $software -Destination $structOnlyCase -Recurse
+    $structEntry = @(
+        'function Invoke-Check([string]$Label, [scriptblock]$Body) {',
+        '    if (& $Body) { Write-Output "PASS: $Label"; return $true }',
+        '    Write-Output "FAIL: $Label"; return $false',
+        '}',
+        '$root = Split-Path -Parent $PSScriptRoot',
+        '$ok = Invoke-Check "validate_project structural" {',
+        '    $true',
+        '}',
+        'if (-not $ok) { exit 1 }',
+        'Write-Output "ok"'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $structOnlyCase "scripts/project_verify.ps1"), $structEntry + "`n", $utf8NoBom)
+    $structStamp = Join-Path $structOnlyCase '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $structStamp) { Remove-Item -LiteralPath $structStamp }
+    $structResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $structOnlyCase 'scripts/verify_gate.ps1') `
+            -Root $structOnlyCase 2>&1
+    }
+    if ($structResult.Code -eq 0 -or $structResult.Text -notmatch 'software package needs a behavioral check') {
+        throw 'Verify gate accepted a software package with only structural validation.'
+    }
+
+    $redlineUnwiredCase = Join-Path $tempRoot "redline-unwired-case"
+    Copy-Item -LiteralPath $software -Destination $redlineUnwiredCase -Recurse
+    $agentsFile = Join-Path $redlineUnwiredCase 'AGENTS.md'
+    $agentsBody = [System.IO.File]::ReadAllText($agentsFile, [System.Text.Encoding]::UTF8)
+    $redIndex = $agentsBody.IndexOf('## Red Lines')
+    $nextIndex = $agentsBody.IndexOf("`n## ", $redIndex + 5)
+    $redTail = "`n- Never ship without the parity harness. (verify: tests/parity-harness.sh)`n"
+    $agentsBody = $agentsBody.Substring(0, $nextIndex) + $redTail + $agentsBody.Substring($nextIndex)
+    [System.IO.File]::WriteAllText($agentsFile, $agentsBody, $utf8NoBom)
+    $redStamp = Join-Path $redlineUnwiredCase '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $redStamp) { Remove-Item -LiteralPath $redStamp }
+    $redResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $redlineUnwiredCase 'scripts/verify_gate.ps1') `
+            -Root $redlineUnwiredCase 2>&1
+    }
+    if ($redResult.Code -eq 0 -or $redResult.Text -notmatch 'red line not wired to the gate') {
+        throw 'Verify gate stamped although a red line named an unwired check.'
+    }
+    if (Test-Path -LiteralPath $redStamp) {
+        throw 'Verify gate stamped despite an unwired red line.'
+    }
+
+    $coverageProseCase = Join-Path $tempRoot "coverage-prose-case"
+    Copy-Item -LiteralPath $standard -Destination $coverageProseCase -Recurse
+    $covFile = Join-Path $coverageProseCase 'CONTEXT.md'
+    $covBody = [System.IO.File]::ReadAllText($covFile, [System.Text.Encoding]::UTF8)
+    $covBody = [regex]::Replace($covBody, '(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', '${1} looks fine to me |', 1)
+    [System.IO.File]::WriteAllText($covFile, $covBody, $utf8NoBom)
+    Assert-InvalidProject $coverageProseCase `
+        "is not a resolvable evidence reference" `
+        "Coverage evidence written as prose"
+
+    $coverageGhostCase = Join-Path $tempRoot "coverage-ghost-case"
+    Copy-Item -LiteralPath $standard -Destination $coverageGhostCase -Recurse
+    $covFile = Join-Path $coverageGhostCase 'CONTEXT.md'
+    $covBody = [System.IO.File]::ReadAllText($covFile, [System.Text.Encoding]::UTF8)
+    $covBody = [regex]::Replace($covBody, '(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', '${1} tests/does-not-exist.sh |', 1)
+    [System.IO.File]::WriteAllText($covFile, $covBody, $utf8NoBom)
+    Assert-InvalidProject $coverageGhostCase `
+        "which does not exist in the project" `
+        "Coverage evidence naming a nonexistent check"
+
+    $agedProposalCase = Join-Path $tempRoot "aged-proposal-case"
+    Copy-Item -LiteralPath $standard -Destination $agedProposalCase -Recurse
+    $propFile = Join-Path $agedProposalCase 'CONTEXT.md'
+    $propBody = [System.IO.File]::ReadAllText($propFile, [System.Text.Encoding]::UTF8)
+    $propBody = [regex]::Replace($propBody, '(?m)^- P-001.*$', '- P-001 (opened 2026-01-01): stale proposal never restated')
+    [System.IO.File]::WriteAllText($propFile, $propBody, $utf8NoBom)
+    Assert-InvalidProject $agedProposalCase `
+        "not restated in Hot State Next by ID" `
+        "Aged proposal without restatement"
+
+    $abandonedProposalCase = Join-Path $tempRoot "abandoned-proposal-case"
+    Copy-Item -LiteralPath $standard -Destination $abandonedProposalCase -Recurse
+    $propFile = Join-Path $abandonedProposalCase 'CONTEXT.md'
+    $propBody = [System.IO.File]::ReadAllText($propFile, [System.Text.Encoding]::UTF8)
+    $propBody = [regex]::Replace($propBody, '(?m)^- P-001.*$', '- P-001 (opened 2026-01-01) [abandoned]: dropped deliberately')
+    [System.IO.File]::WriteAllText($propFile, $propBody, $utf8NoBom)
+    $abandonedResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $abandonedProposalCase 'scripts/validate_project.ps1') `
+            -Root $abandonedProposalCase -Quiet 2>&1
+    }
+    if ($abandonedResult.Code -ne 0) {
+        throw "An explicitly abandoned proposal was rejected: $($abandonedResult.Text)"
+    }
+
+    $zeroInfoEventCase = Join-Path $tempRoot "zero-info-event-case"
+    Copy-Item -LiteralPath $standard -Destination $zeroInfoEventCase -Recurse
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $zeroInfoEventCase 'scripts/append_event.ps1') `
+        -Root $zeroInfoEventCase -Title 'closed the package' `
+        -Files 'none' -Verify 'none' -Pending 'none' | Out-Null
+    Assert-InvalidProject $zeroInfoEventCase `
+        "must name its verification or keep something pending" `
+        "Zero-information closing event"
+
+    $emptyRegistryCase = Join-Path $tempRoot "empty-registry-case"
+    Copy-Item -LiteralPath $standard -Destination $emptyRegistryCase -Recurse
+    [System.IO.File]::WriteAllText(
+        (Join-Path $emptyRegistryCase 'TASK_INDEX.md'),
+        "# Task Index`n`n## Task Index`n", $utf8NoBom)
+    Assert-InvalidProject $emptyRegistryCase `
+        "empty registry not allowed" `
+        "Half-activated multitask registry"
+
+    $runtimeUnwiredCase = Join-Path $tempRoot "runtime-unwired-case"
+    Copy-Item -LiteralPath $software -Destination $runtimeUnwiredCase -Recurse
+    $runtimeSection = @(
+        '', '## Runtime Surfaces', '',
+        '| ID | Repo path | Runtime path env | Probe |',
+        '| R-001 | docs/MAIN.md | WZ_RUNTIME_DIR | scripts/runtime_probe.ps1 |'
+    ) -join "`n"
+    [System.IO.File]::AppendAllText(
+        (Join-Path $runtimeUnwiredCase 'CONTEXT.md'), $runtimeSection + "`n", $utf8NoBom)
+    Assert-InvalidProject $runtimeUnwiredCase `
+        "does not exist" `
+        "Runtime surface probe that does not exist"
+
+    $handoverCase = Join-Path $tempRoot "handover-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName handover-case -Profile standard -ParentDir $tempRoot `
+        -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Handover fixture initialization failed.' }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $handoverCase 'docs/MAIN.md'),
+        "session A hardening not committed`n", $utf8NoBom)
+    $sessionBeginResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $handoverCase 'scripts/session_begin.ps1') `
+            -Root $handoverCase 2>&1
+    }
+    if ($sessionBeginResult.Text -notmatch 'docs/MAIN\.md') {
+        throw 'Session snapshot did not list the uncommitted path.'
+    }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $handoverCase 'docs/MAIN.md'),
+        "session B wholesale overwrite`n", $utf8NoBom)
+    $overwriteResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $handoverCase 'scripts/boundary_check.ps1') `
+            -Root $handoverCase 2>&1
+    }
+    if ($overwriteResult.Code -eq 0 -or $overwriteResult.Text -notmatch 'protected_overwrite: docs/MAIN\.md') {
+        throw 'Boundary check allowed a wholesale overwrite of handover work.'
+    }
+    $discardResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $handoverCase 'scripts/boundary_check.ps1') `
+            -Root $handoverCase -DiscardHandover 'docs/MAIN.md' 2>&1
+    }
+    if ($discardResult.Text -notmatch 'handover_discarded: docs/MAIN\.md') {
+        throw 'Explicit handover discard was not honored.'
+    }
+    $secondSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $handoverCase 'scripts/session_begin.ps1') `
+            -Root $handoverCase 2>&1
+    }
+    if ($secondSession.Code -ne 3 -or $secondSession.Text -notmatch 'unexpired session snapshot') {
+        throw 'A second session started without an explicit takeover.'
+    }
+    $takeoverSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $handoverCase 'scripts/session_begin.ps1') `
+            -Root $handoverCase -Takeover 2>&1
+    }
+    if ($takeoverSession.Text -notmatch 'Takeover: yes') {
+        throw 'Takeover was not recorded in the session output.'
+    }
+
+    $packetRelayCase = Join-Path $tempRoot "packet-relay-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName packet-relay-case -Profile standard -ParentDir $tempRoot `
+        -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Packet relay fixture initialization failed.' }
+    $agentsFile = Join-Path $packetRelayCase 'AGENTS.md'
+    $agentsBody = [System.IO.File]::ReadAllText($agentsFile, [System.Text.Encoding]::UTF8)
+    $redIndex = $agentsBody.IndexOf('## Red Lines')
+    $nextIndex = $agentsBody.IndexOf("`n## ", $redIndex + 5)
+    $numbered = @(
+        '', '**R0 - Agent parity is non-negotiable.**', '',
+        '1. Never swallow errors in an empty catch block.',
+        '2. Never use array splatting for path arguments.', ''
+    ) -join "`n"
+    $agentsBody = $agentsBody.Substring(0, $nextIndex) + $numbered + $agentsBody.Substring($nextIndex)
+    [System.IO.File]::WriteAllText($agentsFile, $agentsBody, $utf8NoBom)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $packetRelayCase 'Install-WZ.ps1'), "uncommitted relay work`n", $utf8NoBom)
+    $relayPacket = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $packetRelayCase 'scripts/resume_packet.ps1') `
+            -Root $packetRelayCase 2>&1
+    }
+    foreach ($needle in @(
+        'R0 - Agent parity is non-negotiable',
+        '1. Never swallow errors in an empty catch block',
+        'protected: Install-WZ.ps1',
+        'dirty worktree without explicit handover',
+        'SNAPSHOT MISSING'
+    )) {
+        if ($relayPacket.Text -notmatch [regex]::Escape($needle)) {
+            throw "Resume packet is missing relay detail: $needle"
+        }
+    }
+
     $gateFailCase = Join-Path $tempRoot "gate-fail-case"
     Copy-Item -LiteralPath $standard -Destination $gateFailCase -Recurse
+    $failingEntry = @(
+        '$failures = 0',
+        'function Invoke-Check([string]$Label, [scriptblock]$Body) {',
+        '    if (& $Body) {',
+        '        Write-Output "PASS project_verify: $Label"',
+        '    } else {',
+        '        Write-Output "FAIL project_verify: $Label"',
+        '        $script:failures++',
+        '    }',
+        '}',
+        '$probeRoot = Split-Path -Parent $PSScriptRoot',
+        'Invoke-Check "behavioral end-to-end assertion" {',
+        '    Test-Path -LiteralPath (Join-Path $probeRoot "this-artifact-cannot-exist")',
+        '}',
+        'if ($failures -gt 0) {',
+        '    Write-Output "project_verify: FAILED"',
+        '    exit 9',
+        '}',
+        'Write-Output "project_verify: OK"'
+    ) -join "`n"
     [System.IO.File]::WriteAllText(
         (Join-Path $gateFailCase "scripts/project_verify.ps1"),
-        "exit 9`n",
+        $failingEntry + "`n",
         $utf8NoBom
     )
     $gateFailStamp = Join-Path $gateFailCase '.pps/verify-stamp'
@@ -2236,7 +2491,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $placementResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $eventPlacementCase 'scripts/append_event.ps1') `
-            -Root $eventPlacementCase -Title 'Placement test' 2>&1
+            -Root $eventPlacementCase -Title 'note Placement test' 2>&1
     }
     if ($placementResult.Code -ne 0) {
         throw "Event appender failed with a trailing section: $($placementResult.Text)"

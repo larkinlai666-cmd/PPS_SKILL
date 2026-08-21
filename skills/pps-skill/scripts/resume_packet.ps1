@@ -75,12 +75,27 @@ if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
     foreach ($line in $agentsLines) {
         if ($line -match '^##\s+Red Lines\s*$') { $insideRed = $true; continue }
         if ($insideRed -and $line -match '^## ') { break }
-        if ($insideRed -and $line.StartsWith('- ')) { $redLines.Add($line) }
+        # Take every non-empty line, not only "- " bullets: numbered items and
+        # bold headers are red lines too, and dropping them made the packet
+        # claim a project had no engineering red lines at all.
+        if ($insideRed -and -not [string]::IsNullOrWhiteSpace($line)) { $redLines.Add($line) }
     }
     if ($redLines.Count -gt 0) {
         $packet.Add('')
         $packet.Add('## Red Lines')
-        foreach ($line in @($redLines | Select-Object -First 12)) { $packet.Add($line) }
+        # Budget by bytes so the shape of the list cannot silently truncate it.
+        $redBudget = 1500
+        $redUsed = 0
+        $redTruncated = $false
+        foreach ($line in $redLines) {
+            $lineSize = [System.Text.Encoding]::UTF8.GetByteCount($line) + 1
+            if (($redUsed + $lineSize) -gt $redBudget) { $redTruncated = $true; break }
+            $packet.Add($line)
+            $redUsed += $lineSize
+        }
+        if ($redTruncated) {
+            $packet.Add('- Red Lines truncated; read AGENTS.md for the full list.')
+        }
     }
 }
 
@@ -176,6 +191,67 @@ if (Test-Path -LiteralPath $assetChecker -PathType Leaf) {
     }
 } else {
     $packet.Add('Asset checker: unavailable')
+}
+
+$packet.Add('')
+$packet.Add('## Handover')
+# A single word "dirty" tells the next agent nothing about WHICH files carry
+# the previous session's uncommitted work. Name them.
+$handoverEntries = @()
+$gitProbe = Get-Command git -ErrorAction SilentlyContinue
+if ($null -ne $gitProbe -and (Test-GitRepository $gitProbe.Source $rootFull)) {
+    $prevEnc = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        $rawHandover = ((& $gitProbe.Source -C $rootFull status --porcelain -z --untracked-files=all 2>$null) |
+            ForEach-Object { "$_" }) -join "`n"
+    } finally {
+        [Console]::OutputEncoding = $prevEnc
+    }
+    $skipNextHandover = $false
+    foreach ($entry in $rawHandover.Split([char]0)) {
+        if ($skipNextHandover) { $skipNextHandover = $false; continue }
+        if ($entry.Length -le 3) { continue }
+        $entryStatus = $entry.Substring(0, 2)
+        $entryPath = $entry.Substring(3)
+        if ($entryStatus -match '^[RC]') { $skipNextHandover = $true }
+        $handoverEntries += [pscustomobject]@{ Status = $entryStatus; Path = $entryPath }
+    }
+}
+if ($handoverEntries.Count -eq 0) {
+    $packet.Add('- Uncommitted paths: none')
+} else {
+    $packet.Add("- Uncommitted paths: $($handoverEntries.Count)")
+    $shownHandover = 0
+    foreach ($entry in $handoverEntries) {
+        if ($shownHandover -ge 20) { break }
+        $packet.Add("- protected: $($entry.Path) ($($entry.Status))")
+        $shownHandover++
+    }
+    if ($handoverEntries.Count -gt 20) {
+        $packet.Add("- protected: ... $($handoverEntries.Count - 20) more")
+    }
+    $nextValue = Get-SectionField $stateLines 'Hot State' 'Next'
+    $declared = @()
+    foreach ($entry in $handoverEntries) {
+        if ($nextValue -and $nextValue.Contains($entry.Path)) { $declared += $entry.Path }
+    }
+    if ($declared.Count -gt 0) {
+        $packet.Add("- Declared in Next: $($declared -join ', ')")
+    } else {
+        $packet.Add('- Declared in Next: none')
+        $packet.Add('- WARNING: dirty worktree without explicit handover; do not overwrite the paths above wholesale.')
+    }
+}
+$snapshotForPacket = Join-Path $rootFull '.pps/session-snapshot'
+if (Test-Path -LiteralPath $snapshotForPacket -PathType Leaf) {
+    $snapStarted = 'unknown'
+    foreach ($snapLine in [System.IO.File]::ReadAllLines($snapshotForPacket, [System.Text.Encoding]::UTF8)) {
+        if ($snapLine -match '^started_at:\s*(.+)$') { $snapStarted = $Matches[1].Trim(); break }
+    }
+    $packet.Add("- Session snapshot: present ($snapStarted)")
+} else {
+    $packet.Add('- Relay: SNAPSHOT MISSING; run scripts/session_begin.* before writing.')
 }
 
 $packet.Add('')

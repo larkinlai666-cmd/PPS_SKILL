@@ -194,6 +194,16 @@ if not re.fullmatch(r"\d+\.\d+\.\d+", version):
 if f"## [{version}]" not in read(REPO / "CHANGELOG.md"):
     error(f"CHANGELOG.md has no section for VERSION {version}.")
 
+# A review document that lags the code turns the "closed defects" list into a
+# claim nobody can re-check. Bind the review header to VERSION.
+review_text = read(REPO / "ADVERSARIAL_REVIEW.md")
+review_head = "\n".join(review_text.splitlines()[:20])
+if version not in review_head:
+    error(
+        f"ADVERSARIAL_REVIEW.md does not name VERSION {version} in its opening lines; "
+        "the review must be re-dated for every release so the closed/open list stays checkable."
+    )
+
 if ERRORS:
     print(f"PPS distribution validation: FAILED ({len(ERRORS)} error(s))")
     for item in ERRORS:

@@ -173,3 +173,20 @@ Do not weaken a gate to make an invalid project pass. Repair the underlying reco
 - `L3`: all-source, all-decision, final-deliverable audit before freeze/export.
 
 Escalate only when the current level cannot establish coverage or reveals conflict.
+
+## Red line wiring (PPS/1.2)
+
+A red line in `AGENTS.md` may name the check that enforces it by ending the
+entry with a parenthesised tail: an opening parenthesis, the word `verify`, a
+colon, the in-repo path of the check, then a closing parenthesis. Example
+shape, with the path spelled out: `(verify:` followed by `tests/e2e-parity.sh`
+and `)`.
+
+When any red line carries such a tail, `scripts/verify_gate.*` extracts every
+named path and refuses to write a verify stamp unless
+`scripts/project_verify.*` references it — either directly, or by reading
+`.pps/verify-manifest.txt` which lists it. A red line that names a check but is
+not wired into the gate is a wish, not a rule.
+
+Red lines about feel, judgement, or human review need no tail and are never
+machine-checked.

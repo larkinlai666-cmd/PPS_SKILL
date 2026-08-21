@@ -35,6 +35,8 @@ field_in_section() {
   ' "$file"
 }
 
+next_value_for_handover="$(field_in_section "$state" "Hot State" "Next")"
+
 tmp_file="$(mktemp "${TMPDIR:-/tmp}/pps-resume.XXXXXX")"
 trap 'rm -f "$tmp_file"' EXIT
 {
@@ -49,11 +51,39 @@ trap 'rm -f "$tmp_file"' EXIT
   if grep -Eq '^##[[:space:]]+Red Lines[[:space:]]*$' "$root/AGENTS.md" 2>/dev/null; then
     echo
     echo "## Red Lines"
-    awk '
-      $0 ~ "^##[[:space:]]+Red Lines[[:space:]]*$" { inside=1; next }
-      inside && /^##[[:space:]]/ { exit }
-      inside && /^- / { print }
-    ' "$root/AGENTS.md" | sed -n '1,12p'
+    # Take every non-empty line in the section, not only "- " bullets:
+    # numbered items and bold headers are red lines too, and dropping them
+    # made the packet claim a project had no engineering red lines at all.
+    # Budget by bytes so the shape of the list cannot silently truncate it.
+    red_lines_body="$(
+      awk '
+        $0 ~ "^##[[:space:]]+Red Lines[[:space:]]*$" { inside=1; next }
+        inside && /^##[[:space:]]/ { exit }
+        inside && NF { print }
+      ' "$root/AGENTS.md"
+    )"
+    red_lines_kept=""
+    red_lines_budget=1500
+    red_lines_used=0
+    red_lines_truncated=0
+    while IFS= read -r red_line; do
+      [[ -n "$red_line" ]] || continue
+      red_line_size=$(( ${#red_line} + 1 ))
+      if (( red_lines_used + red_line_size > red_lines_budget )); then
+        red_lines_truncated=1
+        break
+      fi
+      red_lines_kept="${red_lines_kept}${red_line}"$'\n'
+      red_lines_used=$(( red_lines_used + red_line_size ))
+    done <<< "$red_lines_body"
+    if [[ -n "$red_lines_kept" ]]; then
+      printf '%s' "$red_lines_kept"
+    else
+      echo "- (section present but empty)"
+    fi
+    if (( red_lines_truncated == 1 )); then
+      echo "- Red Lines truncated; read AGENTS.md for the full list."
+    fi
   fi
 
   if [[ -f "$root/EVENTS.md" ]]; then
@@ -133,6 +163,63 @@ trap 'rm -f "$tmp_file"' EXIT
     fi
   else
     echo "Asset checker: unavailable"
+  fi
+
+  echo
+  echo "## Handover"
+  # A single word "dirty" tells the next agent nothing about WHICH files carry
+  # the previous session's uncommitted work. Name them: that is the whole
+  # point of a handover section.
+  handover_paths=""
+  if command -v git >/dev/null 2>&1 && git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    handover_skip=0
+    while IFS= read -r -d '' handover_entry; do
+      if (( handover_skip == 1 )); then
+        handover_skip=0
+        continue
+      fi
+      [[ "${#handover_entry}" -gt 3 ]] || continue
+      handover_status="${handover_entry:0:2}"
+      handover_path="${handover_entry:3}"
+      case "$handover_status" in
+        R* | C*) handover_skip=1 ;;
+      esac
+      handover_paths="${handover_paths}${handover_status}"$'\t'"${handover_path}"$'\n'
+    done < <(git -C "$root" status --porcelain -z --untracked-files=all 2>/dev/null)
+  fi
+  handover_paths="$(printf '%s' "$handover_paths" | sed '/^$/d')"
+  if [[ -z "$handover_paths" ]]; then
+    echo "- Uncommitted paths: none"
+  else
+    handover_count="$(printf '%s\n' "$handover_paths" | wc -l | tr -d '[:space:]')"
+    printf -- '- Uncommitted paths: %s\n' "$handover_count"
+    printf '%s\n' "$handover_paths" | sed -n '1,20p' |
+      awk -F'\t' '{ printf "- protected: %s (%s)\n", $2, $1 }'
+    if (( handover_count > 20 )); then
+      printf -- '- protected: ... %s more\n' "$(( handover_count - 20 ))"
+    fi
+    # Paths the outgoing Next line explicitly hands over are the ones the
+    # incoming session is expected to touch; everything else dirty is a
+    # landmine.
+    declared_handover=""
+    while IFS= read -r handover_candidate; do
+      [[ -n "$handover_candidate" ]] || continue
+      if printf '%s' "$next_value_for_handover" | grep -Fq "$handover_candidate"; then
+        declared_handover="${declared_handover}${handover_candidate}, "
+      fi
+    done < <(printf '%s\n' "$handover_paths" | awk -F'\t' '{ print $2 }')
+    if [[ -n "$declared_handover" ]]; then
+      printf -- '- Declared in Next: %s\n' "${declared_handover%, }"
+    else
+      echo "- Declared in Next: none"
+      echo "- WARNING: dirty worktree without explicit handover; do not overwrite the paths above wholesale."
+    fi
+  fi
+  if [[ -f "$root/.pps/session-snapshot" ]]; then
+    printf -- '- Session snapshot: present (%s)\n' \
+      "$(sed -n 's/^started_at:[[:space:]]*//p' "$root/.pps/session-snapshot" | head -n 1)"
+  else
+    echo "- Relay: SNAPSHOT MISSING; run scripts/session_begin.* before writing."
   fi
 
   echo

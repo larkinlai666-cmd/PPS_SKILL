@@ -765,6 +765,28 @@ if ($isPps12) {
                 if ($line -notmatch $eventPattern) {
                     Add-ValidationError "Malformed event line in EVENTS.md: $line"
                 }
+                if ($isPps12) {
+                    $filesMatch = [regex]::Match($line, '\|\s*files:\s*(?<v>.*?)\s*\|\s*verify:')
+                    $verifyMatch = [regex]::Match($line, '\|\s*verify:\s*(?<v>.*?)\s*\|\s*pending:')
+                    $pendingMatch = [regex]::Match($line, '\|\s*pending:\s*(?<v>.*?)\s*$')
+                    $titleMatch = [regex]::Match($line, '^-\s+[0-9-]+:\s*\[[^\]]*\]\s*(?<v>.*?)\s*\|\s*files:')
+                    $filesValue = if ($filesMatch.Success) { $filesMatch.Groups['v'].Value } else { '' }
+                    $verifyValue = if ($verifyMatch.Success) { $verifyMatch.Groups['v'].Value } else { '' }
+                    $pendingValue = if ($pendingMatch.Success) { $pendingMatch.Groups['v'].Value } else { '' }
+                    $titleValue = if ($titleMatch.Success) { $titleMatch.Groups['v'].Value } else { '' }
+                    if (-not [string]::IsNullOrWhiteSpace($filesValue) -and $filesValue -ne 'none') {
+                        foreach ($eventPath in @($filesValue.Split(',') | ForEach-Object { $_.Trim() })) {
+                            if ([string]::IsNullOrWhiteSpace($eventPath)) { continue }
+                            $null = Resolve-ProjectFile $rootFull $eventPath "EVENTS.md files entry"
+                        }
+                    }
+                    if ($verifyValue -eq 'none' -and $pendingValue -eq 'none' -and
+                        $titleValue -notmatch '(?i)^(abandoned|note|chat|plan)(\s|:|$)') {
+                        # An event that verified nothing and left nothing
+                        # pending records nothing.
+                        Add-ValidationError "Event '$titleValue' has 'verify: none' and 'pending: none'; a closing event must name its verification or keep something pending (prefix the title with note/chat/plan/abandoned for informational entries)."
+                    }
+                }
             }
         }
         $eventsLineCount = @($eventsText -split "`r?`n").Count
@@ -788,9 +810,18 @@ if ($isPps12) {
             $openedDate = [datetime]::ParseExact(
                 $openedMatch.Groups[1].Value, 'yyyy-MM-dd',
                 [System.Globalization.CultureInfo]::InvariantCulture)
+            if ($line -match '\[(abandoned|closed)\]') {
+                # An explicitly abandoned proposal has been decided.
+                continue
+            }
             if (([DateTime]::UtcNow.Date - $openedDate.Date).TotalDays -gt 7) {
                 if ($next -notmatch [regex]::Escape($proposalId)) {
-                    Add-ValidationWarning "Proposal $proposalId has been pending for more than 7 days and is not restated in Next; state kept, closed, or split."
+                    if ($isPps12) {
+                        # "Silence means abandonment" has to cost something.
+                        Add-ValidationError "Proposal $proposalId has been pending for more than 7 days and is not restated in Hot State Next by ID; restate it, close it, or mark it '[abandoned]'."
+                    } else {
+                        Add-ValidationWarning "Proposal $proposalId has been pending for more than 7 days and is not restated in Next; state kept, closed, or split."
+                    }
                 }
             }
         }
@@ -821,7 +852,63 @@ if ($isPps12) {
     $terminalTasks = @()
     $archivedTasks = @()
     $outputRoots = @()
+    # --- Runtime surfaces (DUTY-E: deployment is not loading) ----------------
+    # Git synchronization cannot prove a deployed system loaded the new bytes.
+    # A project whose product lives partly outside the repository needs a legal
+    # place to declare that surface plus the probe that checks it. Only an
+    # environment variable NAME may be recorded, never an absolute path.
+    if ($contextText -match '(?m)^##\s+Runtime Surfaces\s*$') {
+        # Scan every Runtime Surfaces section: the template ships one
+        # commented example, and a real declaration may be appended in another.
+        $runtimeBody = ''
+        foreach ($runtimeSection in [regex]::Matches(
+            $contextText, '(?ms)^##\s+Runtime Surfaces\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')) {
+            $runtimeBody += "`n" + [regex]::Replace(
+                $runtimeSection.Groups['body'].Value, '(?s)<!--.*?-->', '')
+        }
+        if (-not [string]::IsNullOrWhiteSpace($runtimeBody)) {
+            foreach ($runtimeRow in @($runtimeBody -split "`r?`n")) {
+                if ($runtimeRow -notmatch '^\|') { continue }
+                $runtimeCells = @($runtimeRow.Trim('|') -split '\|' | ForEach-Object { $_.Trim() })
+                if ($runtimeCells.Count -lt 4) { continue }
+                $runtimeId = $runtimeCells[0]
+                if ([string]::IsNullOrWhiteSpace($runtimeId) -or $runtimeId -eq 'ID' -or $runtimeId -match '^:?-{3,}') { continue }
+                if ($runtimeId -notmatch '^R-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$') {
+                    Add-ValidationError "Runtime Surfaces row ID must be an R-* identifier, found '$runtimeId'."
+                    continue
+                }
+                $null = Resolve-ProjectFile $rootFull $runtimeCells[1] "Runtime surface $runtimeId repo path"
+                if ($runtimeCells[2] -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+                    Add-ValidationError "Runtime surface $runtimeId must name an environment VARIABLE (e.g. WEZTERM_CONFIG_DIR), not a path, found '$($runtimeCells[2])'."
+                }
+                $runtimeProbe = $runtimeCells[3]
+                if ([string]::IsNullOrWhiteSpace($runtimeProbe) -or $runtimeProbe -eq 'none') {
+                    Add-ValidationError "Runtime surface $runtimeId has no Probe; a declared runtime surface without a probe cannot answer whether the deployed copy loaded."
+                } else {
+                    $null = Resolve-ProjectFile $rootFull $runtimeProbe "Runtime surface $runtimeId probe"
+                    if (-not (Test-Path -LiteralPath (Join-Path $rootFull $runtimeProbe))) {
+                        Add-ValidationError "Runtime surface $runtimeId probe '$runtimeProbe' does not exist."
+                    }
+                    $verifyEntryPs = Join-Path $rootFull 'scripts/project_verify.ps1'
+                    if ((Test-Path -LiteralPath $verifyEntryPs -PathType Leaf) -and
+                        -not (Read-Utf8File $verifyEntryPs).Contains($runtimeProbe)) {
+                        Add-ValidationError "Runtime surface $runtimeId probe '$runtimeProbe' is not referenced by scripts/project_verify.ps1; an unwired probe never runs."
+                    }
+                }
+            }
+        }
+    }
+
+    $emptyRegistry = $false
     if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
+        if ((Read-Utf8File $taskIndexPath) -notmatch '(?m)^###\s+T-') {
+            # A half-present registry is the worst of both worlds: multitask
+            # semantics activate but nothing is declared. Report this alone.
+            Add-ValidationError "TASK_INDEX.md exists but registers no task: empty registry not allowed; delete the file to stay single-task, or register the tasks."
+            $emptyRegistry = $true
+        }
+    }
+    if ((Test-Path -LiteralPath $taskIndexPath -PathType Leaf) -and -not $emptyRegistry) {
         $taskIndexText = Read-Utf8File $taskIndexPath
         $taskHeadings = [regex]::Matches(
             $taskIndexText,
@@ -1454,6 +1541,43 @@ foreach ($id in $requiredIds) {
         $evidenceCell = if ($cells.Count -ge 3) { $cells[2] } else { '' }
         if ([string]::IsNullOrWhiteSpace($evidenceCell) -or $evidenceCell -in @('Present', 'present')) {
             Add-ValidationError "Coverage row for $id needs an evidence cell naming the command, test, or inspection; bare 'Present' cannot distinguish checked from unchecked."
+        } else {
+            # Evidence must be a resolvable reference, not prose. A table of
+            # unparseable sentences stays green forever and answers nothing.
+            $coverageOk = $false
+            $coverageReason = ''
+            if ($evidenceCell -match '(^|\s)(validate_project|verify_gate|readiness_check|asset_check|boundary_check)(\s|:|$)') {
+                $coverageOk = $true
+            } elseif ($evidenceCell -match '^manual:\s*\S') {
+                # A manual attestation is only honest while the item is still
+                # openly pending.
+                if ($next -match [regex]::Escape($id)) {
+                    $coverageOk = $true
+                } else {
+                    $coverageReason = "uses 'manual:' but $id is not restated in Hot State Next; a manual attestation must stay openly pending"
+                }
+            } elseif ($evidenceCell -match '(^|\s)(\d{4}-\d{2}-\d{2})(\s|$)') {
+                $coverageDate = [regex]::Match($evidenceCell, '\d{4}-\d{2}-\d{2}').Value
+                $eventsPathCov = Join-Path $rootFull 'EVENTS.md'
+                if ((Test-Path -LiteralPath $eventsPathCov -PathType Leaf) -and
+                    (Read-Utf8File $eventsPathCov) -match ('(?m)^-\s+' + [regex]::Escape($coverageDate) + ':')) {
+                    $coverageOk = $true
+                } else {
+                    $coverageReason = "names date $coverageDate which is not an event line in EVENTS.md"
+                }
+            } else {
+                $refMatch = [regex]::Match($evidenceCell, '[A-Za-z0-9_./-]+\.(sh|ps1|py|js|ts|mjs|cjs|bat|cmd|exe|rb|go|rs|java|kt|php|pl|lua)')
+                if (-not $refMatch.Success) {
+                    $coverageReason = 'is not a resolvable evidence reference'
+                } elseif (-not (Test-Path -LiteralPath (Join-Path $rootFull $refMatch.Value))) {
+                    $coverageReason = "names '$($refMatch.Value)' which does not exist in the project"
+                } else {
+                    $coverageOk = $true
+                }
+            }
+            if (-not $coverageOk) {
+                Add-ValidationError "Coverage row for $id has evidence '$evidenceCell' that $coverageReason; use a PPS gate name, an existing in-repo check path, an EVENTS.md date, or 'manual: <reason>' while the item stays in Next."
+            }
         }
     }
 }
