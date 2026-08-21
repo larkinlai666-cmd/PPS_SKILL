@@ -51,6 +51,12 @@ events_nonempty() {
 check "main artifact exists ($main_rel)" main_exists
 check "EVENTS.md records at least one event" events_nonempty
 
+# Behavioral check (required for software/hybrid packages). The gate refuses to
+# stamp unless at least one non-structural check names a real project artifact.
+# Replace scripts/e2e_probe.sh with the real user path as soon as one exists.
+behavioral_probe() { bash "$root/scripts/e2e_probe.sh" "$root"; }
+check "behavioral probe (scripts/e2e_probe.sh)" behavioral_probe
+
 # Add project-specific checks here, for example:
 #   check "unit tests" npm test
 #   check "e2e smoke" node scripts/e2e-smoke.js

@@ -91,14 +91,21 @@ Keep one concrete package active. For code, lock component, entry point, interfa
 
 When the user approves, rejects, or modifies:
 
+0. **before writing anything**, run `scripts/session_begin.*` — it records which files already carry uncommitted handover work, and the verify gate refuses to stamp without that snapshot;
 1. update the real artifact or code;
 2. add or update the canonical `D-*` record and active block;
 3. append an event for supersession or rejection;
 4. remove absorbed feedback from the capsule;
 5. update the project map only if an architecture boundary changed;
 6. update coverage with evidence and the next action;
-7. run `scripts/verify_gate.*` (structural validation plus declared project checks; it writes the verify stamp);
+7. run `scripts/verify_gate.*` (structural validation, gate substance, red-line wiring, handover lock, then the declared project checks; it writes the verify stamp);
 8. run full asset handoff/risk checks, then `readiness_check.* --verified`/`-Verified`; readiness rejects a missing or stale stamp.
+
+The gate is the enforcement point, not a formality: it fails when the session
+snapshot is missing, when a predecessor's uncommitted work was overwritten,
+when `scripts/project_verify.*` is hollow, when a red line names a check the
+entry never calls, and — for software/hybrid packages — when the behavioral
+check asserts nothing real.
 
 Run the project-local validator before claiming closure. A clean prose summary is not proof of propagation.
 

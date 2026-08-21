@@ -72,13 +72,22 @@ if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
     $agentsLines = [System.IO.File]::ReadAllLines($agentsPath, [System.Text.Encoding]::UTF8)
     $redLines = [System.Collections.Generic.List[string]]::new()
     $insideRed = $false
+    $insideRedComment = $false
     foreach ($line in $agentsLines) {
         if ($line -match '^##\s+Red Lines\s*$') { $insideRed = $true; continue }
         if ($insideRed -and $line -match '^## ') { break }
         # Take every non-empty line, not only "- " bullets: numbered items and
         # bold headers are red lines too, and dropping them made the packet
-        # claim a project had no engineering red lines at all.
-        if ($insideRed -and -not [string]::IsNullOrWhiteSpace($line)) { $redLines.Add($line) }
+        # claim a project had no engineering red lines at all. Skip HTML
+        # comments: template guidance is not a red line and must not consume
+        # the byte budget.
+        if ($insideRed) {
+            if ($line -match '<!--') { $insideRedComment = $true }
+            if ($line -match '-->') { $insideRedComment = $false; continue }
+            if (-not $insideRedComment -and -not [string]::IsNullOrWhiteSpace($line)) {
+                $redLines.Add($line)
+            }
+        }
     }
     if ($redLines.Count -gt 0) {
         $packet.Add('')

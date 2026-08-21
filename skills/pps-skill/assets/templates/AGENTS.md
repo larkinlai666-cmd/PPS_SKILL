@@ -6,6 +6,20 @@
 
 - 暂无项目红线。第一次事故复盘后在此追加，勿删除本节。
 
+<!--
+Engineering-layer red lines (encoding, platform parity, error handling, path
+quoting) belong here WITH a bound check: these are the traps that pass review
+and break users. Start from these shapes, then give each one a parenthesised
+verify tail naming your own check so the gate can enforce it:
+
+- Never ship without the encoding/parse regimen for every changed script.
+- Never swallow an error into a silent fallback; a degraded path must report.
+- Never pass a path through a construct that splits on spaces.
+
+A red line without a bound tail is a prompt, not a gate. Bind the ones a script
+can check; leave judgement calls untailed.
+-->
+
 - A red line may bind itself to the check that enforces it by ending with a
   parenthesised `verify:` tail naming an in-repo path. When a red line carries
   such a tail, `scripts/verify_gate.*` refuses to stamp unless

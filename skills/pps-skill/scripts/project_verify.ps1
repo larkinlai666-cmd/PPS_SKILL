@@ -51,6 +51,14 @@ Invoke-Check "EVENTS.md records at least one event" {
     $eventsText -match '(?m)^- \d{4}-\d{2}-\d{2}: \[PKG-'
 }
 
+# Behavioral check (required for software/hybrid packages). The gate refuses to
+# stamp unless at least one non-structural check names a real project artifact.
+# Replace scripts/e2e_probe.ps1 with the real user path as soon as one exists.
+Invoke-Check "behavioral probe (scripts/e2e_probe.ps1)" {
+    & (Join-Path $rootFull 'scripts/e2e_probe.ps1') -Root $rootFull | Out-Null
+    $LASTEXITCODE -eq 0
+}
+
 # Add project-specific checks here, for example:
 #   Invoke-Check "unit tests" { npm test; $LASTEXITCODE -eq 0 }
 #   Invoke-Check "e2e smoke" { node scripts/e2e-smoke.js; $LASTEXITCODE -eq 0 }

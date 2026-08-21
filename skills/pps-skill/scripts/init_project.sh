@@ -220,6 +220,7 @@ for script_name in \
   append_event.ps1 append_event.sh \
   boundary_check.ps1 boundary_check.sh \
   session_begin.ps1 session_begin.sh \
+  e2e_probe.ps1 e2e_probe.sh \
   pre-commit pre-commit.ps1; do
   cp "$script_dir/$script_name" "$target/scripts/$script_name"
 done

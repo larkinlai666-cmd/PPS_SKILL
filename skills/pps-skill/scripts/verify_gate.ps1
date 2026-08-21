@@ -58,6 +58,42 @@ if ($verifyDecl -notmatch 'scripts/(verify_gate|project_verify)') {
 }
 Write-Host "Verify routing: declaration routes through the gate entry"
 
+# A mention is not a call. Grepping the whole file lets a comment satisfy the
+# wiring requirement, which is the same "keyword matching pretends to be
+# parsing" defect already closed in the receipt layer.
+function Test-EntryInvokesPath([string]$EntryPath, [string]$Wanted) {
+    foreach ($rawLine in [System.IO.File]::ReadAllLines($EntryPath, [System.Text.Encoding]::UTF8)) {
+        $line = $rawLine.TrimStart()
+        if ($line.StartsWith('#')) { continue }
+        $hash = $line.IndexOf('#')
+        if ($hash -ge 0) { $line = $line.Substring(0, $hash) }
+        if (-not $line.Contains($Wanted)) { continue }
+        if ($line -match '(^|[^A-Za-z0-9_])(Invoke-Check|check|bash|sh|pwsh|powershell|python3?|node|npm|npx)\s' -or
+            $line -match '^&\s' -or $line -match '^\s*function\s' -or
+            $line -match '\)\s*\{' -or $line -match '^\$\w+\s*=\s*&') {
+            return $true
+        }
+    }
+    return $false
+}
+
+$canonicalBookkeeping = @(
+    'PROJECT_STATE.md', 'EVENTS.md', 'DECISIONS.md', 'CONTEXT.md', 'PROJECT_MAP.md',
+    'TASK_INDEX.md', 'MERGES.md', 'ASSETS.md', 'ENVIRONMENT.md', 'SOURCE_INDEX.md',
+    'AGENTS.md'
+)
+
+function Get-RealArtifactRefs([string]$Text, [string]$RootFull) {
+    $refs = @()
+    foreach ($m in [regex]::Matches($Text, '[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9]+')) {
+        $candidate = $m.Value -replace '^\./', ''
+        $candidate = $candidate -replace '^(root|rootFull|PSScriptRoot|projectRoot|repo|repoRoot)/', ''
+        if ($candidate -in $canonicalBookkeeping) { continue }
+        if (Test-Path -LiteralPath (Join-Path $RootFull $candidate)) { $refs += $candidate }
+    }
+    return $refs
+}
+
 Write-Host "-- Step 2b/4: gate substance"
 $verifyEntry = Join-Path $rootFull 'scripts/project_verify.ps1'
 if (-not (Test-Path -LiteralPath $verifyEntry -PathType Leaf)) {
@@ -88,13 +124,55 @@ $modeValue = if ($modeMatch.Success) { $modeMatch.Groups[1].Value } else { '' }
 if ($modeValue -in @('software', 'hybrid')) {
     # Unit tests can pass while the caller path is broken: a software package
     # needs at least one check that is not the structural validator itself.
+    # The template ships structural self-checks (state files exist, chronicle
+    # non-empty). Those are PPS bookkeeping, not evidence the product works.
     $behavioral = @($entryLinesAll | Where-Object {
-        ($_ -match 'Invoke-Check\s|check\s+"') -and ($_ -notmatch 'validate_project|validate_skill')
+        $candidate = $_.TrimStart()
+        (-not $candidate.StartsWith('#')) -and
+        ($candidate -match 'Invoke-Check\s|check\s+"') -and
+        ($candidate -notmatch 'validate_project|validate_skill') -and
+        ($candidate -notmatch 'PROJECT_STATE|EVENTS\.md|DECISIONS|CONTEXT\.md|PROJECT_MAP|TASK_INDEX|MERGES|coverage') -and
+        ($candidate -notmatch 'main artifact exists')
     })
     if ($behavioral.Count -lt 1) {
         Write-Host "ERROR: software package needs a behavioral check: scripts/project_verify.ps1 declares only structural validation."
         Write-Host "Add at least one check that exercises the product the way a user reaches it."
         Write-Host "PPS verify gate: FAILED (no behavioral check)"
+        exit 1
+    }
+    # An always-true script block satisfies a lexical rule while asserting
+    # nothing. Require a real project artifact on the behavioral line, in its
+    # inline script block, or in the helper it calls.
+    $behavioralReal = $false
+    foreach ($behavioralLine in $behavioral) {
+        if ((Get-RealArtifactRefs $behavioralLine $rootFull).Count -gt 0) {
+            $behavioralReal = $true
+            break
+        }
+        $labelMatch = [regex]::Match($behavioralLine, 'Invoke-Check\s+"[^"]*"\s*\{(?<inline>.*)$')
+        if ($labelMatch.Success -and
+            (Get-RealArtifactRefs $labelMatch.Groups['inline'].Value $rootFull).Count -gt 0) {
+            $behavioralReal = $true
+            break
+        }
+        # A multi-line script block: read forward until the closing brace.
+        $startIndex = [Array]::IndexOf($entryLinesAll, $behavioralLine)
+        if ($startIndex -ge 0) {
+            $blockText = ''
+            for ($i = $startIndex; $i -lt [Math]::Min($startIndex + 12, $entryLinesAll.Count); $i++) {
+                $blockText += "`n" + $entryLinesAll[$i]
+                if ($i -gt $startIndex -and $entryLinesAll[$i].TrimStart().StartsWith('}')) { break }
+            }
+            if ((Get-RealArtifactRefs $blockText $rootFull).Count -gt 0) {
+                $behavioralReal = $true
+                break
+            }
+        }
+    }
+    if (-not $behavioralReal) {
+        Write-Host "ERROR: the behavioral check in scripts/project_verify.ps1 names no real project artifact; an always-true assertion checks nothing."
+        Write-Host "Point the check at a test file, probe, or product entry point that exists in the project."
+        Write-Host "PPS verify gate: FAILED (behavioral check asserts nothing)"
         exit 1
     }
 }
@@ -124,9 +202,9 @@ if ($redlineTargets.Count -gt 0) {
     } else { '' }
     $unwired = $false
     foreach ($target in $redlineTargets) {
-        if ($entryText.Contains($target)) { continue }
-        if ($manifestText.Contains($target) -and $entryText.Contains('verify-manifest')) { continue }
-        Write-Host "ERROR: red line names '(verify: $target)' but scripts/project_verify.ps1 does not reference it."
+        if (Test-EntryInvokesPath $verifyEntry $target) { continue }
+        if ($manifestText.Contains($target) -and (Test-EntryInvokesPath $verifyEntry 'verify-manifest')) { continue }
+        Write-Host "ERROR: red line names '(verify: $target)' but scripts/project_verify.ps1 never calls it (a mention in a comment does not count)."
         $unwired = $true
     }
     if ($unwired) {
@@ -137,6 +215,52 @@ if ($redlineTargets.Count -gt 0) {
     Write-Host "red line wiring: all named checks are wired into the gate entry"
 } else {
     Write-Host "red line wiring: no red line names a machine check (human-only red lines are allowed)"
+}
+
+Write-Host "-- Step 2d/4: relay handover lock"
+# The lock must be on the completion path, not in an optional script nobody
+# runs. Close is "gate + readiness"; if the gate never consults the handover
+# snapshot, the predecessor's uncommitted work can vanish silently and the
+# stamp will still claim the package was verified.
+$snapshotPathGate = Join-Path $rootFull '.pps/session-snapshot'
+if (-not (Test-Path -LiteralPath $snapshotPathGate -PathType Leaf)) {
+    if ($modeValue -in @('software', 'hybrid')) {
+        Write-Host 'Relay: SNAPSHOT MISSING; run scripts/session_begin.ps1 before writing.'
+        Write-Host 'Without a session snapshot the gate cannot prove this session did not overwrite uncommitted handover work.'
+        Write-Host 'PPS verify gate: FAILED (Relay: SNAPSHOT MISSING)'
+        exit 1
+    }
+    Write-Host "Relay: SNAPSHOT MISSING; run scripts/session_begin.ps1 before writing (warning in $modeValue mode)."
+}
+$boundaryScript = Join-Path $rootFull 'scripts/boundary_check.ps1'
+if (Test-Path -LiteralPath $boundaryScript -PathType Leaf) {
+    $boundaryArgs = @('-Root', $rootFull)
+    $writerMatch = [regex]::Match($stateText, '(?m)^-\s+Writer:\s*(.*?)\s*$')
+    if ($writerMatch.Success -and
+        -not [string]::IsNullOrWhiteSpace($writerMatch.Groups[1].Value) -and
+        $writerMatch.Groups[1].Value -ne 'none') {
+        $boundaryArgs += @('-Task', $writerMatch.Groups[1].Value)
+    }
+    if (Test-Path -LiteralPath (Join-Path $rootFull '.pps/boundary-baseline') -PathType Leaf) {
+        $boundaryArgs += '-AllowPreexisting'
+    }
+    $boundaryOutput = (& $engine.Source -NoProfile -ExecutionPolicy Bypass `
+        -File $boundaryScript @boundaryArgs 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    if ($boundaryOutput -match 'protected_overwrite:') {
+        foreach ($boundaryLine in ($boundaryOutput -split "`n")) {
+            if ($boundaryLine -match 'protected_overwrite:') { Write-Host $boundaryLine }
+        }
+        Write-Host 'PPS verify gate: FAILED (protected_overwrite: handover work was overwritten)'
+        exit 1
+    }
+    if ($boundaryOutput -match 'unclaimed_write:') {
+        # Unclaimed writes are a boundary-discipline problem, not a handover
+        # loss. Keep the gate's hard failure scoped to what Git cannot recover.
+        Write-Host 'WARNING: the worktree contains changes no Write set claims; run scripts/boundary_check.ps1 and claim or revert them.'
+    }
+    Write-Host 'relay handover lock: no protected path was overwritten'
+} else {
+    Write-Host 'relay handover lock: boundary_check.ps1 unavailable; cannot verify handover safety'
 }
 
 Write-Host "-- Step 3/4: project verification entry"

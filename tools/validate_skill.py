@@ -204,6 +204,23 @@ if version not in review_head:
         "the review must be re-dated for every release so the closed/open list stays checkable."
     )
 
+# Locking only the header lets the body keep describing superseded machines.
+# A reader who trusts a stale replay matrix builds the wrong threat model.
+stale_review_phrases = {
+    "restatement warning": "aged proposals are an error on PPS/1.2, not a warning",
+    "Session-start `git status` + dirty-overwrite prohibition": (
+        "the handover lock is session_begin + boundary_check protected_overwrite"
+    ),
+    "bare `Present` fails with a targeted diagnostic": (
+        "coverage evidence must be a resolvable, gate-called reference"
+    ),
+}
+for phrase, reason in stale_review_phrases.items():
+    if phrase in review_text:
+        error(
+            f"ADVERSARIAL_REVIEW.md still describes a superseded mechanism ({phrase!r}): {reason}."
+        )
+
 if ERRORS:
     print(f"PPS distribution validation: FAILED ({len(ERRORS)} error(s))")
     for item in ERRORS:

@@ -2040,6 +2040,190 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw 'Boundary check auto-claimed an undeclared canonical file.'
     }
 
+    # --- Necessary-path fixtures (D-CORE-012..020) -------------------------
+    $gateNoSnapshot = Join-Path $tempRoot "gate-no-snapshot-case"
+    Copy-Item -LiteralPath $software -Destination $gateNoSnapshot -Recurse
+    foreach ($leftover in @('.pps/session-snapshot', '.pps/verify-stamp')) {
+        $leftoverPath = Join-Path $gateNoSnapshot $leftover
+        if (Test-Path -LiteralPath $leftoverPath) { Remove-Item -LiteralPath $leftoverPath }
+    }
+    $noSnapshotResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gateNoSnapshot 'scripts/verify_gate.ps1') `
+            -Root $gateNoSnapshot 2>&1
+    }
+    if ($noSnapshotResult.Code -eq 0 -or $noSnapshotResult.Text -notmatch 'Relay: SNAPSHOT MISSING') {
+        throw 'Verify gate stamped a software package with no session snapshot.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $gateNoSnapshot '.pps/verify-stamp')) {
+        throw 'Verify gate wrote a stamp without a session snapshot.'
+    }
+
+    $gateOnlyOverwrite = Join-Path $tempRoot "gate-only-overwrite-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName gate-only-overwrite-case -Mode software -Profile standard `
+        -ParentDir $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Gate-only overwrite fixture initialization failed.' }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $gateOnlyOverwrite 'docs/MAIN.md'),
+        "session A hardening not committed`n", $utf8NoBom)
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $gateOnlyOverwrite 'scripts/session_begin.ps1') `
+        -Root $gateOnlyOverwrite | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $gateOnlyOverwrite 'docs/MAIN.md'),
+        "session B wholesale overwrite`n", $utf8NoBom)
+    $stampToClear = Join-Path $gateOnlyOverwrite '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+    $gateOnlyResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gateOnlyOverwrite 'scripts/verify_gate.ps1') `
+            -Root $gateOnlyOverwrite 2>&1
+    }
+    if ($gateOnlyResult.Code -eq 0 -or $gateOnlyResult.Text -notmatch 'protected_overwrite: docs/MAIN\.md') {
+        throw 'Running only the verify gate allowed a handover overwrite to be stamped.'
+    }
+    if (Test-Path -LiteralPath $stampToClear) {
+        throw 'Verify gate stamped over overwritten handover work.'
+    }
+
+    $staleSnapshot = Join-Path $tempRoot "stale-snapshot-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName stale-snapshot-case -Mode software -Profile standard `
+        -ParentDir $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Stale snapshot fixture initialization failed.' }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $staleSnapshot 'docs/MAIN.md'), "session A work`n", $utf8NoBom)
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $staleSnapshot 'scripts/session_begin.ps1') `
+        -Root $staleSnapshot | Out-Null
+    $snapshotFilePath = Join-Path $staleSnapshot '.pps/session-snapshot'
+    $snapshotBody = [System.IO.File]::ReadAllText($snapshotFilePath, [System.Text.Encoding]::UTF8)
+    $epochMatch = [regex]::Match($snapshotBody, '(?m)^started_epoch: (\d+)')
+    $agedEpoch = [long]$epochMatch.Groups[1].Value - (30 * 86400)
+    $snapshotBody = [regex]::Replace(
+        $snapshotBody, '(?m)^started_epoch: \d+', "started_epoch: $agedEpoch")
+    [System.IO.File]::WriteAllText($snapshotFilePath, $snapshotBody, $utf8NoBom)
+    $staleResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $staleSnapshot 'scripts/session_begin.ps1') `
+            -Root $staleSnapshot 2>&1
+    }
+    if ($staleResult.Code -ne 3 -or $staleResult.Text -notmatch 'stale session snapshot') {
+        throw 'An aged snapshot released its claim without a takeover.'
+    }
+    if ($staleResult.Text -notmatch 'Age does not release the claim') {
+        throw 'The stale-snapshot refusal did not explain that age never releases the claim.'
+    }
+    $takeoverResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $staleSnapshot 'scripts/session_begin.ps1') `
+            -Root $staleSnapshot -Takeover 2>&1
+    }
+    if ($takeoverResult.Text -notmatch 'Relay event recorded') {
+        throw 'Takeover did not record a relay event.'
+    }
+    $staleEvents = [System.IO.File]::ReadAllText(
+        (Join-Path $staleSnapshot 'EVENTS.md'), [System.Text.Encoding]::UTF8)
+    if ($staleEvents -notmatch 'relay takeover') {
+        throw 'The relay takeover is absent from the chronicle.'
+    }
+
+    $commentWiring = Join-Path $tempRoot "comment-wiring-case"
+    Copy-Item -LiteralPath $software -Destination $commentWiring -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $commentWiring 'tests') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $commentWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
+    $agentsFile = Join-Path $commentWiring 'AGENTS.md'
+    $agentsBody = [System.IO.File]::ReadAllText($agentsFile, [System.Text.Encoding]::UTF8)
+    $redIndex = $agentsBody.IndexOf('## Red Lines')
+    $nextIndex = $agentsBody.IndexOf("`n## ", $redIndex + 5)
+    $agentsBody = $agentsBody.Substring(0, $nextIndex) +
+        "`n- Never ship without parity. (verify: tests/parity-harness.ps1)`n" +
+        $agentsBody.Substring($nextIndex)
+    [System.IO.File]::WriteAllText($agentsFile, $agentsBody, $utf8NoBom)
+    $entryFile = Join-Path $commentWiring 'scripts/project_verify.ps1'
+    $entryBody = [System.IO.File]::ReadAllText($entryFile, [System.Text.Encoding]::UTF8)
+    $entryBody = $entryBody.Replace(
+        '# Add project-specific checks here, for example:',
+        "# also see tests/parity-harness.ps1 someday`n# Add project-specific checks here, for example:")
+    [System.IO.File]::WriteAllText($entryFile, $entryBody, $utf8NoBom)
+    $stampToClear = Join-Path $commentWiring '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $commentWiring 'scripts/session_begin.ps1') `
+        -Root $commentWiring 2>&1 | Out-Null
+    $commentResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $commentWiring 'scripts/verify_gate.ps1') `
+            -Root $commentWiring 2>&1
+    }
+    if ($commentResult.Code -eq 0 -or $commentResult.Text -notmatch 'never calls it') {
+        throw 'A red line path mentioned only in a comment satisfied the wiring gate.'
+    }
+
+    $alwaysTrue = Join-Path $tempRoot "always-true-case"
+    Copy-Item -LiteralPath $software -Destination $alwaysTrue -Recurse
+    $entryFile = Join-Path $alwaysTrue 'scripts/project_verify.ps1'
+    $entryBody = [System.IO.File]::ReadAllText($entryFile, [System.Text.Encoding]::UTF8)
+    $entryBody = [regex]::Replace(
+        $entryBody,
+        '(?s)Invoke-Check "behavioral probe \(scripts/e2e_probe\.ps1\)" \{.*?\n\}',
+        "Invoke-Check `"behavioral probe`" {`n    `$true`n}")
+    [System.IO.File]::WriteAllText($entryFile, $entryBody, $utf8NoBom)
+    $stampToClear = Join-Path $alwaysTrue '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $alwaysTrue 'scripts/session_begin.ps1') `
+        -Root $alwaysTrue 2>&1 | Out-Null
+    $alwaysTrueResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $alwaysTrue 'scripts/verify_gate.ps1') `
+            -Root $alwaysTrue 2>&1
+    }
+    if ($alwaysTrueResult.Code -eq 0 -or $alwaysTrueResult.Text -notmatch 'behavioral check asserts nothing') {
+        throw 'An always-true behavioral check satisfied the gate.'
+    }
+
+    $coverageUnwired = Join-Path $tempRoot "coverage-unwired-case"
+    Copy-Item -LiteralPath $standard -Destination $coverageUnwired -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $coverageUnwired 'prototypes') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $coverageUnwired 'prototypes/hardening-smoke.ps1'), "exit 0`n", $utf8NoBom)
+    $covFile = Join-Path $coverageUnwired 'CONTEXT.md'
+    $covBody = [System.IO.File]::ReadAllText($covFile, [System.Text.Encoding]::UTF8)
+    $covBody = [regex]::Replace(
+        $covBody, '(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', '${1} prototypes/hardening-smoke.ps1 |', 1)
+    [System.IO.File]::WriteAllText($covFile, $covBody, $utf8NoBom)
+    Assert-InvalidProject $coverageUnwired `
+        "never called by scripts/project_verify" `
+        "Coverage evidence that the gate never runs"
+
+    $noteLaundry = Join-Path $tempRoot "note-laundry-case"
+    Copy-Item -LiteralPath $standard -Destination $noteLaundry -Recurse
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $noteLaundry 'scripts/append_event.ps1') `
+        -Root $noteLaundry -Title 'note shipped installer hardening' `
+        -Files 'none' -Verify 'none' -Pending 'none' | Out-Null
+    Assert-InvalidProject $noteLaundry `
+        "informational prefix but claims a closing action" `
+        "Informational prefix laundering a real closure"
+
+    $installerRuntime = Join-Path $tempRoot "installer-runtime-case"
+    Copy-Item -LiteralPath $software -Destination $installerRuntime -Recurse
+    [System.IO.File]::WriteAllText(
+        (Join-Path $installerRuntime 'Install-Product.ps1'), "param()`n", $utf8NoBom)
+    $installerResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $installerRuntime 'scripts/validate_project.ps1') `
+            -Root $installerRuntime 2>&1
+    }
+    if ($installerResult.Text -notmatch "declares no '## Runtime Surfaces' row") {
+        throw 'An installer-shaped project with no runtime surface produced no warning.'
+    }
+
     # --- Core duty fixtures (D-CORE series) --------------------------------
     $hollowGateCase = Join-Path $tempRoot "hollow-gate-case"
     Copy-Item -LiteralPath $software -Destination $hollowGateCase -Recurse
@@ -2491,7 +2675,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $placementResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $eventPlacementCase 'scripts/append_event.ps1') `
-            -Root $eventPlacementCase -Title 'note Placement test' 2>&1
+            -Root $eventPlacementCase -Title 'chat Placement test' 2>&1
     }
     if ($placementResult.Code -ne 0) {
         throw "Event appender failed with a trailing section: $($placementResult.Text)"

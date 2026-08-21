@@ -55,11 +55,15 @@ trap 'rm -f "$tmp_file"' EXIT
     # numbered items and bold headers are red lines too, and dropping them
     # made the packet claim a project had no engineering red lines at all.
     # Budget by bytes so the shape of the list cannot silently truncate it.
+    # Skip HTML comments: template guidance is not a red line, and letting it
+    # consume the byte budget is how the real rules disappeared before.
     red_lines_body="$(
       awk '
         $0 ~ "^##[[:space:]]+Red Lines[[:space:]]*$" { inside=1; next }
         inside && /^##[[:space:]]/ { exit }
-        inside && NF { print }
+        inside && /<!--/ { commented=1 }
+        inside && /-->/ { commented=0; next }
+        inside && commented == 0 && NF { print }
       ' "$root/AGENTS.md"
     )"
     red_lines_kept=""

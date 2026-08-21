@@ -423,6 +423,34 @@ for rel in "${required[@]}"; do
   [[ -f "$root/$rel" ]] || add_error "Missing required file: $rel"
 done
 
+# Same rule as the gate's red-line wiring: a mention is not a call.
+coverage_tally_manual="$(mktemp "${TMPDIR:-/tmp}/pps-cov-manual.XXXXXX")"
+coverage_tally_rows="$(mktemp "${TMPDIR:-/tmp}/pps-cov-rows.XXXXXX")"
+trap 'rm -f "$coverage_tally_manual" "$coverage_tally_rows"' EXIT
+
+coverage_entry_calls() {
+  local entry_file="$1"
+  local wanted="$2"
+  awk -v wanted="$wanted" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (line ~ /^#/) next
+      hash = index(line, "#")
+      if (hash > 0) line = substr(line, 1, hash - 1)
+      if (index(line, wanted) == 0) next
+      if (line ~ /(^|[^[:alnum:]_])(check|Invoke-Check|bash|sh|pwsh|powershell|python3?|node|npm|npx|source|\.)[[:space:]]/ ||
+          line ~ /^&[[:space:]]/ || line ~ /\$\(/ ||
+          line ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)/) {
+        found = 1
+        exit
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$entry_file"
+}
+
+
 state="$root/PROJECT_STATE.md"
 decisions="$root/DECISIONS.md"
 context="$root/CONTEXT.md"
@@ -796,6 +824,25 @@ if (( is_pps12 == 1 )); then
     done <<< "$runtime_rows"
   fi
 
+  # Declaring a runtime surface is optional (a pure library has none), but a
+  # project that clearly installs itself somewhere and declares nothing keeps
+  # the "deployment is not loading" duty as a slogan. Warn, do not fail: the
+  # signal is heuristic and must not block honest projects.
+  if [[ "$mode" == "software" || "$mode" == "hybrid" ]] &&
+    ! printf '%s\n' "$runtime_rows" | grep -Eq '^\|[[:space:]]*R-'; then
+    installer_signal=""
+    write_decl="$(printf '%s\n' "$workset" |
+      sed -n 's/^-[[:space:]]*Write:[[:space:]]*//p' | head -n 1)"
+    if printf '%s\n' "$write_decl" | grep -Eq '(^|[,[:space:]])(live-|install|dist/|deploy)'; then
+      installer_signal="Write set declares an install/live/dist path"
+    elif ls "$root" 2>/dev/null | grep -Eq '^(Install|install|setup|Setup|deploy|Deploy).*\.(ps1|sh|bat|cmd|py)$'; then
+      installer_signal="an installer script exists at the project root"
+    fi
+    if [[ -n "$installer_signal" ]]; then
+      add_warning "This software project looks like it installs itself somewhere ($installer_signal) but declares no '## Runtime Surfaces' row; Git synchronization cannot prove the deployed copy loaded the new bytes."
+    fi
+  fi
+
   events_file="$root/EVENTS.md"
   if [[ -f "$events_file" ]]; then
     grep -Eq '^##[[:space:]]+Events[[:space:]]*$' "$events_file" ||
@@ -822,11 +869,28 @@ if (( is_pps12 == 1 )); then
             safe_project_path "$event_path" "EVENTS.md line $line_number files entry" >/dev/null
           done < <(printf '%s\n' "$event_files" | tr ',' '\n')
         fi
-        if [[ "$event_verify" == "none" && "$event_pending" == "none" ]] &&
-          ! printf '%s\n' "$event_title" | grep -Eiq '^(abandoned|note|chat|plan)([[:space:]]|:|$)'; then
+        if [[ "$event_verify" == "none" && "$event_pending" == "none" ]]; then
           # An event that verified nothing and left nothing pending records
           # nothing: this is how a chronicle rots into a changelog of noise.
-          add_error "Event at EVENTS.md line $line_number has 'verify: none' and 'pending: none'; a closing event must name its verification or keep something pending (prefix the title with note/chat/plan/abandoned for informational entries)."
+          # Only two prefixes may be truly empty: abandonment (the decision IS
+          # the content) and chat (no work claimed). note/plan/relay must at
+          # least name files or keep something pending, otherwise the prefix
+          # becomes laundry for real closures ("note shipped the fix").
+          if printf '%s\n' "$event_title" | grep -Eiq '^(abandoned|chat)([[:space:]]|:|$)'; then
+            :
+          elif printf '%s\n' "$event_title" | grep -Eiq '^(note|plan|relay)([[:space:]]|:|$)'; then
+            if [[ "$event_files" == "none" || -z "$event_files" ]]; then
+              add_error "Event at EVENTS.md line $line_number is prefixed '$(printf '%s' "$event_title" | awk '{print $1}')' with files/verify/pending all 'none'; an informational entry must at least name its files, or use the 'abandoned'/'chat' prefix if nothing was touched."
+            fi
+          else
+            add_error "Event at EVENTS.md line $line_number has 'verify: none' and 'pending: none'; a closing event must name its verification or keep something pending (only the 'abandoned' and 'chat' prefixes may be fully empty)."
+          fi
+          # A closing verb never belongs in an informational entry: that is how
+          # a real landing gets recorded as a memo.
+          if printf '%s\n' "$event_title" | grep -Eiq '^(note|plan|chat|relay)([[:space:]]|:)' &&
+            printf '%s\n' "$event_title" | grep -Eiq '(^|[[:space:]])(shipped|shipping|closed|closing|landed|landing|released|releasing|fixed|merged|completed)([[:space:]]|$|\.|,)'; then
+            add_error "Event at EVENTS.md line $line_number uses an informational prefix but claims a closing action ('$event_title'); record the real verification and pending state instead of filing a landing as a memo."
+          fi
         fi
       fi
     done < <(awk '
@@ -1595,6 +1659,7 @@ while IFS= read -r id; do
       add_error "Manifest ID $id must have exactly one row in $coverage_rel, found $coverage_count (lines $coverage_locations)."
     }
   if (( is_pps12 == 1 )) && [[ "$coverage_count" == "1" ]]; then
+    printf 'r\n' >>"$coverage_tally_rows"
     coverage_evidence="$(grep -E "^\\|[[:space:]]*${id}[[:space:]]*\\|" "$coverage_path" |
       head -n 1 | awk -F'|' '{
         value = $5
@@ -1618,6 +1683,7 @@ while IFS= read -r id; do
         coverage_pending="$next"
         if printf '%s\n' "$coverage_pending" | grep -Fq "$id"; then
           coverage_evidence_ok=1
+          printf 'm\n' >>"$coverage_tally_manual"
         else
           coverage_evidence_reason="uses 'manual:' but $id is not restated in Hot State Next; a manual attestation must stay openly pending"
         fi
@@ -1631,7 +1697,10 @@ while IFS= read -r id; do
           coverage_evidence_reason="names date $coverage_event_date which is not an event line in EVENTS.md"
         fi
       else
-        # Otherwise it must name a real in-repo check.
+        # Otherwise it must name a real in-repo check that the gate actually
+        # runs. A file that exists but is never executed makes the table green
+        # forever, which is the original "bare Present" defect with extra
+        # syntax.
         coverage_ref="$(printf '%s\n' "$coverage_evidence" |
           grep -Eo '[A-Za-z0-9_./-]+\.(sh|ps1|py|js|ts|mjs|cjs|bat|cmd|exe|rb|go|rs|java|kt|php|pl|lua)' |
           head -n 1)"
@@ -1640,7 +1709,25 @@ while IFS= read -r id; do
         elif [[ ! -e "$root/$coverage_ref" ]]; then
           coverage_evidence_reason="names '$coverage_ref' which does not exist in the project"
         else
-          coverage_evidence_ok=1
+          coverage_wired=0
+          for coverage_entry in "$root/scripts/project_verify.sh" "$root/scripts/project_verify.ps1"; do
+            [[ -f "$coverage_entry" ]] || continue
+            if coverage_entry_calls "$coverage_entry" "$coverage_ref"; then
+              coverage_wired=1
+              break
+            fi
+            if [[ -f "$root/.pps/verify-manifest.txt" ]] &&
+              grep -Fq "$coverage_ref" "$root/.pps/verify-manifest.txt" &&
+              coverage_entry_calls "$coverage_entry" "verify-manifest"; then
+              coverage_wired=1
+              break
+            fi
+          done
+          if (( coverage_wired == 1 )); then
+            coverage_evidence_ok=1
+          else
+            coverage_evidence_reason="names '$coverage_ref' which exists but is never called by scripts/project_verify.*; evidence that the gate does not run keeps the table green forever"
+          fi
         fi
       fi
       (( coverage_evidence_ok == 1 )) ||
@@ -1648,6 +1735,17 @@ while IFS= read -r id; do
     fi
   fi
 done <<< "$required_ids"
+
+if (( is_pps12 == 1 )); then
+  coverage_manual_count="$(wc -l <"$coverage_tally_manual" | tr -d '[:space:]')"
+  coverage_row_count="$(wc -l <"$coverage_tally_rows" | tr -d '[:space:]')"
+  # "manual:" is an honest escape hatch for one or two judgement calls. Used
+  # broadly it turns Next into a parking lot and the coverage table back into a
+  # wall of green with no machine behind it.
+  if (( coverage_row_count >= 3 )) && (( coverage_manual_count * 3 > coverage_row_count )); then
+    add_error "$coverage_manual_count of $coverage_row_count coverage rows use 'manual:' attestation; at most one third may be manual. Wire the rest to a real check or close them."
+  fi
+fi
 
 if [[ -n "$source_ids" ]]; then
   source_index="$root/SOURCE_INDEX.md"

@@ -4,6 +4,27 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-08-21
+
+Necessary-path round. The 0.4.6 core-duty re-review accepted that the machines now exist, and then made the decisive point: several of them were not welded onto the path an agent must walk to claim completion, and a few measured shape instead of behavior. Its verdict was "machine built, not yet welded in". This release welds them in. Nine new defects (D-CORE-012..020) closed.
+
+### Fixed
+
+- **The handover lock is now on the completion path (D-CORE-012, P0)**: `verify_gate.*` calls `boundary_check.*` before writing the stamp and fails on `protected_overwrite`; a missing `.pps/session-snapshot` fails the gate outright in software/hybrid mode (warning in document mode). The I5 replay — overwrite a dirty Write-set file and run *only* the gate — now produces no stamp. Unclaimed writes stay a warning inside the gate so mid-work runs remain usable.
+- **Snapshots no longer expire into silence (D-CORE-016, P0)**: any existing snapshot requires `--takeover` / `-Takeover` regardless of age, the default TTL is 7 days (`PPS_SNAPSHOT_TTL_SECONDS` overrides it), the refusal names the protected paths, and taking over after those paths already changed prints an explicit loss notice. A 3-day-old snapshot no longer lets a successor start as if nothing were pending.
+- **Wiring is parsed as a call, not a substring (D-CORE-013, P0)**: red-line `verify:` tails, coverage evidence paths, and runtime probes must appear on an uncommented line that looks like an invocation. A path mentioned in a comment no longer satisfies any wiring requirement.
+- **Behavioral checks must name a real artifact (D-CORE-019)**: `Invoke-Check "e2e" { $true }` fails. The check line, its inline script block, or the helper it calls must reference an existing project path, and the template's own structural self-checks (state files, chronicle) no longer count as behavioral.
+- **Coverage evidence must be run by the gate (D-CORE-014)**: a path that exists but is never called by `project_verify.*` (directly or via a read `.pps/verify-manifest.txt`) fails. `manual:` attestations are additionally capped at one third of coverage rows so `Next` cannot become a parking lot.
+- **`note` can no longer launder a closure (D-CORE-015)**: only `abandoned` and `chat` may be fully empty; `note`/`plan`/`relay` must at least name files; and an informational prefix combined with a closing verb (shipped/landed/released/fixed/merged/closed/completed) is rejected outright.
+- **Takeover and discard land in the chronicle (D-CORE-017)**: `session_begin --takeover` appends the relay event itself and fails the takeover (removing the snapshot) if the chronicle cannot be written, instead of printing a reminder.
+- **Installer-shaped projects are asked about runtime surfaces (D-CORE-018)**: a software/hybrid project whose Write set names an install/live/dist path, or which ships an `Install*`/`setup*`/`deploy*` script at the root, warns when it declares no `R-*` row. Warning, not error: the signal is heuristic.
+- **The review body can no longer lag the machines (D-CORE-020)**: the field-incident replay matrix is rewritten against the current release, and `validate_skill` now fails on superseded phrases (for example describing proposal aging as a warning), not merely a missing version in the header.
+
+### Added
+
+- `scripts/e2e_probe.*`: a real, runnable minimal behavioral probe shipped with every project and wired into `project_verify.*`, so a fresh software project satisfies the behavioral requirement honestly instead of being tempted into an always-true stub. It asserts the declared Main artifact is reachable and the component map is populated, and is explicitly marked for replacement by the real user path.
+- Template `AGENTS.md` now seeds engineering-layer red-line shapes (encoding/parse regimen, no silent fallback, no space-splitting path construct) with guidance to bind each one to a check, addressing the reviewer's point that agents should not have to invent the `verify:` tail themselves.
+
 ## [0.4.6] - 2026-08-21
 
 Core-duty round. An external core-duty review (2026-08-20) stopped attacking the optional multitask layer and audited the nine duties PPS claims for itself, with five real incidents from a 13-day relay project as evidence. Its verdict: the sentences are right, the machines behind them are still skippable. All eleven D-CORE defects are addressed; ten fully closed, one partially (the 1.1→1.2 upgrade command stays on the 0.5 roadmap).

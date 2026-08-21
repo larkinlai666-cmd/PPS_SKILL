@@ -187,6 +187,8 @@ foreach ($scriptName in @(
     'boundary_check.sh',
     'session_begin.ps1',
     'session_begin.sh',
+    'e2e_probe.ps1',
+    'e2e_probe.sh',
     'pre-commit',
     'pre-commit.ps1'
 )) {

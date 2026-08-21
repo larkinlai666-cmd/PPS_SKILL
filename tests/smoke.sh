@@ -1289,6 +1289,161 @@ if bash "$unclaimed_canonical/scripts/boundary_check.sh" "$unclaimed_canonical" 
 fi
 grep -q 'unclaimed_write: DECISIONS.md' "$temp_root/boundary-canonical.out"
 
+# --- Necessary-path fixtures (D-CORE-012..020) -----------------------------
+gate_no_snapshot_case="$temp_root/gate-no-snapshot-case"
+cp -R "$temp_root/software-case" "$gate_no_snapshot_case"
+rm -f "$gate_no_snapshot_case/.pps/session-snapshot" "$gate_no_snapshot_case/.pps/verify-stamp"
+set +e
+bash "$gate_no_snapshot_case/scripts/verify_gate.sh" "$gate_no_snapshot_case" \
+  >"$temp_root/gate-no-snapshot.out" 2>&1
+gate_no_snapshot_code=$?
+set -e
+[[ "$gate_no_snapshot_code" != "0" ]]
+grep -q 'Relay: SNAPSHOT MISSING' "$temp_root/gate-no-snapshot.out"
+[[ ! -f "$gate_no_snapshot_case/.pps/verify-stamp" ]]
+
+gate_only_overwrite_case="$temp_root/gate-only-overwrite-case"
+bash "$skill/scripts/init_project.sh" gate-only-overwrite-case \
+  --mode software --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+printf 'session A hardening not committed\n' >"$gate_only_overwrite_case/docs/MAIN.md"
+bash "$gate_only_overwrite_case/scripts/session_begin.sh" "$gate_only_overwrite_case" >/dev/null
+printf 'session B wholesale overwrite\n' >"$gate_only_overwrite_case/docs/MAIN.md"
+rm -f "$gate_only_overwrite_case/.pps/verify-stamp"
+set +e
+bash "$gate_only_overwrite_case/scripts/verify_gate.sh" "$gate_only_overwrite_case" \
+  >"$temp_root/gate-only-overwrite.out" 2>&1
+gate_only_code=$?
+set -e
+[[ "$gate_only_code" != "0" ]]
+grep -q 'protected_overwrite: docs/MAIN.md' "$temp_root/gate-only-overwrite.out"
+[[ ! -f "$gate_only_overwrite_case/.pps/verify-stamp" ]]
+
+stale_snapshot_case="$temp_root/stale-snapshot-case"
+bash "$skill/scripts/init_project.sh" stale-snapshot-case \
+  --mode software --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+printf 'session A work\n' >"$stale_snapshot_case/docs/MAIN.md"
+bash "$stale_snapshot_case/scripts/session_begin.sh" "$stale_snapshot_case" >/dev/null
+python3 - "$stale_snapshot_case" <<'PYEOF2'
+import re, sys
+p = sys.argv[1] + '/.pps/session-snapshot'
+t = open(p, encoding='utf-8').read()
+m = re.search(r'^started_epoch: (\d+)', t, re.M)
+t = re.sub(r'^started_epoch: \d+', 'started_epoch: %d' % (int(m.group(1)) - 3 * 86400), t, flags=re.M)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+set +e
+bash "$stale_snapshot_case/scripts/session_begin.sh" "$stale_snapshot_case" \
+  >"$temp_root/stale-snapshot.out" 2>&1
+stale_snapshot_code=$?
+set -e
+[[ "$stale_snapshot_code" == "3" ]]
+grep -Eq 'session snapshot (already exists|exists)' "$temp_root/stale-snapshot.out"
+grep -q 'docs/MAIN.md' "$temp_root/stale-snapshot.out"
+grep -q 'Re-run with --takeover' "$temp_root/stale-snapshot.out"
+# Beyond the TTL the claim must still hold: age never releases it.
+python3 - "$stale_snapshot_case" <<'PYEOF2'
+import re, sys
+p = sys.argv[1] + '/.pps/session-snapshot'
+t = open(p, encoding='utf-8').read()
+m = re.search(r'^started_epoch: (\d+)', t, re.M)
+t = re.sub(r'^started_epoch: \d+', 'started_epoch: %d' % (int(m.group(1)) - 30 * 86400), t, flags=re.M)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+set +e
+bash "$stale_snapshot_case/scripts/session_begin.sh" "$stale_snapshot_case" \
+  >"$temp_root/expired-snapshot.out" 2>&1
+expired_snapshot_code=$?
+set -e
+[[ "$expired_snapshot_code" == "3" ]]
+grep -q 'stale session snapshot' "$temp_root/expired-snapshot.out"
+grep -q 'Age does not release the claim' "$temp_root/expired-snapshot.out"
+bash "$stale_snapshot_case/scripts/session_begin.sh" "$stale_snapshot_case" --takeover \
+  >"$temp_root/stale-takeover.out" 2>&1
+grep -q 'Relay event recorded' "$temp_root/stale-takeover.out"
+grep -q 'relay takeover' "$stale_snapshot_case/EVENTS.md"
+
+comment_wiring_case="$temp_root/comment-wiring-case"
+cp -R "$temp_root/software-case" "$comment_wiring_case"
+mkdir -p "$comment_wiring_case/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$comment_wiring_case/tests/parity-harness.sh"
+python3 - "$comment_wiring_case" <<'PYEOF2'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+t = t[:j] + '\n- Never ship without parity. (verify: tests/parity-harness.sh)\n' + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+p = root + '/scripts/project_verify.sh'
+t = open(p, encoding='utf-8').read()
+t = t.replace('# Add project-specific checks here, for example:',
+              '# also see tests/parity-harness.sh someday\n# Add project-specific checks here, for example:')
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+rm -f "$comment_wiring_case/.pps/verify-stamp"
+bash "$comment_wiring_case/scripts/session_begin.sh" "$comment_wiring_case" >/dev/null 2>&1 || true
+set +e
+bash "$comment_wiring_case/scripts/verify_gate.sh" "$comment_wiring_case" \
+  >"$temp_root/comment-wiring.out" 2>&1
+comment_wiring_code=$?
+set -e
+[[ "$comment_wiring_code" != "0" ]]
+grep -q 'never calls it' "$temp_root/comment-wiring.out"
+[[ ! -f "$comment_wiring_case/.pps/verify-stamp" ]]
+
+always_true_case="$temp_root/always-true-case"
+cp -R "$temp_root/software-case" "$always_true_case"
+python3 - "$always_true_case" <<'PYEOF2'
+import re, sys
+p = sys.argv[1] + '/scripts/project_verify.sh'
+t = open(p, encoding='utf-8').read()
+t = t.replace('behavioral_probe() { bash "$root/scripts/e2e_probe.sh" "$root"; }',
+              'behavioral_probe() { true; }')
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+rm -f "$always_true_case/.pps/verify-stamp"
+bash "$always_true_case/scripts/session_begin.sh" "$always_true_case" >/dev/null 2>&1 || true
+set +e
+bash "$always_true_case/scripts/verify_gate.sh" "$always_true_case" \
+  >"$temp_root/always-true.out" 2>&1
+always_true_code=$?
+set -e
+[[ "$always_true_code" != "0" ]]
+grep -q 'behavioral check asserts nothing' "$temp_root/always-true.out"
+
+coverage_unwired_case="$temp_root/coverage-unwired-case"
+cp -R "$temp_root/standard-case" "$coverage_unwired_case"
+mkdir -p "$coverage_unwired_case/prototypes"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$coverage_unwired_case/prototypes/hardening-smoke.sh"
+python3 - "$coverage_unwired_case" <<'PYEOF2'
+import re, sys
+p = sys.argv[1] + '/CONTEXT.md'
+t = open(p, encoding='utf-8').read()
+t = re.sub(r'(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', r'\1 prototypes/hardening-smoke.sh |', t, count=1)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+expect_invalid "$coverage_unwired_case" \
+  "never called by scripts/project_verify" \
+  "Coverage evidence that the gate never runs"
+
+note_laundry_case="$temp_root/note-laundry-case"
+cp -R "$temp_root/standard-case" "$note_laundry_case"
+bash "$note_laundry_case/scripts/append_event.sh" "$note_laundry_case" \
+  --title "note shipped installer hardening" --files none --verify none --pending none >/dev/null
+expect_invalid "$note_laundry_case" \
+  "informational prefix but claims a closing action" \
+  "Informational prefix laundering a real closure"
+
+installer_runtime_case="$temp_root/installer-runtime-case"
+cp -R "$temp_root/software-case" "$installer_runtime_case"
+printf 'param()\n' >"$installer_runtime_case/Install-Product.ps1"
+bash "$installer_runtime_case/scripts/validate_project.sh" "$installer_runtime_case" \
+  >"$temp_root/installer-runtime.out" 2>&1
+grep -q "declares no '## Runtime Surfaces' row" "$temp_root/installer-runtime.out"
+
 # --- Core duty fixtures (D-CORE series) ------------------------------------
 hollow_gate_case="$temp_root/hollow-gate-case"
 cp -R "$temp_root/software-case" "$hollow_gate_case"
@@ -1631,7 +1786,7 @@ cp -R "$temp_root/standard-case" "$event_placement_case"
 printf '\n## Trailing Notes\n\n- unrelated trailing content\n' \
   >>"$event_placement_case/EVENTS.md"
 bash "$event_placement_case/scripts/append_event.sh" "$event_placement_case" \
-  --title "note Placement test"
+  --title "chat Placement test"
 awk '
   /^## Events$/ { inside=1; next }
   inside && /^## / { inside=0 }

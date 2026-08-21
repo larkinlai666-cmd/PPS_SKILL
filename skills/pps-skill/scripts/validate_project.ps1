@@ -239,6 +239,26 @@ $stateText = Read-Utf8File $statePath
 $decisionText = Read-Utf8File $decisionPath
 $contextText = Read-Utf8File $contextPath
 
+$script:coverageManualCount = 0
+$script:coverageRowCount = 0
+
+# Same rule as the gate's red-line wiring: a mention is not a call.
+function Test-EntryCallsPath([string]$EntryPath, [string]$Wanted) {
+    foreach ($rawLine in [System.IO.File]::ReadAllLines($EntryPath, [System.Text.Encoding]::UTF8)) {
+        $line = $rawLine.TrimStart()
+        if ($line.StartsWith('#')) { continue }
+        $hash = $line.IndexOf('#')
+        if ($hash -ge 0) { $line = $line.Substring(0, $hash) }
+        if (-not $line.Contains($Wanted)) { continue }
+        if ($line -match '(^|[^A-Za-z0-9_])(Invoke-Check|check|bash|sh|pwsh|powershell|python3?|node|npm|npx|source)\s' -or
+            $line -match '^&\s' -or $line -match '\)\s*\{' -or
+            $line -match '^[A-Za-z_][A-Za-z0-9_]*\(\)' -or $line -match '^\$\w+\s*=\s*&') {
+            return $true
+        }
+    }
+    return $false
+}
+
 $hotStateText = Get-Section $stateText 'Hot State'
 $protocol = Get-SectionField $hotStateText $stateText 'Hot State' 'Protocol'
 $profile = Get-SectionField $hotStateText $stateText 'Hot State' 'Profile'
@@ -780,11 +800,25 @@ if ($isPps12) {
                             $null = Resolve-ProjectFile $rootFull $eventPath "EVENTS.md files entry"
                         }
                     }
-                    if ($verifyValue -eq 'none' -and $pendingValue -eq 'none' -and
-                        $titleValue -notmatch '(?i)^(abandoned|note|chat|plan)(\s|:|$)') {
-                        # An event that verified nothing and left nothing
-                        # pending records nothing.
-                        Add-ValidationError "Event '$titleValue' has 'verify: none' and 'pending: none'; a closing event must name its verification or keep something pending (prefix the title with note/chat/plan/abandoned for informational entries)."
+                    if ($verifyValue -eq 'none' -and $pendingValue -eq 'none') {
+                        # Only two prefixes may be truly empty: abandonment
+                        # (the decision IS the content) and chat (no work
+                        # claimed). note/plan/relay must at least name files,
+                        # otherwise the prefix launders real closures.
+                        if ($titleValue -match '(?i)^(abandoned|chat)(\s|:|$)') {
+                            # legitimate empty entry
+                        } elseif ($titleValue -match '(?i)^(note|plan|relay)(\s|:|$)') {
+                            if ([string]::IsNullOrWhiteSpace($filesValue) -or $filesValue -eq 'none') {
+                                Add-ValidationError "Event '$titleValue' is prefixed informational with files/verify/pending all 'none'; an informational entry must at least name its files, or use the 'abandoned'/'chat' prefix if nothing was touched."
+                            }
+                        } else {
+                            Add-ValidationError "Event '$titleValue' has 'verify: none' and 'pending: none'; a closing event must name its verification or keep something pending (only the 'abandoned' and 'chat' prefixes may be fully empty)."
+                        }
+                        # A closing verb never belongs in an informational entry.
+                        if ($titleValue -match '(?i)^(note|plan|chat|relay)(\s|:)' -and
+                            $titleValue -match '(?i)(^|\s)(shipped|shipping|closed|closing|landed|landing|released|releasing|fixed|merged|completed)(\s|$|\.|,)') {
+                            Add-ValidationError "Event '$titleValue' uses an informational prefix but claims a closing action; record the real verification and pending state instead of filing a landing as a memo."
+                        }
                     }
                 }
             }
@@ -857,10 +891,10 @@ if ($isPps12) {
     # A project whose product lives partly outside the repository needs a legal
     # place to declare that surface plus the probe that checks it. Only an
     # environment variable NAME may be recorded, never an absolute path.
+    $runtimeBody = ''
     if ($contextText -match '(?m)^##\s+Runtime Surfaces\s*$') {
         # Scan every Runtime Surfaces section: the template ships one
         # commented example, and a real declaration may be appended in another.
-        $runtimeBody = ''
         foreach ($runtimeSection in [regex]::Matches(
             $contextText, '(?ms)^##\s+Runtime Surfaces\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')) {
             $runtimeBody += "`n" + [regex]::Replace(
@@ -900,6 +934,27 @@ if ($isPps12) {
     }
 
     $emptyRegistry = $false
+    # Declaring a runtime surface is optional (a pure library has none), but a
+    # project that clearly installs itself somewhere and declares nothing keeps
+    # the "deployment is not loading" duty as a slogan. Warn, do not fail.
+    $modeForRuntime = Get-SectionField $hotStateText $stateText 'Hot State' 'Mode'
+    # Only uncommented data rows count as a declaration: the template ships a
+    # commented example that must not silence the signal.
+    $runtimeDeclared = $runtimeBody -and ($runtimeBody -match '(?m)^\|\s*R-')
+    if ($modeForRuntime -in @('software', 'hybrid') -and -not $runtimeDeclared) {
+        $installerSignal = ''
+        $writeDecl = Get-SectionField $worksetText $contextText 'Workset Manifest' 'Write'
+        if ($writeDecl -match '(^|[,\s])(live-|install|dist/|deploy)') {
+            $installerSignal = 'Write set declares an install/live/dist path'
+        } elseif (@(Get-ChildItem -LiteralPath $rootFull -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^(Install|install|setup|Setup|deploy|Deploy).*\.(ps1|sh|bat|cmd|py)$' }).Count -gt 0) {
+            $installerSignal = 'an installer script exists at the project root'
+        }
+        if ($installerSignal) {
+            Add-ValidationWarning "This software project looks like it installs itself somewhere ($installerSignal) but declares no '## Runtime Surfaces' row; Git synchronization cannot prove the deployed copy loaded the new bytes."
+        }
+    }
+
     if (Test-Path -LiteralPath $taskIndexPath -PathType Leaf) {
         if ((Read-Utf8File $taskIndexPath) -notmatch '(?m)^###\s+T-') {
             # A half-present registry is the worst of both worlds: multitask
@@ -1534,6 +1589,7 @@ foreach ($id in $requiredIds) {
         )
         Add-ValidationError "Manifest ID $id must have exactly one row in $coverageRelative, found $coverageCount (lines $locations)."
     } elseif ($isPps12) {
+        $script:coverageRowCount++
         $rowMatch = [regex]::Match(
             $coverageText,
             '(?m)^\|\s*' + [regex]::Escape($id) + '\s*\|(?<rest>.*)$')
@@ -1553,6 +1609,7 @@ foreach ($id in $requiredIds) {
                 # openly pending.
                 if ($next -match [regex]::Escape($id)) {
                     $coverageOk = $true
+                    $script:coverageManualCount++
                 } else {
                     $coverageReason = "uses 'manual:' but $id is not restated in Hot State Next; a manual attestation must stay openly pending"
                 }
@@ -1572,13 +1629,44 @@ foreach ($id in $requiredIds) {
                 } elseif (-not (Test-Path -LiteralPath (Join-Path $rootFull $refMatch.Value))) {
                     $coverageReason = "names '$($refMatch.Value)' which does not exist in the project"
                 } else {
-                    $coverageOk = $true
+                    # A file that exists but is never executed makes the table
+                    # green forever: the original "bare Present" defect with
+                    # extra syntax.
+                    $coverageWired = $false
+                    foreach ($entryCandidate in @(
+                        (Join-Path $rootFull 'scripts/project_verify.ps1'),
+                        (Join-Path $rootFull 'scripts/project_verify.sh'))) {
+                        if (-not (Test-Path -LiteralPath $entryCandidate -PathType Leaf)) { continue }
+                        if (Test-EntryCallsPath $entryCandidate $refMatch.Value) { $coverageWired = $true; break }
+                        $manifestCandidate = Join-Path $rootFull '.pps/verify-manifest.txt'
+                        if ((Test-Path -LiteralPath $manifestCandidate -PathType Leaf) -and
+                            (Read-Utf8File $manifestCandidate).Contains($refMatch.Value) -and
+                            (Test-EntryCallsPath $entryCandidate 'verify-manifest')) {
+                            $coverageWired = $true
+                            break
+                        }
+                    }
+                    if ($coverageWired) {
+                        $coverageOk = $true
+                    } else {
+                        $coverageReason = "names '$($refMatch.Value)' which exists but is never called by scripts/project_verify.*; evidence that the gate does not run keeps the table green forever"
+                    }
                 }
             }
             if (-not $coverageOk) {
                 Add-ValidationError "Coverage row for $id has evidence '$evidenceCell' that $coverageReason; use a PPS gate name, an existing in-repo check path, an EVENTS.md date, or 'manual: <reason>' while the item stays in Next."
             }
         }
+    }
+}
+
+if ($isPps12) {
+    # "manual:" is an honest escape hatch for one or two judgement calls. Used
+    # broadly it turns Next into a parking lot and the table back into a wall
+    # of green with no machine behind it.
+    if ($script:coverageRowCount -ge 3 -and
+        ($script:coverageManualCount * 3) -gt $script:coverageRowCount) {
+        Add-ValidationError "$($script:coverageManualCount) of $($script:coverageRowCount) coverage rows use 'manual:' attestation; at most one third may be manual. Wire the rest to a real check or close them."
     }
 }
 

@@ -1,7 +1,7 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-21 (updated for the 0.4.6 core-duty round)
-- Scope: skill 0.4.6, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
+- Review date: 2026-08-21 (updated for the 0.4.7 necessary-path round)
+- Scope: skill 0.4.7, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
 
@@ -21,7 +21,23 @@
 | D-CORE-010 review text lagged the code | DUTY-I | **Closed**: `validate_skill` fails when `ADVERSARIAL_REVIEW.md` does not name the current VERSION in its opening lines |
 | D-CORE-011 half-activated multitask layer | DUTY-A/I | **Partially closed**: an empty `TASK_INDEX.md` now fails with an explicit "delete the file to stay single-task" diagnostic. The 1.1→1.2 upgrade command remains on the 0.5 roadmap; field 1.1 projects must not be force-migrated yet |
 
-Residual risk, stated plainly: the gate now refuses an empty verification entry and an unwired red line, but it still cannot prove a check is *sufficient*. A project owner can satisfy every structural requirement with weak assertions. The gate enforces execution and wiring, not sincerity.
+### 0.4.7 necessary-path round (D-CORE-012..020)
+
+The 0.4.6 re-review's verdict was "machine built, not yet welded in". All nine follow-ups are closed:
+
+| ID | Status in 0.4.7 |
+|---|---|
+| D-CORE-012 handover lock off the completion path | **Closed**: the gate calls `boundary_check.*` before stamping; missing snapshot fails software/hybrid outright |
+| D-CORE-013 wiring was a substring match | **Closed**: red-line tails, coverage paths, and probes must appear on an uncommented invocation line |
+| D-CORE-014 coverage evidence need not be run | **Closed**: the named check must be called by `project_verify.*` or a read manifest; `manual:` capped at one third of rows |
+| D-CORE-015 `note` laundered real closures | **Closed**: only `abandoned`/`chat` may be empty; informational prefixes may not claim closing actions |
+| D-CORE-016 snapshot expired into silence | **Closed**: any snapshot age requires takeover; TTL 7 days and configurable; post-overwrite takeover reports the loss |
+| D-CORE-017 takeover/discard left no trace | **Closed**: takeover appends its own relay event or fails |
+| D-CORE-018 undeclared runtime surfaces | **Closed as a warning**: installer-shaped projects without an `R-*` row are flagged, deliberately not failed |
+| D-CORE-019 behavioral check was lexical | **Closed**: the check must name a real project artifact; `{ $true }` fails; a runnable `e2e_probe.*` ships so honesty is the easy path |
+| D-CORE-020 review body lagged the machines | **Closed**: replay matrix rewritten; CI fails on superseded phrases, not just a missing version |
+
+Residual risk, stated plainly: the gate now refuses an empty verification entry, an unwired red line, an always-true behavioral check, and a stamp over overwritten handover work. It still cannot prove a check is *sufficient* — a project owner can satisfy every structural requirement with weak assertions, and the shipped `e2e_probe.*` is deliberately a floor, not a ceiling. The gate enforces execution, wiring, and non-destruction; not sincerity.
 
 ## 0.4.2 hardening round
 
@@ -90,17 +106,17 @@ Additional hardening verified by new negative tests: the verify stamp binds entr
 
 Each distilled mechanism is traced to the real incident that motivated it, and to the gate that would have caught it:
 
-| Field incident (campaign evidence) | PPS/1.1 behavior | PPS/1.2 gate |
+| Field incident (campaign evidence) | PPS/1.1 behavior | Machine in the current release |
 |---|---|---|
-| Uncommitted hardening overwritten at agent handover (relay project, 3-day silent loss) | No rule covered the handover moment | Session-start `git status` + dirty-overwrite prohibition + explicit `Next` handover; relay rule is L0 step 1 |
-| Known verification regimen never executed; encoding break shipped | Verify was a declarative line with no execution proof | Verify gate writes a device-local stamp; readiness fails on missing stamp (exit 4, `VERIFY EVIDENCE MISSING`) |
-| Unit tests green while the wired system was dead; silent catch + graceful degradation hid it | "Structural coverage ≠ semantic correctness" was stated but had no operational answer | Behavioral end-to-end assertions and liveness probes are named, legitimate Verify members; stamp binds gate runs to the package |
-| Three days spent fixing code that was never loaded | No "deployed vs loaded" distinction | Protocol self-knowledge line: deployed never proves loaded; liveness probes have a protocol position |
-| Coverage table uniformly `Present` for 13 days—unfalsifiable | Bare `Present` was structurally valid | Evidence cell required; bare `Present` fails with a targeted diagnostic |
-| Review proposal hung 6 days unnoticed | Proposals had no aging | `(opened date)` + 7-day restatement warning |
-| Event log grew 397 lines with two diverging hand-written styles | Status events had no grammar, budget, or archive | `EVENTS.md` fixed grammar + append script + malformed-line failure + archive warning |
-| 4 of 5 incidents were engineering-layer traps outside the authority system | Red lines had no protocol position | `## Red Lines` first section required, L0-read, packet-surfaced |
-| Task state, merge lineage, and rejections lived only in host-app chat history (7 tasks, 1 worktree) | One capsule served as both project and task state | Opt-in task registry, per-task capsules, Writer lease, typed merge receipts |
+| Uncommitted hardening overwritten at agent handover (relay project, 3-day silent loss) | No rule covered the handover moment | `session_begin.*` records `.pps/session-snapshot` with per-path content hashes; `verify_gate.*` calls `boundary_check.*` before stamping and fails on `protected_overwrite`; a missing snapshot fails the gate outright in software/hybrid mode; a snapshot never expires into silence — any age requires `--takeover`, which writes its own relay event |
+| Known verification regimen never executed; encoding break shipped | Verify was a declarative line with no execution proof | Verify declarations route through `scripts/project_verify.*`; the gate refuses an `exit 0`/echo-only entry, and a red line carrying a `verify:` tail must be **called** (not merely mentioned) by that entry; readiness fails on a missing or stale stamp (exit 4) |
+| Unit tests green while the wired system was dead; silent catch + graceful degradation hid it | "Structural coverage ≠ semantic correctness" was stated but had no operational answer | software/hybrid packages must declare a non-structural check whose line, script block, or helper names a **real project artifact**; an always-true assertion fails the gate |
+| Three days spent fixing code that was never loaded | No "deployed vs loaded" distinction | Optional `## Runtime Surfaces` table (`R-*`, repo path, environment VARIABLE name, probe) with the probe required to exist and be called by the gate entry; a project that ships an installer but declares no surface gets a warning |
+| Coverage table uniformly `Present` for 13 days—unfalsifiable | Bare `Present` was structurally valid | Coverage evidence must resolve: a PPS gate name, an in-repo check that the gate entry actually calls, a real `EVENTS.md` date, or `manual: <reason>` while the ID stays restated in `Next` — and at most one third of rows may be `manual:` |
+| Review proposal hung 6 days unnoticed | Proposals had no aging | `(opened date)` + aged proposals are an **error** on PPS/1.2 unless restated in `Next` by ID or marked `[abandoned]`/`[closed]` |
+| Event log grew 397 lines with two diverging hand-written styles | Status events had no grammar, budget, or archive | `EVENTS.md` fixed grammar + append script + malformed-line failure + archive warning; `verify: none` with `pending: none` is rejected, only `abandoned`/`chat` may be fully empty, and an informational prefix may not claim a closing action |
+| 4 of 5 incidents were engineering-layer traps outside the authority system | Red lines had no protocol position | `## Red Lines` required as the first H2, L0-read, packet-surfaced by byte budget (numbered and bold entries survive); a red line may bind itself to its enforcing check with a `verify:` tail |
+| Task state, merge lineage, and rejections lived only in host-app chat history (7 tasks, 1 worktree) | One capsule served as both project and task state | Opt-in task registry, per-task capsules, Writer lease, typed merge receipts; an empty registry is rejected outright |
 | Derived PPT task's scratch polluted product linting | Write sets were declarative only | `boundary_check` classifies every change or fails it as `unclaimed_write`; scratch defaults to ignored `local-task-output/` |
 | Dirty worktree made task contribution history unreconstructable | Fingerprints without checkpoints | `integrated` receipts require base + result checkpoints or explicit `lineage_incomplete` |
 | "Task complete" conflated with "merged into project" | Single `complete` status | `handoff_ready` / `integrated` / `deferred` / `consume_only` split |

@@ -57,24 +57,67 @@ $nowUtc = [DateTime]::UtcNow
 $nowEpoch = [long][Math]::Floor(($nowUtc - [DateTime]'1970-01-01').TotalSeconds)
 $nowIso = $nowUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
 
-# An unexpired snapshot means another session may still be mid-flight. Do not
-# block (a stuck lock is worse than a warning), but require an explicit
-# takeover so the handover is visible in the chronicle.
-if ((Test-Path -LiteralPath $snapshotFile -PathType Leaf) -and -not $Takeover) {
+# A prior snapshot means a previous session may still hold uncommitted work.
+# Age does NOT dissolve that claim: an agent relay spans days, so a snapshot
+# that "expired" overnight still describes work Git is not protecting.
+$snapshotTtlSeconds = if ($env:PPS_SNAPSHOT_TTL_SECONDS) {
+    [long]$env:PPS_SNAPSHOT_TTL_SECONDS
+} else {
+    604800
+}
+$previousProtected = @()
+if (Test-Path -LiteralPath $snapshotFile -PathType Leaf) {
     $previousLines = [System.IO.File]::ReadAllLines($snapshotFile, [System.Text.Encoding]::UTF8)
     $previousEpoch = 0
     $previousStarted = 'unknown'
     $previousDevice = 'unknown'
+    $inPreviousDirty = $false
     foreach ($line in $previousLines) {
+        if ($line -eq '-- dirty --') { $inPreviousDirty = $true; continue }
+        if ($inPreviousDirty) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $previousProtected += $line
+            continue
+        }
         if ($line -match '^started_epoch:\s*(\d+)') { $previousEpoch = [long]$Matches[1] }
         elseif ($line -match '^started_at:\s*(.+)$') { $previousStarted = $Matches[1].Trim() }
         elseif ($line -match '^device:\s*(.+)$') { $previousDevice = $Matches[1].Trim() }
     }
-    if ($previousEpoch -gt 0 -and ($nowEpoch - $previousEpoch) -lt 43200) {
-        Write-Output "ERROR: an unexpired session snapshot already exists (started $previousStarted on $previousDevice)."
-        Write-Output 'Another session may still hold uncommitted work. Re-run with -Takeover to claim the worktree;'
-        Write-Output 'the takeover must then be recorded with scripts/append_event.* so the relay stays visible.'
+    if (-not $Takeover -and $previousEpoch -gt 0) {
+        $snapshotAge = $nowEpoch - $previousEpoch
+        if ($snapshotAge -lt $snapshotTtlSeconds) {
+            Write-Output "ERROR: an unexpired session snapshot already exists (started $previousStarted on $previousDevice)."
+        } else {
+            Write-Output "ERROR: a stale session snapshot exists (started $previousStarted on $previousDevice, $([Math]::Floor($snapshotAge / 86400)) day(s) ago)."
+            Write-Output 'Age does not release the claim: an agent relay spans days, and Git still is not protecting that work.'
+        }
+        $protectedNames = @($previousProtected | ForEach-Object { ($_ -split "`t")[1] } |
+            Where-Object { $_ } | Select-Object -First 10)
+        if ($protectedNames.Count -gt 0) {
+            Write-Output "Protected paths recorded by that session: $($protectedNames -join ', ')"
+        }
+        Write-Output 'Re-run with -Takeover to claim the worktree; the takeover is recorded as a relay event automatically.'
         exit 3
+    }
+    # A snapshot taken AFTER the overwrite records the overwriting bytes and can
+    # never detect the loss. Surface that explicitly on takeover.
+    if ($Takeover) {
+        $staleOverwrites = @()
+        foreach ($record in $previousProtected) {
+            $parts = $record -split "`t"
+            if ($parts.Count -lt 3) { continue }
+            $previousFull = Join-Path $rootFull $parts[1]
+            $currentPreviousHash = if (Test-Path -LiteralPath $previousFull -PathType Leaf) {
+                Get-PathSha256 $previousFull
+            } else {
+                'absent'
+            }
+            if ($currentPreviousHash -ne $parts[2]) { $staleOverwrites += $parts[1] }
+        }
+        if ($staleOverwrites.Count -gt 0) {
+            Write-Output "NOTE: taking over after the following protected paths already changed: $($staleOverwrites -join ', ')"
+            Write-Output "The relay event below records that the predecessor's uncommitted bytes are gone."
+        }
     }
 }
 
@@ -164,6 +207,32 @@ if ($dirtyRecords.Count -gt 0) {
     Write-Output ''
     Write-Output 'These files carry work that Git is not protecting yet.'
     Write-Output 'Do not overwrite them wholesale; extend them, or discard explicitly with boundary_check -DiscardHandover PATH.'
+}
+# A takeover that leaves no trace is exactly the silent relay this lock exists
+# to prevent. Write the event here rather than trusting the operator.
+if ($Takeover) {
+    $appendScript = Join-Path $rootFull 'scripts/append_event.ps1'
+    if (-not (Test-Path -LiteralPath $appendScript -PathType Leaf)) {
+        Write-Output 'ERROR: takeover requires scripts/append_event.ps1 to record the relay event.'
+        Remove-Item -LiteralPath $snapshotFile -ErrorAction SilentlyContinue
+        exit 4
+    }
+    $takeoverFiles = @($dirtyRecords | ForEach-Object { ($_ -split "`t")[1] } |
+        Where-Object { $_ } | Select-Object -First 6)
+    $takeoverFilesValue = if ($takeoverFiles.Count -gt 0) { $takeoverFiles -join ',' } else { 'none' }
+    $engineCmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($null -eq $engineCmd) { $engineCmd = Get-Command powershell -ErrorAction SilentlyContinue }
+    & $engineCmd.Source -NoProfile -ExecutionPolicy Bypass -File $appendScript `
+        -Root $rootFull -Title 'relay takeover claimed the worktree' `
+        -Files $takeoverFilesValue -Verify 'session_begin snapshot recorded' `
+        -Pending 'preserve or discard the protected paths deliberately' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output 'ERROR: takeover could not be recorded in EVENTS.md; the relay must stay visible.'
+        Write-Output 'Fix the chronicle (scripts/append_event.ps1) and re-run -Takeover.'
+        Remove-Item -LiteralPath $snapshotFile -ErrorAction SilentlyContinue
+        exit 4
+    }
+    Write-Output 'Relay event recorded in EVENTS.md.'
 }
 Write-Output 'PPS session begin: OK'
 exit 0
