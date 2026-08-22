@@ -45,7 +45,10 @@ required=(
   references/multitask.md
   references/protocol.md
   references/project-modes.md
-  references/retrieval-and-gates.md
+  scripts/migrate_project.ps1
+  scripts/migrate_project.sh
+  scripts/pps_evidence.py
+  references/state-machine.json
   scripts/audit_legacy_project.ps1
   scripts/audit_legacy_project.sh
   scripts/asset_check.ps1
