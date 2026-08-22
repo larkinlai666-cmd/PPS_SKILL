@@ -481,7 +481,8 @@ entry_live_lines() {
       for (i = 1; i <= n; i++) {
         line = cleaned[i]
         if (line == "") continue
-        if (line ~ /^if[[:space:]]+(false|!)[[:space:]]*([;:]|then|$)/) {
+        if (line ~ /^if[[:space:]]+(false|!)[[:space:]]*([;:]|then|$)/ ||
+          line ~ /^while[[:space:]]+false[[:space:]]*(;|do)/) {
           if (line !~ /;[[:space:]]*fi[[:space:]]*$/) in_dead = 1
           continue
         }
@@ -515,7 +516,8 @@ entry_live_lines() {
         for (k = 1; k <= nlines; k++) {
           b = bl[k]
           if (b == "") continue
-          if (b ~ /^if[[:space:]]+(false|!)[[:space:]]*([;:]|then|$)/) continue
+          if (b ~ /^if[[:space:]]+(false|!)[[:space:]]*([;:]|then|$)/ ||
+            b ~ /^while[[:space:]]+false[[:space:]]*(;|do)/) continue
           body_out[fno++] = "F " f " " b
           rest = b
           sub(/^.*check[[:space:]]+"[^"]*"/, "", rest)
@@ -535,7 +537,11 @@ entry_live_lines() {
 entry_invokes_path() {
   local entry_file="$1"
   local wanted="$2"
-  entry_live_lines "$entry_file" | grep -Fq -- "$wanted"
+  # The live analysis drops dead code; a live line must still look like a
+  # CALL, not a mention. A string literal that names the path proves nothing.
+  entry_live_lines "$entry_file" | grep -F -- "$wanted" |
+    sed -E 's/^T //; s/^F [A-Za-z_][A-Za-z0-9_-]* //' |
+    grep -Eq '(^|[^[:alnum:]_])(check|Invoke-Check|bash|sh|pwsh|powershell|python3?|node|npm|npx|source|\.)[[:space:]]|^&[[:space:]]|[|&;][[:space:]]*[^[:space:]]|\$\('
 }
 
 

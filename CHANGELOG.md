@@ -4,6 +4,17 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-08-22
+
+Self-collision round. The 0.4.8 audit accepted the four 047 closures and then found the new machines can still be fooled: the automatic discard title trips the chronicle's own closing-verb rule, the live-line Contains still treats a string mention as a call, dead-branch dropping missed `if (0)` / `while ($false)`, and the "one parser" is three copies. All three F-048 findings closed; the two deferred items stay deferred.
+
+### Fixed
+
+- **The automatic discard event no longer trips the closing-verb rule (F-048-01)**: the title was `relay discard released protected paths`, and `released` is a closing verb that the chronicle rejects after an informational prefix. Renamed to `relay discard of protected paths`. The fixture now runs `validate_project` right after the discard and requires exit 0 — the event the machine writes must pass the machine's own syntax.
+- **Wiring requires a call shape on live lines (F-048-03)**: after the dead-code analysis, a live line must still look like a call (`check`/`bash`/`sh`/`pwsh`/`python`/`node`/`npm`/`npx`/`source`/dot-source, `&`, call assignment, pipe/command substitution). A top-level `Write-Host 'see tests/x.ps1'` or a bare string assignment no longer satisfies red-line, coverage, or probe wiring. The live-line prefix is stripped before shape matching so `& x.ps1` reached from top level still counts.
+- **Dead-branch dropping widened (F-048-03)**: beyond the literal `if false` / `if ($false)`, the analysis now also drops `while false` (Bash) and `if (0)`, `if ($null)`, `while ($false)` (PowerShell).
+- **Parser drift is now a test failure (F-048-02)**: the gate and validator still carry one copy each, but the smoke suites extract the function bodies and assert they are identical (Bash text diff; PowerShell body diff modulo the function name), so a one-sided edit fails the build instead of silently forking the parsers again.
+
 ## [0.4.8] - 2026-08-22
 
 Live-call round. The 0.4.7 audit accepted that the machines are welded onto the completion path and then moved the fight up one level again: the machines on the path can still be satisfied by dead code, and one floor is too low. Four findings (F-047-01..04) closed; the two deferred items stay deferred (Runtime Surfaces stays a warning, the 1.1→1.2 upgrader stays out of scope).

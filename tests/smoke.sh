@@ -14,6 +14,23 @@ cleanup() {
 trap cleanup EXIT
 
 bash "$skill/scripts/validate_skill.sh" "$skill"
+# F-048-02: the live-line parser must stay ONE implementation. The gate and
+# the validator each carry a copy; a drift fixture makes divergence loud.
+parser_probe() {
+  local file="$1"
+  local fn="$2"
+  awk -v fn="$fn" '
+    $0 ~ "^" fn "\(\)" { grab = 1 }
+    grab { print }
+    grab && $0 == "}" { exit }
+  ' "$file"
+}
+gate_parser="$(parser_probe "$skill/scripts/verify_gate.sh" entry_live_lines)$(parser_probe "$skill/scripts/verify_gate.sh" entry_invokes_path)"
+validate_parser="$(parser_probe "$skill/scripts/validate_project.sh" entry_live_lines)$(parser_probe "$skill/scripts/validate_project.sh" entry_invokes_path)"
+[[ "$gate_parser" == "$validate_parser" ]] || {
+  echo "Live-line parser drifted between the gate and the validator." >&2
+  exit 1
+}
 cp -R "$skill" "$temp_root/broken-skill"
 rm "$temp_root/broken-skill/references/protocol.md"
 if bash "$temp_root/broken-skill/scripts/validate_skill.sh" \
@@ -1519,6 +1536,63 @@ set -e
 [[ "$dead_branch_wiring_code" != "0" ]]
 grep -q 'never calls it' "$temp_root/dead-branch-wiring.out"
 
+mention_wiring_case="$temp_root/mention-wiring-case"
+cp -R "$temp_root/software-case" "$mention_wiring_case"
+mkdir -p "$mention_wiring_case/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$mention_wiring_case/tests/parity-harness.sh"
+python3 - "$mention_wiring_case" <<'PYEOF2'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+t = t[:j] + '\n- Never ship without parity. (verify: tests/parity-harness.sh)\n' + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+# F-048-03: a live line that only MENTIONS the path in a string literal is
+# not a call.
+echo "echo 'see tests/parity-harness.sh'" >>"$mention_wiring_case/scripts/project_verify.sh"
+rm -f "$mention_wiring_case/.pps/verify-stamp"
+bash "$mention_wiring_case/scripts/session_begin.sh" \
+  "$mention_wiring_case" >/dev/null 2>&1 || true
+set +e
+bash "$mention_wiring_case/scripts/verify_gate.sh" "$mention_wiring_case" \
+  >"$temp_root/mention-wiring.out" 2>&1
+mention_wiring_code=$?
+set -e
+[[ "$mention_wiring_code" != "0" ]]
+grep -q 'never calls it' "$temp_root/mention-wiring.out"
+[[ ! -f "$mention_wiring_case/.pps/verify-stamp" ]]
+
+while_false_case="$temp_root/while-false-case"
+cp -R "$temp_root/software-case" "$while_false_case"
+mkdir -p "$while_false_case/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$while_false_case/tests/parity-harness.sh"
+python3 - "$while_false_case" <<'PYEOF2'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+t = t[:j] + '\n- Never ship without parity. (verify: tests/parity-harness.sh)\n' + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+# F-048-03: a while-false loop is dead code on the same footing as if-false.
+echo 'while false; do bash "$root/tests/parity-harness.sh"; done' \
+  >>"$while_false_case/scripts/project_verify.sh"
+rm -f "$while_false_case/.pps/verify-stamp"
+bash "$while_false_case/scripts/session_begin.sh" \
+  "$while_false_case" >/dev/null 2>&1 || true
+set +e
+bash "$while_false_case/scripts/verify_gate.sh" "$while_false_case" \
+  >"$temp_root/while-false.out" 2>&1
+while_false_code=$?
+set -e
+[[ "$while_false_code" != "0" ]]
+grep -q 'never calls it' "$temp_root/while-false.out"
+
 relay_discard_case="$temp_root/relay-discard-case"
 bash "$skill/scripts/init_project.sh" relay-discard-case \
   --profile standard --parent "$temp_root" \
@@ -1534,7 +1608,10 @@ bash "$relay_discard_case/scripts/boundary_check.sh" "$relay_discard_case" \
 relay_discard_code=$?
 set -e
 grep -q 'Relay discard event recorded' "$temp_root/relay-discard.out"
-grep -q 'relay discard released protected paths' "$relay_discard_case/EVENTS.md"
+# F-048-01: the automatic title must not trip the closing-verb rule, and the
+# chronicle written by the discard must itself pass validation.
+grep -q 'relay discard of protected paths' "$relay_discard_case/EVENTS.md"
+bash "$relay_discard_case/scripts/validate_project.sh" "$relay_discard_case" --quiet
 
 floor_probe_dir_case="$temp_root/floor-probe-dir-case"
 cp -R "$temp_root/software-case" "$floor_probe_dir_case"

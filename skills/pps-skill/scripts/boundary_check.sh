@@ -302,7 +302,7 @@ if [[ -n "$discarded_paths" ]]; then
     exit 4
   fi
   if bash "$root/scripts/append_event.sh" "$root" \
-    --title "relay discard released protected paths" \
+    --title "relay discard of protected paths" \
     --files "$discarded_list" \
     --verify "discard recorded by boundary_check" \
     --pending "none" >/dev/null 2>&1; then

@@ -287,7 +287,7 @@ if ($discardedPaths.Count -gt 0) {
     if ($null -eq $engineCmd) { $engineCmd = Get-Command powershell -ErrorAction SilentlyContinue }
     $discardList = $discardedPaths -join ','
     & $engineCmd.Source -NoProfile -ExecutionPolicy Bypass -File $appendScript `
-        -Root $rootFull -Title 'relay discard released protected paths' `
+        -Root $rootFull -Title 'relay discard of protected paths' `
         -Files $discardList -Verify 'discard recorded by boundary_check' `
         -Pending 'none' | Out-Null
     if ($LASTEXITCODE -ne 0) {

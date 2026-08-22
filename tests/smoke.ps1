@@ -100,6 +100,42 @@ try {
         throw "PowerShell skill health validator accepted a missing required file."
     }
 
+    # F-048-02: the live-line parser must stay ONE implementation. The gate
+    # and the validator each carry a copy; a drift fixture makes divergence
+    # loud. (The gate names its entry check Test-EntryInvokesPath, the
+    # validator Test-EntryCallsPath; bodies must be identical modulo the name.)
+    function Get-FunctionBody([string]$Path, [string]$Name) {
+        # Brace counting is unreliable here: the bodies contain regex literals
+        # like '\)\s*\{'. The closing brace of a top-level function sits in
+        # column zero, so grab from the definition line to the first bare '}'.
+        $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8)
+        $out = New-Object System.Collections.ArrayList
+        $grabbing = $false
+        foreach ($l in $lines) {
+            if (-not $grabbing -and
+                $l -match ('^function\s+' + [regex]::Escape($Name) + '\s*\(')) {
+                $grabbing = $true
+            }
+            if ($grabbing) {
+                $null = $out.Add($l)
+                if ($out.Count -gt 1 -and $l -match '^\}\s*$') { break }
+            }
+        }
+        return ($out -join "`n")
+    }
+    $gatePsFile = Join-Path $skill "scripts/verify_gate.ps1"
+    $validatorPsFile = Join-Path $skill "scripts/validate_project.ps1"
+    $gateLiveBody = Get-FunctionBody $gatePsFile 'Get-EntryLiveLines'
+    $validatorLiveBody = Get-FunctionBody $validatorPsFile 'Get-EntryLiveLines'
+    if ($gateLiveBody -ne $validatorLiveBody) {
+        throw 'Get-EntryLiveLines drifted between the gate and the validator.'
+    }
+    $gateInvBody = Get-FunctionBody $gatePsFile 'Test-EntryInvokesPath'
+    $validatorInvBody = Get-FunctionBody $validatorPsFile 'Test-EntryCallsPath'
+    if ($gateInvBody -ne $validatorInvBody.Replace('Test-EntryCallsPath', 'Test-EntryInvokesPath')) {
+        throw 'The wiring call-shape check drifted between the gate and the validator.'
+    }
+
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
         -ProjectName standard-case -Profile standard -ParentDir $tempRoot -NoGit
@@ -2308,6 +2344,81 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw 'A red line path inside a dead branch satisfied the wiring gate.'
     }
 
+    $mentionWiring = Join-Path $tempRoot "mention-wiring-case"
+    Copy-Item -LiteralPath $software -Destination $mentionWiring -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $mentionWiring 'tests') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mentionWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
+    $agentsFile = Join-Path $mentionWiring 'AGENTS.md'
+    $agentsBody = [System.IO.File]::ReadAllText($agentsFile, [System.Text.Encoding]::UTF8)
+    $redIndex = $agentsBody.IndexOf('## Red Lines')
+    $nextIndex = $agentsBody.IndexOf("`n## ", $redIndex + 5)
+    $agentsBody = $agentsBody.Substring(0, $nextIndex) +
+        "`n- Never ship without parity. (verify: tests/parity-harness.ps1)`n" +
+        $agentsBody.Substring($nextIndex)
+    [System.IO.File]::WriteAllText($agentsFile, $agentsBody, $utf8NoBom)
+    # F-048-03: a live line that only MENTIONS the path in a string literal
+    # is not a call.
+    $entryFile = Join-Path $mentionWiring 'scripts/project_verify.ps1'
+    $entryBody = [System.IO.File]::ReadAllText($entryFile, [System.Text.Encoding]::UTF8)
+    $entryBody += "`nWrite-Host 'see tests/parity-harness.ps1'`n"
+    [System.IO.File]::WriteAllText($entryFile, $entryBody, $utf8NoBom)
+    $stampToClear = Join-Path $mentionWiring '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $mentionWiring 'scripts/session_begin.ps1') `
+        -Root $mentionWiring 2>&1 | Out-Null
+    $mentionResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mentionWiring 'scripts/verify_gate.ps1') `
+            -Root $mentionWiring 2>&1
+    }
+    if ($mentionResult.Code -eq 0 -or $mentionResult.Text -notmatch 'never calls it') {
+        throw 'A string-literal mention satisfied the wiring gate.'
+    }
+    if (Test-Path -LiteralPath $stampToClear) {
+        throw 'The gate stamped on a string-literal mention.'
+    }
+
+    foreach ($deadShape in @(
+        'if (0) { & tests/parity-harness.ps1 }',
+        'while ($false) { & tests/parity-harness.ps1 }'
+    )) {
+        $deadShapeWiring = Join-Path $tempRoot "dead-shape-wiring-case"
+        if (Test-Path -LiteralPath $deadShapeWiring) { Remove-Item -LiteralPath $deadShapeWiring -Recurse -Force }
+        Copy-Item -LiteralPath $software -Destination $deadShapeWiring -Recurse
+        New-Item -ItemType Directory -Path (Join-Path $deadShapeWiring 'tests') -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $deadShapeWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
+        $agentsFile = Join-Path $deadShapeWiring 'AGENTS.md'
+        $agentsBody = [System.IO.File]::ReadAllText($agentsFile, [System.Text.Encoding]::UTF8)
+        $redIndex = $agentsBody.IndexOf('## Red Lines')
+        $nextIndex = $agentsBody.IndexOf("`n## ", $redIndex + 5)
+        $agentsBody = $agentsBody.Substring(0, $nextIndex) +
+            "`n- Never ship without parity. (verify: tests/parity-harness.ps1)`n" +
+            $agentsBody.Substring($nextIndex)
+        [System.IO.File]::WriteAllText($agentsFile, $agentsBody, $utf8NoBom)
+        # F-048-03: dead branches beyond the literal `$false` (`if (0)`,
+        # `while ($false)`) must not satisfy wiring either.
+        $entryFile = Join-Path $deadShapeWiring 'scripts/project_verify.ps1'
+        $entryBody = [System.IO.File]::ReadAllText($entryFile, [System.Text.Encoding]::UTF8)
+        $entryBody += "`n$deadShape`n"
+        [System.IO.File]::WriteAllText($entryFile, $entryBody, $utf8NoBom)
+        $stampToClear = Join-Path $deadShapeWiring '.pps/verify-stamp'
+        if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $deadShapeWiring 'scripts/session_begin.ps1') `
+            -Root $deadShapeWiring 2>&1 | Out-Null
+        $deadShapeResult = Invoke-NativeCapture {
+            & $engine -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $deadShapeWiring 'scripts/verify_gate.ps1') `
+                -Root $deadShapeWiring 2>&1
+        }
+        if ($deadShapeResult.Code -eq 0 -or $deadShapeResult.Text -notmatch 'never calls it') {
+            throw "Dead shape [$deadShape] satisfied the wiring gate."
+        }
+    }
+
     $relayDiscard = Join-Path $tempRoot "relay-discard-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
@@ -2333,8 +2444,18 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     }
     $discardEvents = [System.IO.File]::ReadAllText(
         (Join-Path $relayDiscard 'EVENTS.md'), [System.Text.Encoding]::UTF8)
-    if ($discardEvents -notmatch 'relay discard released protected paths') {
+    if ($discardEvents -notmatch 'relay discard of protected paths') {
         throw 'The relay discard event is absent from EVENTS.md.'
+    }
+    # F-048-01: the chronicle written by the discard must itself pass
+    # validation, so the automatic title must not trip the closing-verb rule.
+    $discardValidate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $relayDiscard 'scripts/validate_project.ps1') `
+            -Root $relayDiscard -Quiet 2>&1
+    }
+    if ($discardValidate.Code -ne 0) {
+        throw 'The project fails validation right after a recorded discard.'
     }
 
     $floorProbeDir = Join-Path $tempRoot "floor-probe-dir-case"

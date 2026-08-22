@@ -1,7 +1,7 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-22 (updated for the 0.4.8 live-call round)
-- Scope: skill 0.4.8, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
+- Review date: 2026-08-22 (updated for the 0.4.9 self-collision round)
+- Scope: skill 0.4.9, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
 
@@ -20,6 +20,18 @@
 | D-CORE-009 single writer never checked in tooling | DUTY-F | **Closed**: an unexpired snapshot forces `--takeover`, which must then be recorded as an event; deliberately not a lock |
 | D-CORE-010 review text lagged the code | DUTY-I | **Closed**: `validate_skill` fails when `ADVERSARIAL_REVIEW.md` does not name the current VERSION in its opening lines |
 | D-CORE-011 half-activated multitask layer | DUTY-A/I | **Partially closed**: an empty `TASK_INDEX.md` now fails with an explicit "delete the file to stay single-task" diagnostic. The 1.1→1.2 upgrade command remains on the 0.5 roadmap; field 1.1 projects must not be force-migrated yet |
+
+### 0.4.9 self-collision round (F-048-01..03)
+
+The 0.4.8 audit accepted the four 047 closures and then found the new machines can still be fooled: the automatic discard title trips the chronicle's own closing-verb rule, the live-line Contains still treats a string mention as a call, dead-branch dropping missed `if (0)` / `while ($false)`, and the "one parser" is three copies. All three closed:
+
+| ID | Status in 0.4.9 |
+|---|---|
+| F-048-01 automatic discard title trips the closing-verb rule | **Closed**: renamed to `relay discard of protected paths`; the discard fixture now runs `validate_project` afterwards and requires exit 0 |
+| F-048-02 "one parser" is three copies | **Closed**: smoke suites extract and diff the function bodies (Bash text diff; PowerShell body diff modulo function name), so a one-sided edit fails the build |
+| F-048-03 live-line Contains still accepts mentions | **Closed**: after dead-code analysis, a live line must match a call shape (`check`/`bash`/`&`/dot-source/pipe/command substitution); string literals and bare assignments no longer count. Dead-branch dropping widened to `while false` (Bash) and `if (0)`, `if ($null)`, `while ($false)` (PowerShell) |
+
+Deferred by agreement, still: Runtime Surfaces stays a warning, the 1.1→1.2 upgrader stays out of scope, and this repository does not switch to 1.2.
 
 ### 0.4.8 live-call round (F-047-01..04)
 

@@ -99,7 +99,8 @@ function Get-EntryLiveLines([string]$EntryPath) {
     for ($i = 0; $i -lt $raw.Count; $i++) {
         $line = $cleaned[$i]
         if ($line -eq '') { continue }
-        if ($line -match '^if\s*\(\s*(\$false|!\s*\$true)\s*\)') {
+        if ($line -match '^if\s*\(\s*(\$false|\$null|0|!\s*\$true)\s*\)' -or
+            $line -match '^while\s*\(\s*\$false\s*\)') {
             if ($line -notmatch '\}\s*$') { $inDead = $true }
             continue
         }
@@ -132,7 +133,8 @@ function Get-EntryLiveLines([string]$EntryPath) {
         $visited[$f] = $true
         if (-not $bodies.ContainsKey($f)) { continue }
         foreach ($b in $bodies[$f]) {
-            if ($b -match '^if\s*\(\s*(\$false|!\s*\$true)\s*\)') { continue }
+            if ($b -match '^if\s*\(\s*(\$false|\$null|0|!\s*\$true)\s*\)' -or
+                $b -match '^while\s*\(\s*\$false\s*\)') { continue }
             $null = $result.Add("F $f $b")
             $helperMatch = [regex]::Match($b, '(?:Invoke-Check|check)\s+"[^"]*"\s*([A-Za-z_][A-Za-z0-9_-]*)\s*$')
             if ($helperMatch.Success) { $null = $queue.Add($helperMatch.Groups[1].Value) }
@@ -144,7 +146,21 @@ function Get-EntryLiveLines([string]$EntryPath) {
 
 function Test-EntryInvokesPath([string]$EntryPath, [string]$Wanted) {
     foreach ($l in @(Get-EntryLiveLines $EntryPath)) {
-        if ($l.Contains($Wanted)) { return $true }
+        if (-not $l.Contains($Wanted)) { continue }
+        # Strip the live-line prefix so a top-level "& x.ps1" still counts,
+        # then require a CALL shape, not a mention: a string literal that
+        # names the path proves nothing.
+        $line = $l
+        if ($line.StartsWith('T ')) { $line = $line.Substring(2) }
+        elseif ($line -match '^F [A-Za-z_][A-Za-z0-9_-]* ') {
+            $line = $line.Substring($line.IndexOf(' ') + 1)
+        }
+        if ($line -match '(^|[^A-Za-z0-9_])(Invoke-Check|check|bash|sh|pwsh|powershell|python3?|node|npm|npx)\s' -or
+            $line -match '^&\s' -or
+            $line -match '\)\s*\{' -or
+            $line -match '^\$\w+\s*=\s*&') {
+            return $true
+        }
     }
     return $false
 }
