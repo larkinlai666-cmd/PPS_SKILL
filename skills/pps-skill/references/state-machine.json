@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "comment": "Single machine-readable source for cross-platform semantics. The gate and the validator (PowerShell and Bash editions) both read this file instead of carrying copies of the same rules.",
+  "role_relation_allowed": {
+    "integrator": ["absorbs", "layers_on", "supersedes", "rollback_to"],
+    "worker": ["absorbs", "layers_on", "supersedes", "deferred", "rejected"],
+    "consumer": ["consumes_only"]
+  },
+  "consumes_only_contract": {
+    "accepted": "none",
+    "deferred": "none",
+    "rejected": "none",
+    "result_checkpoint": "forbidden",
+    "base_checkpoint": "required"
+  },
+  "negative_outcome_words": [
+    "fail", "failed", "failing", "failure", "error", "errors", "aborted",
+    "deny", "denied", "denies", "denying", "revoke", "revoked",
+    "reject", "rejected", "rejects", "not authorized", "not authorize",
+    "does not authorize", "do not create", "never create", "does not exist",
+    "unavailable", "cannot", "forbid", "forbidden", "refuse", "refused"
+  ],
+  "positive_outcome_words": [
+    "pass", "passed", "passes", "ok", "success", "succeeded", "green"
+  ],
+  "positive_event_types": [
+    "merged", "integrated", "validated", "verified", "landed", "shipped",
+    "closed", "completed", "approved", "package_created", "package_activated",
+    "package_closed", "handoff_recorded", "migration_authorized",
+    "integrate", "validate", "verify"
+  ],
+  "task_required_fields": [
+    "Title", "Role", "Status", "Active Package", "Capsule", "Output Root"
+  ],
+  "task_capsule_prefix": "task-contexts/",
+  "decision_field": "Decision",
+  "decision_subject_field": "Subject",
+  "decision_values": {
+    "approve": ["approve", "approves", "approved", "authorize", "authorizes", "authorized"],
+    "reject": ["reject", "rejects", "rejected", "deny", "denies", "denied"],
+    "revoke": ["revoke", "revokes", "revoked"]
+  },
+  "verification_gate_names": [
+    "verify_gate", "readiness_check", "validate_project", "asset_check", "boundary_check"
+  ],
+  "manifest": {
+    "path": ".pps/verify-manifest.txt",
+    "columns": ["check_id", "platform", "cwd", "timeout_s", "expected_exit", "command", "note"],
+    "run_record_path": ".pps/verify-run.json",
+    "platforms": ["any", "powershell", "bash"]
+  }
+}

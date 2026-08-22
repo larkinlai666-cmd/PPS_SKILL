@@ -280,45 +280,6 @@ if ($modeValue -in @('software', 'hybrid')) {
 }
 Write-Host "gate substance: entry declares real checks"
 
-Write-Host "-- Step 2c/4: red line wiring"
-# Red lines may name the check that enforces them: "(verify: path)". When a
-# red line names one, the gate entry must actually reference that path, or the
-# red line is a wish rather than a rule.
-$redlineTargets = @()
-$agentsPath = Join-Path $rootFull 'AGENTS.md'
-if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
-    $agentsText = [System.IO.File]::ReadAllText($agentsPath, [System.Text.Encoding]::UTF8)
-    $redlineSection = [regex]::Match(
-        $agentsText, '(?ms)^##\s+Red Lines\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
-    if ($redlineSection.Success) {
-        foreach ($m in [regex]::Matches($redlineSection.Groups['body'].Value, '\(verify:\s*([^)]+)\)')) {
-            $candidate = $m.Groups[1].Value.Trim()
-            if ($candidate -and ($candidate -notin $redlineTargets)) { $redlineTargets += $candidate }
-        }
-    }
-}
-if ($redlineTargets.Count -gt 0) {
-    $manifestPath = Join-Path $rootFull '.pps/verify-manifest.txt'
-    $manifestText = if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
-        [System.IO.File]::ReadAllText($manifestPath, [System.Text.Encoding]::UTF8)
-    } else { '' }
-    $unwired = $false
-    foreach ($target in $redlineTargets) {
-        if (Test-EntryInvokesPath $verifyEntry $target) { continue }
-        if ($manifestText.Contains($target) -and (Test-EntryInvokesPath $verifyEntry 'verify-manifest')) { continue }
-        Write-Host "ERROR: red line names '(verify: $target)' but scripts/project_verify.ps1 never calls it (a mention in a comment does not count)."
-        $unwired = $true
-    }
-    if ($unwired) {
-        Write-Host "Wire the named check into the gate entry (or list it in .pps/verify-manifest.txt and read that manifest)."
-        Write-Host "PPS verify gate: FAILED (red line not wired to the gate)"
-        exit 1
-    }
-    Write-Host "red line wiring: all named checks are wired into the gate entry"
-} else {
-    Write-Host "red line wiring: no red line names a machine check (human-only red lines are allowed)"
-}
-
 Write-Host "-- Step 2d/4: relay handover lock"
 # The lock must be on the completion path, not in an optional script nobody
 # runs. Close is "gate + readiness"; if the gate never consults the handover
@@ -370,6 +331,143 @@ if (Test-Path -LiteralPath $boundaryScript -PathType Leaf) {
         exit 1
     }
     Write-Host "relay handover lock: boundary_check.ps1 unavailable; cannot verify handover safety (warning in $modeValue mode)."
+}
+
+
+
+Write-Host "-- Step 2e/4: structured check manifest execution"
+# The check manifest is the executable truth: every row is a real command the
+# gate runs on THIS platform, with the exit code compared to the expected one.
+# Static text scanning of the entry is only a lint below; it never satisfies
+# red-line or coverage wiring on its own.
+$manifestPath = Join-Path $rootFull '.pps/verify-manifest.txt'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    Write-Host "ERROR: missing .pps/verify-manifest.txt; the gate must run a declared check list, not trust prose."
+    Write-Host "PPS verify gate: FAILED (missing check manifest)"
+    exit 1
+}
+$runTsvPath = Join-Path $rootFull '.pps/.verify-run.tsv'
+$runTsv = New-Object System.Collections.ArrayList
+$runFailed = $false
+$runRelevant = 0
+foreach ($lineRaw in [System.IO.File]::ReadAllLines($manifestPath, [System.Text.Encoding]::UTF8)) {
+    $line = $lineRaw.TrimEnd()
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
+    $parts = $line -split "`t"
+    if ($parts.Count -lt 6) {
+        Write-Host "ERROR: manifest line has $($parts.Count) columns, need at least 6: $line"
+        Write-Host "PPS verify gate: FAILED (malformed check manifest)"
+        exit 1
+    }
+    $checkId = $parts[0].Trim()
+    $checkPlatform = $parts[1].Trim()
+    $checkCwd = $parts[2].Trim()
+    $checkTimeout = $parts[3].Trim()
+    $checkExpected = $parts[4].Trim()
+    $checkCommand = $parts[5].Trim()
+    $checkNote = if ($parts.Count -gt 6) { $parts[6].Trim() } else { '' }
+    if ($checkPlatform -notin @('any', 'powershell')) { continue }
+    if ($checkId -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') {
+        Write-Host "ERROR: invalid check id '$checkId'."
+        Write-Host "PPS verify gate: FAILED (malformed check manifest)"
+        exit 1
+    }
+    $runRelevant++
+    $itemStarted = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $itemCwd = $rootFull
+    if (-not [string]::IsNullOrWhiteSpace($checkCwd) -and $checkCwd -ne '.') {
+        $cwdCandidate = Join-Path $rootFull $checkCwd
+        if (-not (Test-Path -LiteralPath $cwdCandidate -PathType Container)) {
+            Write-Host "ERROR: manifest check $checkId cwd '$checkCwd' does not exist."
+            $runFailed = $true
+            continue
+        }
+        $itemCwd = $cwdCandidate
+    }
+    Write-Host "check $checkId : $checkCommand"
+    $itemCode = -1
+    $prevPref = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        Push-Location $itemCwd
+        try {
+            & $engine.Source -NoProfile -Command $checkCommand 2>&1 | ForEach-Object { Write-Host $_ }
+            $itemCode = $LASTEXITCODE
+        } finally {
+            Pop-Location
+        }
+    } finally {
+        $ErrorActionPreference = $prevPref
+    }
+    $itemExpected = 0
+    if ($checkExpected -match '^\d+$') { $itemExpected = [int]$checkExpected }
+    $itemOk = ($itemCode -eq $itemExpected)
+    if (-not $itemOk) { $runFailed = $true }
+    $itemVerb = if ($itemOk) { 'pass' } else { 'FAIL' }
+    Write-Host "check $checkId : $itemVerb (exit $itemCode, expected $itemExpected)"
+    if (-not [string]::IsNullOrWhiteSpace($checkNote)) { Write-Host "  note: $checkNote" }
+    $null = $runTsv.Add(
+        "$checkId`t$checkPlatform`t$checkCwd`t$checkTimeout`t$checkExpected`t$checkCommand`t$itemCode`t$itemOk`t$itemStarted`t$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))")
+}
+if ($runRelevant -eq 0) {
+    Write-Host "ERROR: the check manifest declares no check for the powershell platform."
+    $runFailed = $true
+}
+[System.IO.File]::WriteAllLines(
+    $runTsvPath, [string[]]$runTsv, (New-Object System.Text.UTF8Encoding($false)))
+$evidenceScript = Join-Path $PSScriptRoot 'pps_evidence.py'
+$writeRun = & $engine.Source -NoProfile -Command "python3 '$evidenceScript' write-run '$rootFull' 'powershell' '$runTsvPath'" 2>&1 | ForEach-Object { "$_" }
+$writeRunText = ($writeRun -join "`n").Trim()
+if ($writeRunText -ne 'ok' -and $writeRunText -ne 'fail') {
+    Write-Host "ERROR: run record generation failed: $writeRunText"
+    Write-Host "PPS verify gate: FAILED (run record generation)"
+    exit 1
+}
+if ($runFailed -or $writeRunText -ne 'ok') {
+    Write-Host 'PPS verify gate: FAILED (check manifest execution)'
+    exit 1
+}
+Write-Host 'check manifest execution: all declared checks passed'
+Write-Host "-- Step 2c/4: red line wiring"
+# Red lines may name the check that enforces them: "(verify: path)". When a
+# red line names one, the gate entry must actually reference that path, or the
+# red line is a wish rather than a rule.
+$redlineTargets = @()
+$agentsPath = Join-Path $rootFull 'AGENTS.md'
+if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
+    $agentsText = [System.IO.File]::ReadAllText($agentsPath, [System.Text.Encoding]::UTF8)
+    $redlineSection = [regex]::Match(
+        $agentsText, '(?ms)^##\s+Red Lines\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
+    if ($redlineSection.Success) {
+        foreach ($m in [regex]::Matches($redlineSection.Groups['body'].Value, '\(verify:\s*([^)]+)\)')) {
+            $candidate = $m.Groups[1].Value.Trim()
+            if ($candidate -and ($candidate -notin $redlineTargets)) { $redlineTargets += $candidate }
+        }
+    }
+}
+if ($redlineTargets.Count -gt 0) {
+    # Wiring now means EXECUTED: the path must appear in a check manifest row
+    # that the gate ran successfully on this platform. Text shape in the entry
+    # is only a lint here; it can never satisfy wiring on its own.
+    $unwired = $false
+    foreach ($target in $redlineTargets) {
+        $runEvidenceProbe = & python3 "$PSScriptRoot/pps_evidence.py" run-has-path $rootFull $target 2>&1 | ForEach-Object { "$_" }
+        $runEvidence = ($runEvidenceProbe -join "`n").Trim()
+        if ($runEvidence -eq 'ok') { continue }
+        $shapeLint = if (Test-EntryInvokesPath $verifyEntry $target) {
+            ' (the gate entry mentions it, but a mention is not an execution)'
+        } else { '' }
+        Write-Host "ERROR: red line names '(verify: $target)' but no manifest check ran it successfully on this platform$shapeLint."
+        $unwired = $true
+    }
+    if ($unwired) {
+        Write-Host "Add a check row for the named path to .pps/verify-manifest.txt and re-run the gate."
+        Write-Host "PPS verify gate: FAILED (red line not wired to an executed check)"
+        exit 1
+    }
+    Write-Host "red line wiring: all named checks are wired to executed manifest checks"
+} else {
+    Write-Host "red line wiring: no red line names a machine check (human-only red lines are allowed)"
 }
 
 Write-Host "-- Step 3/4: project verification entry"
@@ -496,11 +594,23 @@ if (-not (Test-Path -LiteralPath $stampDir)) {
     New-Item -ItemType Directory -Path $stampDir -Force | Out-Null
 }
 $utcNow = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+$manifestSha = 'absent'
+$manifestStampPath = Join-Path $rootFull '.pps/verify-manifest.txt'
+if (Test-Path -LiteralPath $manifestStampPath -PathType Leaf) {
+    $manifestSha = Get-FileSha256 $manifestStampPath
+}
+$runSha = 'absent'
+$runRecordPath = Join-Path $rootFull '.pps/verify-run.json'
+if (Test-Path -LiteralPath $runRecordPath -PathType Leaf) {
+    $runSha = Get-FileSha256 $runRecordPath
+}
 $stampLines = @(
     "package: $packageId",
     "entry: $entryRel",
     "entry_sha256: $entrySha",
     "capsule_sha256: $capsuleSha",
+    "manifest_sha256: $manifestSha",
+    "run_sha256: $runSha",
     "platform: powershell",
     "result: pass",
     "worktree: $worktreeId",

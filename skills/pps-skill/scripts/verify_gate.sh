@@ -298,47 +298,6 @@ case "$mode_value" in
 esac
 echo "gate substance: entry declares real checks"
 
-echo "-- Step 2c/4: red line wiring"
-# Red lines may name the check that enforces them: "(verify: path)". When a
-# red line names one, the gate entry must actually reference that path, or the
-# red line is a wish rather than a rule.
-redline_targets=""
-if [[ -f "$root/AGENTS.md" ]]; then
-  redline_targets="$(
-    awk '
-      $0 ~ "^##[[:space:]]+Red Lines[[:space:]]*$" { inside=1; next }
-      inside && /^##[[:space:]]/ { exit }
-      inside { print }
-    ' "$root/AGENTS.md" | grep -Eo '\(verify:[[:space:]]*[^)]+\)' |
-      sed -E 's/^\(verify:[[:space:]]*//; s/\)$//' |
-      sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | sort -u
-  )"
-fi
-if [[ -n "$redline_targets" ]]; then
-  manifest_file="$root/.pps/verify-manifest.txt"
-  redline_unwired=0
-  while IFS= read -r redline_target; do
-    [[ -n "$redline_target" ]] || continue
-    if entry_invokes_path "$verify_entry" "$redline_target"; then
-      continue
-    fi
-    if [[ -f "$manifest_file" ]] && grep -Fq "$redline_target" "$manifest_file" &&
-      entry_invokes_path "$verify_entry" "verify-manifest"; then
-      continue
-    fi
-    echo "ERROR: red line names '(verify: $redline_target)' but scripts/project_verify.sh never calls it (a mention in a comment does not count)." >&2
-    redline_unwired=1
-  done <<< "$redline_targets"
-  if (( redline_unwired == 1 )); then
-    echo "Wire the named check into the gate entry (or list it in .pps/verify-manifest.txt and read that manifest)." >&2
-    echo "PPS verify gate: FAILED (red line not wired to the gate)" >&2
-    exit 1
-  fi
-  echo "red line wiring: all named checks are wired into the gate entry"
-else
-  echo "red line wiring: no red line names a machine check (human-only red lines are allowed)"
-fi
-
 echo "-- Step 2d/4: relay handover lock"
 # The lock must be on the completion path, not in an optional script nobody
 # runs. Close is "gate + readiness"; if the gate never consults the handover
@@ -411,6 +370,120 @@ else
       echo "relay handover lock: boundary_check.sh unavailable; cannot verify handover safety (warning in $mode_value mode)." >&2
       ;;
   esac
+fi
+
+
+
+echo "-- Step 2e/4: structured check manifest execution"
+# The check manifest is the executable truth: every row is a real command the
+# gate runs on THIS platform, with the exit code compared to the expected one.
+# Static text scanning of the entry is only a lint; it never satisfies
+# red-line or coverage wiring on its own.
+manifest_file="$root/.pps/verify-manifest.txt"
+if [[ ! -f "$manifest_file" ]]; then
+  echo "ERROR: missing .pps/verify-manifest.txt; the gate must run a declared check list, not trust prose." >&2
+  echo "PPS verify gate: FAILED (missing check manifest)" >&2
+  exit 1
+fi
+run_tsv="$root/.pps/.verify-run.tsv"
+: > "$run_tsv"
+run_failed=0
+run_relevant=0
+while IFS=$'\t' read -r check_id check_platform check_cwd check_timeout check_expected check_command check_note; do
+  [[ -n "$check_id" ]] || continue
+  case "$check_id" in '#'*) continue;; esac
+  case "$check_platform" in any|bash) ;; *) continue;; esac
+  if [[ ! "$check_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    echo "ERROR: invalid check id '$check_id'." >&2
+    echo "PPS verify gate: FAILED (malformed check manifest)" >&2
+    exit 1
+  fi
+  run_relevant=$((run_relevant + 1))
+  item_cwd="$root"
+  if [[ -n "$check_cwd" && "$check_cwd" != "." ]]; then
+    if [[ ! -d "$root/$check_cwd" ]]; then
+      echo "ERROR: manifest check $check_id cwd '$check_cwd' does not exist." >&2
+      run_failed=1
+      continue
+    fi
+    item_cwd="$root/$check_cwd"
+  fi
+  echo "check $check_id : $check_command"
+  item_started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  ( cd "$item_cwd" && bash -c "$check_command" )
+  item_code=$?
+  item_expected=0
+  [[ "$check_expected" =~ ^[0-9]+$ ]] && item_expected="$check_expected"
+  if [[ "$item_code" == "$item_expected" ]]; then
+    item_ok="true"
+    echo "check $check_id : pass (exit $item_code, expected $item_expected)"
+  else
+    item_ok="false"
+    run_failed=1
+    echo "check $check_id : FAIL (exit $item_code, expected $item_expected)"
+  fi
+  [[ -n "$check_note" ]] && echo "  note: $check_note"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$check_id" "$check_platform" "$check_cwd" "$check_timeout" "$check_expected" \
+    "$check_command" "$item_code" "$item_ok" "$item_started" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$run_tsv"
+done < "$manifest_file"
+if (( run_relevant == 0 )); then
+  echo "ERROR: the check manifest declares no check for the bash platform." >&2
+  run_failed=1
+fi
+write_run_out="$(python3 "$script_dir/pps_evidence.py" write-run "$root" 'bash' "$run_tsv" 2>&1)"
+if [[ "$write_run_out" != "ok" && "$write_run_out" != "fail" ]]; then
+  echo "ERROR: run record generation failed: $write_run_out" >&2
+  echo "PPS verify gate: FAILED (run record generation)" >&2
+  exit 1
+fi
+if (( run_failed == 1 )) || [[ "$write_run_out" != "ok" ]]; then
+  echo "PPS verify gate: FAILED (check manifest execution)" >&2
+  exit 1
+fi
+echo "check manifest execution: all declared checks passed"
+echo "-- Step 2c/4: red line wiring"
+# Red lines may name the check that enforces them: "(verify: path)". When a
+# red line names one, the gate entry must actually reference that path, or the
+# red line is a wish rather than a rule.
+redline_targets=""
+if [[ -f "$root/AGENTS.md" ]]; then
+  redline_targets="$(
+    awk '
+      $0 ~ "^##[[:space:]]+Red Lines[[:space:]]*$" { inside=1; next }
+      inside && /^##[[:space:]]/ { exit }
+      inside { print }
+    ' "$root/AGENTS.md" | grep -Eo '\(verify:[[:space:]]*[^)]+\)' |
+      sed -E 's/^\(verify:[[:space:]]*//; s/\)$//' |
+      sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | sort -u
+  )"
+fi
+if [[ -n "$redline_targets" ]]; then
+  # Wiring now means EXECUTED: the path must appear in a check manifest row
+  # that the gate ran successfully on this platform. Text shape in the entry
+  # is only a lint; it can never satisfy wiring on its own.
+  redline_unwired=0
+  while IFS= read -r redline_target; do
+    [[ -n "$redline_target" ]] || continue
+    run_evidence="$(python3 "$script_dir/pps_evidence.py" run-has-path "$root" "$redline_target" 2>/dev/null)"
+    if [[ "$run_evidence" == "ok" ]]; then
+      continue
+    fi
+    shape_lint=""
+    if entry_invokes_path "$verify_entry" "$redline_target"; then
+      shape_lint=" (the gate entry mentions it, but a mention is not an execution)"
+    fi
+    echo "ERROR: red line names '(verify: $redline_target)' but no manifest check ran it successfully on this platform${shape_lint}." >&2
+    redline_unwired=1
+  done <<< "$redline_targets"
+  if (( redline_unwired == 1 )); then
+    echo "Add a check row for the named path to .pps/verify-manifest.txt and re-run the gate." >&2
+    echo "PPS verify gate: FAILED (red line not wired to an executed check)" >&2
+    exit 1
+  fi
+  echo "red line wiring: all named checks are wired to executed manifest checks"
+else
+  echo "red line wiring: no red line names a machine check (human-only red lines are allowed)"
 fi
 
 echo "-- Step 3/4: project verification entry"
@@ -504,11 +577,17 @@ else
 fi
 
 mkdir -p "$root/.pps"
+manifest_sha="absent"
+[[ -f "$root/.pps/verify-manifest.txt" ]] && manifest_sha="$(sha256_of "$root/.pps/verify-manifest.txt")"
+run_sha="absent"
+[[ -f "$root/.pps/verify-run.json" ]] && run_sha="$(sha256_of "$root/.pps/verify-run.json")"
 {
   printf 'package: %s\n' "$package_id"
   printf 'entry: %s\n' "$entry_rel"
   printf 'entry_sha256: %s\n' "$entry_sha"
   printf 'capsule_sha256: %s\n' "$capsule_sha"
+  printf 'manifest_sha256: %s\n' "$manifest_sha"
+  printf 'run_sha256: %s\n' "$run_sha"
   printf 'platform: bash\n'
   printf 'result: pass\n'
   printf 'worktree: %s\n' "$worktree_id"

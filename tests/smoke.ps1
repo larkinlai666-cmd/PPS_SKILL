@@ -1670,7 +1670,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         (Join-Path $receiptPhantomPackage "EVENTS.md"), "<!-- [PKG-999] -->`n", $utf8NoBom)
     Write-FixtureReceipt $receiptPhantomPackage 'D-001' 'validate_project pass' 'local-task-output/T-002/real.md' 'PKG-999'
     Assert-InvalidProject $receiptPhantomPackage `
-        "nor recorded as a real event line" `
+        "nor recorded as a positive event line" `
         "Receipt targeting package only mentioned in a comment"
 
     $receiptRejectedApproval = Join-Path $tempRoot "receipt-rejected-approval"
@@ -1684,28 +1684,28 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     Copy-Item -LiteralPath $receiptBase -Destination $receiptProseVerification -Recurse
     Write-FixtureReceipt $receiptProseVerification 'D-001' 'looked fine to me' 'local-task-output/T-002/real.md' 'PKG-001'
     Assert-InvalidProject $receiptProseVerification `
-        "is not a resolvable evidence reference" `
+        "is not evidence the merge succeeded" `
         "Receipt with prose-only verification"
 
     $receiptGhostAccepted = Join-Path $tempRoot "receipt-ghost-accepted"
     Copy-Item -LiteralPath $receiptBase -Destination $receiptGhostAccepted -Recurse
     Write-FixtureReceipt $receiptGhostAccepted 'D-001' 'validate_project pass' 'local-task-output/T-002/ghost.md' 'PKG-001'
     Assert-InvalidProject $receiptGhostAccepted `
-        "an integration must point at real merged artifacts" `
+        "an integration must point at artifacts inside the result commit" `
         "Receipt accepting a nonexistent artifact"
 
     $receiptMissingDoc = Join-Path $tempRoot "receipt-missing-evidence-doc"
     Copy-Item -LiteralPath $receiptBase -Destination $receiptMissingDoc -Recurse
     Write-FixtureReceipt $receiptMissingDoc 'D-001' 'docs/nonexistent-evidence.md' 'local-task-output/T-002/real.md' 'PKG-001'
     Assert-InvalidProject $receiptMissingDoc `
-        "which does not exist" `
+        "not evidence the merge succeeded" `
         "Receipt citing a nonexistent evidence document"
 
     $receiptBareGate = Join-Path $tempRoot "receipt-bare-gate-name"
     Copy-Item -LiteralPath $receiptBase -Destination $receiptBareGate -Recurse
     Write-FixtureReceipt $receiptBareGate 'D-001' 'verify_gate' 'local-task-output/T-002/real.md' 'PKG-001'
     Assert-InvalidProject $receiptBareGate `
-        "names a gate without a recorded outcome" `
+        "not evidence the merge succeeded" `
         "Receipt naming a gate without an outcome"
 
     $receiptUnowned = Join-Path $tempRoot "receipt-unowned-accepted"
@@ -1806,6 +1806,159 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     Assert-InvalidProject $archivedContradiction `
         "contradictory terminal receipts" `
         "Archived task with contradictory receipts"
+
+    # ==== 049 adversarial matrix (PowerShell edition): evidence must prove the
+    # merge actually happened. Mirrors the Bash matrix; verdicts must match.
+    $matrixBase = Join-Path $tempRoot "matrix-base"
+    Copy-Item -LiteralPath $receiptBase -Destination $matrixBase -Recurse
+    function Write-MatrixReceipt([string]$Dir, [string]$Verification, [string]$Accepted,
+        [string]$Relation, [string]$Base, [string]$Result, [string]$Approval,
+        [string]$Status, [string]$Target) {
+        $lines = @(
+            '# Merges', '', '## Merge Receipts', '',
+            '### MERGE-001',
+            "- Target Package: $Target", '- Source Tasks: T-002',
+            "- Relation: $Relation", "- Accepted: $Accepted",
+            '- Rejected: none', '- Deferred: none',
+            "- Base Checkpoint: $Base", "- Result Checkpoint: $Result",
+            '- Lineage Note: migration per D-001',
+            "- Approval: $Approval", "- Verification: $Verification",
+            "- Status: $Status"
+        )
+        [System.IO.File]::WriteAllText(
+            (Join-Path $Dir 'MERGES.md'), ($lines -join "`n") + "`n", $utf8NoBom)
+    }
+
+    $mxVerificationFailed = Join-Path $tempRoot "mx-verification-failed"
+    Copy-Item -LiteralPath $matrixBase -Destination $mxVerificationFailed -Recurse
+    Write-MatrixReceipt $mxVerificationFailed "validate_project failed" 'local-task-output/T-002/real.md' absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+    Assert-InvalidProject $mxVerificationFailed `
+        "not evidence the merge succeeded" `
+        "Verification that says failed must be rejected"
+
+    $mxVerificationDirectory = Join-Path $tempRoot "mx-verification-directory"
+    Copy-Item -LiteralPath $matrixBase -Destination $mxVerificationDirectory -Recurse
+    Write-MatrixReceipt $mxVerificationDirectory "file_evidence: docs" 'local-task-output/T-002/real.md' absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+    Assert-InvalidProject $mxVerificationDirectory `
+        "not evidence the merge succeeded" `
+        "Verification naming a directory must be rejected"
+
+    $mxDeferredGhost = Join-Path $tempRoot "mx-deferred-ghost"
+    Copy-Item -LiteralPath $matrixBase -Destination $mxDeferredGhost -Recurse
+    $mxCasePath = Join-Path $mxDeferredGhost 'TASK_INDEX.md'
+    $mxText = [System.IO.File]::ReadAllText($mxCasePath, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($mxCasePath, $mxText.Replace('- Status: integrated', '- Status: deferred'), $utf8NoBom)
+    $mxDeferredReceipt = @(
+        '# Merges', '', '## Merge Receipts', '', '### MERGE-001',
+        '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: deferred', '- Accepted: none', '- Rejected: none',
+        '- Deferred: local-task-output/T-002/ghost.md',
+        '- Base Checkpoint: lineage_incomplete', '- Result Checkpoint: none',
+        '- Reactivate When: when upstream lands',
+        '- Approval: D-001', '- Verification: validate_project pass',
+        '- Status: deferred'
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mxDeferredGhost 'MERGES.md'), ($mxDeferredReceipt -join "`n") + "`n", $utf8NoBom)
+    Assert-InvalidProject $mxDeferredGhost `
+        "must keep recoverable evidence" `
+        "A deferred path that does not exist must be rejected"
+
+    $mxConsumerAbsorbs = Join-Path $tempRoot "mx-consumer-absorbs"
+    Copy-Item -LiteralPath $matrixBase -Destination $mxConsumerAbsorbs -Recurse
+    $mxCasePath = Join-Path $mxConsumerAbsorbs 'TASK_INDEX.md'
+    $mxText = [System.IO.File]::ReadAllText($mxCasePath, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText(
+        $mxCasePath, $mxText.Replace('- Role: worker', '- Role: consumer'), $utf8NoBom)
+    Write-MatrixReceipt $mxConsumerAbsorbs "validate_project pass" 'local-task-output/T-002/real.md' absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+    Assert-InvalidProject $mxConsumerAbsorbs `
+        "is not allowed for Source Task T-002 whose Role is 'consumer'" `
+        "A consumer claiming absorbs must be rejected"
+
+    $mxConsumesOnlyNone = Join-Path $tempRoot "mx-consumes-only-none"
+    Copy-Item -LiteralPath $matrixBase -Destination $mxConsumesOnlyNone -Recurse
+    $mxCasePath = Join-Path $mxConsumesOnlyNone 'TASK_INDEX.md'
+    $mxText = [System.IO.File]::ReadAllText($mxCasePath, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText(
+        $mxCasePath, $mxText.Replace('- Role: worker', '- Role: consumer'), $utf8NoBom)
+    Write-MatrixReceipt $mxConsumesOnlyNone "validate_project pass" none consumes_only lineage_incomplete none D-001 integrated PKG-001
+    $mxNoneResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxConsumesOnlyNone 'scripts/validate_project.ps1') `
+            -Root $mxConsumesOnlyNone -Quiet 2>&1
+    }
+    if ($mxNoneResult.Code -ne 0) {
+        throw 'consumes_only with Accepted: none was incorrectly rejected.'
+    }
+
+    $mxPackageNegative = Join-Path $tempRoot "mx-package-negative-event"
+    Copy-Item -LiteralPath $matrixBase -Destination $mxPackageNegative -Recurse
+    Add-Content -LiteralPath (Join-Path $mxPackageNegative 'EVENTS.md') `
+        -Value '- 2026-08-22: Do not create [PKG-999] here. | files: none | verify: none | pending: none' -Encoding UTF8
+    Write-MatrixReceipt $mxPackageNegative "validate_project pass" 'local-task-output/T-002/real.md' absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-999
+    Assert-InvalidProject $mxPackageNegative `
+        "nor recorded as a positive event line" `
+        "A negated event line must not create a package identity"
+
+    $mxTaskCapsuleOutside = Join-Path $tempRoot "mx-task-capsule-outside"
+    Copy-Item -LiteralPath $matrixBase -Destination $mxTaskCapsuleOutside -Recurse
+    $mxCasePath = Join-Path $mxTaskCapsuleOutside 'TASK_INDEX.md'
+    $mxText = [System.IO.File]::ReadAllText($mxCasePath, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText(
+        $mxCasePath,
+        $mxText.Replace('- Capsule: task-contexts/T-002.md', '- Capsule: docs/MAIN.md'),
+        $utf8NoBom)
+    Assert-InvalidProject $mxTaskCapsuleOutside `
+        "must live under task-contexts/" `
+        "A worker capsule outside task-contexts/ must be rejected"
+
+    $mxTaskMissingTitle = Join-Path $tempRoot "mx-task-missing-title"
+    Copy-Item -LiteralPath $matrixBase -Destination $mxTaskMissingTitle -Recurse
+    $mxCasePath = Join-Path $mxTaskMissingTitle 'TASK_INDEX.md'
+    $mxText = [System.IO.File]::ReadAllText($mxCasePath, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText(
+        $mxCasePath, ($mxText -replace '(?m)^- Title: Worker\r?\n', ''), $utf8NoBom)
+    Assert-InvalidProject $mxTaskMissingTitle `
+        "has no Title" `
+        "A task without a Title must be rejected"
+
+    # The gate must actually EXECUTE the manifest on this platform too.
+    $mxGateExit9 = Join-Path $tempRoot "mx-gate-exit9"
+    Copy-Item -LiteralPath $software -Destination $mxGateExit9 -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $mxGateExit9 'tests') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $mxGateExit9 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mxGateExit9 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $mxStateFile = Join-Path $mxGateExit9 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $mxStateFile,
+        [System.IO.File]::ReadAllText($mxStateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mxGateExit9 'tests/real-check.ps1'), "exit 9`n", $utf8NoBom)
+    $mxManifest = Join-Path $mxGateExit9 '.pps/verify-manifest.txt'
+    $mxManifestBody = [System.IO.File]::ReadAllText($mxManifest, [System.Text.Encoding]::UTF8)
+    if (-not $mxManifestBody.EndsWith("`n")) { $mxManifestBody += "`n" }
+    [System.IO.File]::WriteAllText(
+        $mxManifest,
+        $mxManifestBody + "M-002`tpowershell`t.`t60`t0`tpwsh -NoProfile -ExecutionPolicy Bypass -File tests/real-check.ps1`tfailing test`n",
+        $utf8NoBom)
+    $mxStamp = Join-Path $mxGateExit9 '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $mxStamp) { Remove-Item -LiteralPath $mxStamp }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $mxGateExit9 'scripts/session_begin.ps1') `
+        -Root $mxGateExit9 2>&1 | Out-Null
+    $mxGateExit9Result = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxGateExit9 'scripts/verify_gate.ps1') `
+            -Root $mxGateExit9 2>&1
+    }
+    if ($mxGateExit9Result.Code -eq 0 -or $mxGateExit9Result.Text -notmatch 'check manifest execution') {
+        throw ("The PowerShell gate stamped a project whose declared check exits 9. gate output: " + $mxGateExit9Result.Text)
+    }
+    if (Test-Path -LiteralPath $mxStamp) {
+        throw 'The PowerShell gate left a stamp behind after a failing declared check.'
+    }
 
     $emptyDeferred = Join-Path $tempRoot "empty-deferred"
     Copy-Item -LiteralPath $receiptBase -Destination $emptyDeferred -Recurse
@@ -2169,6 +2322,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
 
     $commentWiring = Join-Path $tempRoot "comment-wiring-case"
     Copy-Item -LiteralPath $software -Destination $commentWiring -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $commentWiring 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $commentWiring 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $stateFile = Join-Path $commentWiring 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $stateFile,
+        [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
     New-Item -ItemType Directory -Path (Join-Path $commentWiring 'tests') -Force | Out-Null
     [System.IO.File]::WriteAllText(
         (Join-Path $commentWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
@@ -2196,12 +2357,20 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
             -File (Join-Path $commentWiring 'scripts/verify_gate.ps1') `
             -Root $commentWiring 2>&1
     }
-    if ($commentResult.Code -eq 0 -or $commentResult.Text -notmatch 'never calls it') {
+    if ($commentResult.Code -eq 0 -or $commentResult.Text -notmatch 'no manifest check ran it successfully') {
         throw 'A red line path mentioned only in a comment satisfied the wiring gate.'
     }
 
     $alwaysTrue = Join-Path $tempRoot "always-true-case"
     Copy-Item -LiteralPath $software -Destination $alwaysTrue -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $alwaysTrue 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $alwaysTrue 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $stateFile = Join-Path $alwaysTrue 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $stateFile,
+        [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
     $entryFile = Join-Path $alwaysTrue 'scripts/project_verify.ps1'
     $entryBody = [System.IO.File]::ReadAllText($entryFile, [System.Text.Encoding]::UTF8)
     $entryBody = [regex]::Replace(
@@ -2234,7 +2403,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         $covBody, '(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', '${1} prototypes/hardening-smoke.ps1 |', 1)
     [System.IO.File]::WriteAllText($covFile, $covBody, $utf8NoBom)
     Assert-InvalidProject $coverageUnwired `
-        "never called by scripts/project_verify" `
+        "no manifest check ran it successfully" `
         "Coverage evidence that the gate never runs"
 
     $noteLaundry = Join-Path $tempRoot "note-laundry-case"
@@ -2284,6 +2453,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
 
     $deadFnWiring = Join-Path $tempRoot "dead-fn-wiring-case"
     Copy-Item -LiteralPath $software -Destination $deadFnWiring -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $deadFnWiring 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $deadFnWiring 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $stateFile = Join-Path $deadFnWiring 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $stateFile,
+        [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
     New-Item -ItemType Directory -Path (Join-Path $deadFnWiring 'tests') -Force | Out-Null
     [System.IO.File]::WriteAllText(
         (Join-Path $deadFnWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
@@ -2309,12 +2486,20 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
             -File (Join-Path $deadFnWiring 'scripts/verify_gate.ps1') `
             -Root $deadFnWiring 2>&1
     }
-    if ($deadFnResult.Code -eq 0 -or $deadFnResult.Text -notmatch 'never calls it') {
+    if ($deadFnResult.Code -eq 0 -or $deadFnResult.Text -notmatch 'no manifest check ran it successfully') {
         throw 'A red line path inside an unreached function satisfied the wiring gate.'
     }
 
     $deadBranchWiring = Join-Path $tempRoot "dead-branch-wiring-case"
     Copy-Item -LiteralPath $software -Destination $deadBranchWiring -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $deadBranchWiring 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $deadBranchWiring 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $stateFile = Join-Path $deadBranchWiring 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $stateFile,
+        [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
     New-Item -ItemType Directory -Path (Join-Path $deadBranchWiring 'tests') -Force | Out-Null
     [System.IO.File]::WriteAllText(
         (Join-Path $deadBranchWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
@@ -2340,12 +2525,20 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
             -File (Join-Path $deadBranchWiring 'scripts/verify_gate.ps1') `
             -Root $deadBranchWiring 2>&1
     }
-    if ($deadBranchResult.Code -eq 0 -or $deadBranchResult.Text -notmatch 'never calls it') {
+    if ($deadBranchResult.Code -eq 0 -or $deadBranchResult.Text -notmatch 'no manifest check ran it successfully') {
         throw 'A red line path inside a dead branch satisfied the wiring gate.'
     }
 
     $mentionWiring = Join-Path $tempRoot "mention-wiring-case"
     Copy-Item -LiteralPath $software -Destination $mentionWiring -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $mentionWiring 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mentionWiring 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $stateFile = Join-Path $mentionWiring 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $stateFile,
+        [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
     New-Item -ItemType Directory -Path (Join-Path $mentionWiring 'tests') -Force | Out-Null
     [System.IO.File]::WriteAllText(
         (Join-Path $mentionWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
@@ -2373,7 +2566,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
             -File (Join-Path $mentionWiring 'scripts/verify_gate.ps1') `
             -Root $mentionWiring 2>&1
     }
-    if ($mentionResult.Code -eq 0 -or $mentionResult.Text -notmatch 'never calls it') {
+    if ($mentionResult.Code -eq 0 -or $mentionResult.Text -notmatch 'no manifest check ran it successfully') {
         throw 'A string-literal mention satisfied the wiring gate.'
     }
     if (Test-Path -LiteralPath $stampToClear) {
@@ -2387,6 +2580,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         $deadShapeWiring = Join-Path $tempRoot "dead-shape-wiring-case"
         if (Test-Path -LiteralPath $deadShapeWiring) { Remove-Item -LiteralPath $deadShapeWiring -Recurse -Force }
         Copy-Item -LiteralPath $software -Destination $deadShapeWiring -Recurse
+        New-Item -ItemType Directory -Path (Join-Path $deadShapeWiring 'src') -Force | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $deadShapeWiring 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+        $stateFile = Join-Path $deadShapeWiring 'PROJECT_STATE.md'
+        [System.IO.File]::WriteAllText(
+            $stateFile,
+            [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+            $utf8NoBom)
         New-Item -ItemType Directory -Path (Join-Path $deadShapeWiring 'tests') -Force | Out-Null
         [System.IO.File]::WriteAllText(
             (Join-Path $deadShapeWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
@@ -2414,7 +2615,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
                 -File (Join-Path $deadShapeWiring 'scripts/verify_gate.ps1') `
                 -Root $deadShapeWiring 2>&1
         }
-        if ($deadShapeResult.Code -eq 0 -or $deadShapeResult.Text -notmatch 'never calls it') {
+        if ($deadShapeResult.Code -eq 0 -or $deadShapeResult.Text -notmatch 'no manifest check ran it successfully') {
             throw "Dead shape [$deadShape] satisfied the wiring gate."
         }
     }
@@ -2506,6 +2707,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     # --- Core duty fixtures (D-CORE series) --------------------------------
     $hollowGateCase = Join-Path $tempRoot "hollow-gate-case"
     Copy-Item -LiteralPath $software -Destination $hollowGateCase -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $hollowGateCase 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $hollowGateCase 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $stateFile = Join-Path $hollowGateCase 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $stateFile,
+        [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
     [System.IO.File]::WriteAllText(
         (Join-Path $hollowGateCase "scripts/project_verify.ps1"), "exit 0`n", $utf8NoBom)
     $hollowStamp = Join-Path $hollowGateCase '.pps/verify-stamp'
@@ -2524,6 +2733,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
 
     $structOnlyCase = Join-Path $tempRoot "struct-only-case"
     Copy-Item -LiteralPath $software -Destination $structOnlyCase -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $structOnlyCase 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $structOnlyCase 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $stateFile = Join-Path $structOnlyCase 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $stateFile,
+        [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
     $structEntry = @(
         'function Invoke-Check([string]$Label, [scriptblock]$Body) {',
         '    if (& $Body) { Write-Output "PASS: $Label"; return $true }',
@@ -2551,6 +2768,14 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
 
     $redlineUnwiredCase = Join-Path $tempRoot "redline-unwired-case"
     Copy-Item -LiteralPath $software -Destination $redlineUnwiredCase -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $redlineUnwiredCase 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $redlineUnwiredCase 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $stateFile = Join-Path $redlineUnwiredCase 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $stateFile,
+        [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
     $agentsFile = Join-Path $redlineUnwiredCase 'AGENTS.md'
     $agentsBody = [System.IO.File]::ReadAllText($agentsFile, [System.Text.Encoding]::UTF8)
     $redIndex = $agentsBody.IndexOf('## Red Lines')
@@ -2560,12 +2785,15 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     [System.IO.File]::WriteAllText($agentsFile, $agentsBody, $utf8NoBom)
     $redStamp = Join-Path $redlineUnwiredCase '.pps/verify-stamp'
     if (Test-Path -LiteralPath $redStamp) { Remove-Item -LiteralPath $redStamp }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $redlineUnwiredCase 'scripts/session_begin.ps1') `
+        -Root $redlineUnwiredCase 2>&1 | Out-Null
     $redResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $redlineUnwiredCase 'scripts/verify_gate.ps1') `
             -Root $redlineUnwiredCase 2>&1
     }
-    if ($redResult.Code -eq 0 -or $redResult.Text -notmatch 'red line not wired to the gate') {
+    if ($redResult.Code -eq 0 -or $redResult.Text -notmatch 'red line not wired to an executed check') {
         throw 'Verify gate stamped although a red line named an unwired check.'
     }
     if (Test-Path -LiteralPath $redStamp) {
@@ -2773,7 +3001,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
             -Root $gateFailCase 2>&1
     }
     if ($gateFailResult.Code -eq 0 -or
-        $gateFailResult.Text -notmatch 'PPS verify gate: FAILED \(project verification\)') {
+        $gateFailResult.Text -notmatch 'PPS verify gate: FAILED') {
         throw 'Verify gate wrote a green result for a failing project verification.'
     }
     if (Test-Path -LiteralPath $gateFailStamp) {

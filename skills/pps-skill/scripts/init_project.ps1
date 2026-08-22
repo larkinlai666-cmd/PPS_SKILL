@@ -187,6 +187,8 @@ foreach ($scriptName in @(
     'boundary_check.sh',
     'session_begin.ps1',
     'session_begin.sh',
+    'migrate_project.ps1',
+    'migrate_project.sh',
     'e2e_probe.ps1',
     'e2e_probe.sh',
     'pre-commit',
@@ -194,6 +196,30 @@ foreach ($scriptName in @(
 )) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $scriptName) -Destination (Join-Path $scriptsDir $scriptName)
 }
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'pps_evidence.py') -Destination (Join-Path $scriptsDir 'pps_evidence.py')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..' 'references' 'state-machine.json') -Destination (Join-Path $scriptsDir 'state-machine.json')
+
+# The check manifest is the executable truth for verify_gate: every row is a
+# command the gate runs on its own platform, exit code compared with
+# expected_exit. Red-line and coverage wiring resolves against rows that
+# actually ran successfully, never against text mentions. Commands must not
+# contain TAB characters.
+$ppsDir = Join-Path $target '.pps'
+if (-not (Test-Path -LiteralPath $ppsDir)) {
+    New-Item -ItemType Directory -Path $ppsDir -Force | Out-Null
+}
+$manifestContent = @'
+# PPS check manifest — one check per line, TAB-separated columns:
+# check_id	platform	cwd	timeout_s	expected_exit	command	note
+# platform: any | powershell | bash. The gate executes every row for its own
+# platform and compares the exit code with expected_exit. cwd is relative to
+# the project root. Commands must not contain TAB characters.
+M-001	powershell	.	60	0	pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/project_verify.ps1 -Root .	gate entry runs all project checks
+M-001	bash	.	60	0	bash scripts/project_verify.sh .	gate entry runs all project checks
+'@
+[System.IO.File]::WriteAllText(
+    (Join-Path $ppsDir 'verify-manifest.txt'), $manifestContent.TrimEnd() + "`n",
+    (New-Object System.Text.UTF8Encoding($false)))
 
 if (-not $NoGit) {
     $git = Get-Command git -ErrorAction SilentlyContinue

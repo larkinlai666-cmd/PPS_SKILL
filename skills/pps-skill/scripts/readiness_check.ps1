@@ -93,6 +93,7 @@ if ($protocol -eq 'PPS/1.2') {
     }
     foreach ($fieldName in @(
         'package', 'entry', 'entry_sha256', 'capsule_sha256',
+        'manifest_sha256', 'run_sha256',
         'platform', 'result', 'worktree', 'verified_at'
     )) {
         if ($stampFieldCounts.ContainsKey($fieldName) -and $stampFieldCounts[$fieldName] -ne 1) {
@@ -121,6 +122,7 @@ if ($protocol -eq 'PPS/1.2') {
     }
     foreach ($requiredField in @(
         'package', 'entry', 'entry_sha256', 'capsule_sha256',
+        'manifest_sha256', 'run_sha256',
         'platform', 'result', 'worktree', 'verified_at'
     )) {
         if (-not $stamp.ContainsKey($requiredField) -or

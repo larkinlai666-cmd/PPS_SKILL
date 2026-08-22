@@ -1,7 +1,7 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-22 (updated for the 0.4.9 self-collision round)
-- Scope: skill 0.4.9, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
+- Review date: 2026-08-22 (updated for the 0.5.0 execution-proof round)
+- Scope: skill 0.5.0, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
 
@@ -20,6 +20,29 @@
 | D-CORE-009 single writer never checked in tooling | DUTY-F | **Closed**: an unexpired snapshot forces `--takeover`, which must then be recorded as an event; deliberately not a lock |
 | D-CORE-010 review text lagged the code | DUTY-I | **Closed**: `validate_skill` fails when `ADVERSARIAL_REVIEW.md` does not name the current VERSION in its opening lines |
 | D-CORE-011 half-activated multitask layer | DUTY-A/I | **Partially closed**: an empty `TASK_INDEX.md` now fails with an explicit "delete the file to stay single-task" diagnostic. The 1.1→1.2 upgrade command remains on the 0.5 roadmap; field 1.1 projects must not be force-migrated yet |
+
+### 0.5.0 execution-proof round (REVIEW49-P0-001..004, P1-005..008)
+
+The 0.4.9 convergence audit pushed the axis to "did the fact really happen":
+command execution, verification success, evidence belonging, Git lineage, and
+recoverable terminal states. This round followed the audit's instruction:
+machine-readable schema plus a single-source evidence engine, verifiers
+rewritten on top, and a shared adversarial matrix on both platforms.
+
+| ID | Status in 0.5.0 |
+|---|---|
+| P0-001 fake "test wired" proof | **Closed**: the gate executes a check manifest, records `.pps/verify-run.json`, binds the stamp to both hashes; exit-9 tests fail both gates with no stamp, print-only rows are not calls |
+| P0-002 Verification can say failed / cite directories / escape root / borrow dates | **Closed**: typed `gate_result` / `file_evidence` / `event` judged by the shared engine |
+| P0-003 checkpoint ids without lineage | **Closed**: ancestor direction, tree difference, and Accepted-inside-Result are enforced via Git |
+| P0-004 ghost terminal states | **Closed**: deferred/rejected evidence must exist; handoff_ready requires a Base Checkpoint |
+| P1-005 consumer / consumes_only contradiction | **Closed**: machine-read Role x Relation matrix; consumes_only + Accepted: none passes |
+| P1-006 negative approvals/migrations | **Closed**: structured Decision polarity and negation detection |
+| P1-007 task/package record syntax | **Closed**: Title required, capsules under task-contexts/, positive package events |
+| P1-008 missing 1.1->1.2 upgrader | **Closed**: migrate_project with dry-run / apply --confirm / rollback; never guesses history, never flips Protocol itself |
+
+Still deferred by agreement: Runtime Surfaces stays a warning; this repository
+still does not switch to 1.2; the acceptance matrix (§9 of the audit) is
+satisfied locally on both platforms and in CI.
 
 ### 0.4.9 self-collision round (F-048-01..03)
 

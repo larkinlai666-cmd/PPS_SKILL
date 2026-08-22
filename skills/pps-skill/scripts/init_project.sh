@@ -220,11 +220,31 @@ for script_name in \
   append_event.ps1 append_event.sh \
   boundary_check.ps1 boundary_check.sh \
   session_begin.ps1 session_begin.sh \
+  migrate_project.ps1 migrate_project.sh \
   e2e_probe.ps1 e2e_probe.sh \
   pre-commit pre-commit.ps1; do
-  cp "$script_dir/$script_name" "$target/scripts/$script_name"
+    cp "$script_dir/$script_name" "$target/scripts/$script_name"
 done
+cp "$script_dir/pps_evidence.py" "$target/scripts/pps_evidence.py"
+cp "$skill_root/references/state-machine.json" "$target/scripts/state-machine.json"
+chmod +x "$target/scripts/pps_evidence.py"
 chmod +x "$target/scripts/"*.sh "$target/scripts/pre-commit"
+
+# The check manifest is the executable truth for verify_gate: every row is a
+# command the gate runs on its own platform, exit code compared with
+# expected_exit. Red-line and coverage wiring resolves against rows that
+# actually ran successfully, never against text mentions. Commands must not
+# contain TAB characters.
+mkdir -p "$target/.pps"
+cat > "$target/.pps/verify-manifest.txt" <<'MANIFEST_EOF'
+# PPS check manifest — one check per line, TAB-separated columns:
+# check_id	platform	cwd	timeout_s	expected_exit	command	note
+# platform: any | powershell | bash. The gate executes every row for its own
+# platform and compares the exit code with expected_exit. cwd is relative to
+# the project root. Commands must not contain TAB characters.
+M-001	powershell	.	60	0	pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/project_verify.ps1 -Root .	gate entry runs all project checks
+M-001	bash	.	60	0	bash scripts/project_verify.sh .	gate entry runs all project checks
+MANIFEST_EOF
 
 if (( no_git == 0 )); then
   if command -v git >/dev/null 2>&1; then

@@ -103,7 +103,7 @@ if [[ "$protocol" == "PPS/1.2" ]]; then
   stamp_field() {
     sed -n "s/^$1:[[:space:]]*//p" "$stamp_file" | head -n 1
   }
-  for stamp_field_name in package entry entry_sha256 capsule_sha256 platform result worktree verified_at; do
+  for stamp_field_name in package entry entry_sha256 capsule_sha256 manifest_sha256 run_sha256 platform result worktree verified_at; do
     stamp_field_count="$(grep -c "^${stamp_field_name}:" "$stamp_file" || true)"
     if [[ "$stamp_field_count" != "1" ]]; then
       echo "PPS readiness: VERIFY EVIDENCE STALE" >&2
@@ -142,6 +142,7 @@ if [[ "$protocol" == "PPS/1.2" ]]; then
   for required_stamp_field in \
     "package:$stamp_package" "entry:$stamp_entry" \
     "entry_sha256:$stamp_entry_sha" "capsule_sha256:$stamp_capsule_sha" \
+    "manifest_sha256:$(stamp_field manifest_sha256)" "run_sha256:$(stamp_field run_sha256)" \
     "platform:$stamp_platform" "result:$stamp_result" \
     "worktree:$stamp_worktree" "verified_at:$stamp_time"; do
     [[ -n "${required_stamp_field#*:}" ]] ||

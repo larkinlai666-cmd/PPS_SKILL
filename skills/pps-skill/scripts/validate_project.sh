@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 root="$(pwd)"
 quiet=""
 root_seen=0
@@ -1096,6 +1097,11 @@ if (( is_pps12 == 1 )); then
         (( task_field_count <= 1 )) ||
           add_error "Task $task_id declares '$task_field_name' $task_field_count times; a task record must declare each field exactly once."
       done
+      task_title="$(printf '%s\n' "$task_block" |
+        sed -n 's/^-[[:space:]]*Title:[[:space:]]*//p' | head -n 1)"
+      if [[ -z "$task_title" || "$task_title" == "none" ]]; then
+        add_error "Task $task_id has no Title; a task record without a Title is a shell of a record."
+      fi
       task_active_package="$(printf '%s\n' "$task_block" |
         sed -n 's/^-[[:space:]]*Active Package:[[:space:]]*//p' | head -n 1)"
       if [[ -z "$task_active_package" ]]; then
@@ -1104,9 +1110,8 @@ if (( is_pps12 == 1 )); then
         grep -Eq '^PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$'; then
         add_error "Task $task_id Active Package must be a PKG-* ID, found '$task_active_package'."
       elif [[ "$task_active_package" != "$package" ]] &&
-        { [[ ! -f "$root/EVENTS.md" ]] ||
-          ! grep -Eq "^-[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}:[[:space:]]+\\[${task_active_package}\\][[:space:]]" "$root/EVENTS.md"; }; then
-        add_error "Task $task_id Active Package '$task_active_package' is neither the current package '$package' nor recorded as a real event line in EVENTS.md."
+        [[ "$(python3 "$script_dir/pps_evidence.py" event-positive "$root" "$task_active_package" 2>/dev/null)" != "ok" ]]; then
+        add_error "Task $task_id Active Package '$task_active_package' is neither the current package '$package' nor recorded as a positive event line in EVENTS.md."
       fi
       case "$task_role" in
         integrator|worker|consumer) ;;
@@ -1116,6 +1121,16 @@ if (( is_pps12 == 1 )); then
         active|handoff_ready|integrated|rejected|deferred|archived) ;;
         *) add_error "Task $task_id has invalid Status '$task_status'." ;;
       esac
+      if [[ "$task_status" == "handoff_ready" ]]; then
+        task_base_checkpoint="$(printf '%s\n' "$task_block" |
+          sed -n 's/^-[[:space:]]*Base Checkpoint:[[:space:]]*//p' | head -n 1)"
+        if [[ -z "$task_base_checkpoint" || "$task_base_checkpoint" == "none" ]]; then
+          add_error "Task $task_id is 'handoff_ready' without a 'Base Checkpoint' field; the handoff must record where the work was frozen."
+        elif [[ "$task_base_checkpoint" != "lineage_incomplete" ]] &&
+          [[ "$(python3 "$script_dir/pps_evidence.py" resolve-commit "$root" "$task_base_checkpoint" 2>/dev/null)" != "commit" ]]; then
+          add_error "Task $task_id Base Checkpoint '$task_base_checkpoint' is not a resolvable commit."
+        fi
+      fi
       case "$task_status" in
         integrated|deferred|rejected)
           terminal_tasks="${terminal_tasks}${task_id}:${task_status}"$'\n'
@@ -1141,6 +1156,8 @@ if (( is_pps12 == 1 )); then
             [[ "$task_capsule" == "CONTEXT.md" ]] ||
               add_error "Task $task_id (integrator) capsule must be CONTEXT.md itself, found '$task_capsule'; a separate integrator capsule would bypass Workset validation."
           else
+            [[ "$task_capsule" == task-contexts/* ]] ||
+              add_error "Task $task_id ($task_role) capsule '$task_capsule' must live under task-contexts/."
             validate_task_capsule "$task_capsule_path" "$task_id" "$task_role"
             all_task_authority_refs="${all_task_authority_refs}$(
               printf '%s' "$task_capsule_authority_ids" | sed '/^$/d' |
@@ -1302,16 +1319,16 @@ if (( is_pps12 == 1 )); then
       # The Target Package must be a real package: the current one or one
       # recorded in the chronicle as a parsed event line. A substring in a
       # comment, heading, or prose is not evidence a package ever existed.
-      if [[ "$merge_target" =~ ^PKG- && "$merge_target" != "$package" ]]; then
-        if [[ ! -f "$root/EVENTS.md" ]] ||
-          ! grep -Eq "^-[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}:[[:space:]]+\\[${merge_target}\\][[:space:]]" "$root/EVENTS.md"; then
-          add_error "Merge receipt $merge_id Target Package '$merge_target' is neither the current package '$package' nor recorded as a real event line in EVENTS.md."
-        fi
+      if [[ "$merge_target" =~ ^PKG- && "$merge_target" != "$package" ]] &&
+        [[ "$(python3 "$script_dir/pps_evidence.py" event-positive "$root" "$merge_target" 2>/dev/null)" != "ok" ]]; then
+        add_error "Merge receipt $merge_id Target Package '$merge_target' is neither the current package '$package' nor recorded as a positive event line in EVENTS.md."
       fi
       if [[ "$merge_status" == "integrated" ]]; then
         # An integration without accepted content, approval, or verification
-        # is a claim, not a receipt.
-        if [[ -z "$merge_accepted" || "$merge_accepted" == "none" ]]; then
+        # is a claim, not a receipt — unless the relation is consumes_only,
+        # whose whole point is that nothing flows back.
+        if [[ "$merge_relation" != "consumes_only" ]] &&
+          { [[ -z "$merge_accepted" || "$merge_accepted" == "none" ]]; }; then
           add_error "Merge receipt $merge_id is 'integrated' with an empty Accepted set; an integration that accepted nothing is not an integration."
         fi
       elif [[ "$merge_status" == "deferred" ]]; then
@@ -1400,57 +1417,75 @@ if (( is_pps12 == 1 )); then
                 add_error "Merge receipt $merge_id Approval cites $approval_id whose status is '[$approval_status]'; a decision that never authorized the merge cannot approve it."
                 ;;
             esac
+            # Polarity: a decision whose body says it does NOT authorize this
+            # merge is not a grant, whatever other keywords it contains.
+            approval_block2="$(awk -v wanted="### $approval_id " '
+              index($0, wanted) == 1 { inside=1; next }
+              inside && /^###[[:space:]]/ { exit }
+              inside { print }
+            ' "$decisions")"
+            decision_field2="$(printf '%s\n' "$approval_block2" |
+              sed -n 's/^-[[:space:]]*Decision:[[:space:]]*//p' | head -n 1)"
+            if [[ -n "$decision_field2" ]]; then
+              if ! printf '%s\n' "$decision_field2" | grep -Eiq 'approve|authoriz'; then
+                add_error "Merge receipt $merge_id Approval cites $approval_id whose Decision field ('$decision_field2') does not approve; only an approving decision can authorize a merge."
+              fi
+              subject_field2="$(printf '%s\n' "$approval_block2" |
+                sed -n 's/^-[[:space:]]*Subject:[[:space:]]*//p' | head -n 1)"
+              if [[ -n "$subject_field2" ]] &&
+                ! printf '%s\n' "$subject_field2" | grep -Eiq '\ball\b|\bany\b|none' &&
+                ! printf '%s\n' "$subject_field2" | grep -Fq "$merge_id"; then
+                add_error "Merge receipt $merge_id Approval cites $approval_id whose Subject ('$subject_field2') does not include $merge_id."
+              fi
+            elif printf '%s\n' "$approval_block2" |
+              grep -Eiq '\b(no|not|never|without|refuse|deny|decline)[[:space:]]+(authoriz|approve|grant|migrat|adopt|merge)'; then
+              add_error "Merge receipt $merge_id Approval cites $approval_id whose body explicitly denies the authorization."
+            fi
           fi
         done < <(printf '%s\n' "$merge_approval" | tr ',' '\n')
       fi
-      if [[ -n "$merge_verification" && "$merge_verification" != "none" ]]; then
-        # Verification must be a resolvable evidence reference, not text that
-        # merely looks like evidence. Three accepted forms:
-        #   1. "<gate/command> <outcome>"  e.g. "validate_project pass"
-        #   2. an in-repo evidence path that actually exists
-        #   3. an EVENTS.md event date that actually exists
-        verification_ok=0
-        verification_reason=""
-        if printf '%s\n' "$merge_verification" | grep -Eq \
-          '(^|[[:space:]])(verify_gate|readiness_check|validate_project|asset_check|boundary_check)([[:space:]]|$)'; then
-          # A named gate must carry a recorded outcome; a bare command name is
-          # an intention, not a result.
-          if printf '%s\n' "$merge_verification" | grep -Eq \
-            '(^|[[:space:]])(pass|passed|fail|failed|exit[[:space:]]+[0-9]+|OK)([[:space:]]|$|\)|,|\.|;)'; then
-            verification_ok=1
-          else
-            verification_reason="names a gate without a recorded outcome; add its result (for example 'validate_project pass')"
-          fi
-        elif printf '%s\n' "$merge_verification" | grep -Eq '(^|[[:space:]])(docs/|\.pps/)[^[:space:],]+'; then
-          # A document reference must resolve to a real file.
-          verification_missing=""
-          while IFS= read -r evidence_ref; do
-            [[ -n "$evidence_ref" ]] || continue
-            if [[ ! -e "$root/$evidence_ref" ]]; then
-              verification_missing="$evidence_ref"
-              break
-            fi
-          done < <(printf '%s\n' "$merge_verification" |
-            grep -Eo '(docs/|\.pps/)[^[:space:],]+')
-          if [[ -z "$verification_missing" ]]; then
-            verification_ok=1
-          else
-            verification_reason="cites evidence document '$verification_missing' which does not exist"
-          fi
-        elif printf '%s\n' "$merge_verification" | grep -Eq 'EVENTS\.md'; then
-          verification_event_date="$(printf '%s\n' "$merge_verification" |
-            grep -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)"
-          if [[ -n "$verification_event_date" ]] && [[ -f "$root/EVENTS.md" ]] &&
-            grep -Eq "^-[[:space:]]+${verification_event_date}:" "$root/EVENTS.md"; then
-            verification_ok=1
-          else
-            verification_reason="cites EVENTS.md without naming a date that exists as an event line"
-          fi
-        else
-          verification_reason="is not a resolvable evidence reference"
+      # Role x Relation legal matrix (single source: state-machine.json). A
+      # consumer never produces project truth, so consumes_only is its only
+      # relation; consumes_only itself must declare no output and no result.
+      while IFS= read -r src_task_id; do
+        [[ -n "$src_task_id" ]] || continue
+        src_role="$(awk -v wanted="### $src_task_id" '
+          index($0, wanted) == 1 { inside=1; next }
+          inside && /^###[[:space:]]/ { exit }
+          inside && index($0, "- Role:") == 1 {
+            sub("^- Role:[[:space:]]*", "")
+            print
+            exit
+          }' "$task_index" 2>/dev/null)"
+        [[ -n "$src_role" ]] || continue
+        if [[ "$(python3 "$script_dir/pps_evidence.py" role-allows "$src_role" "$merge_relation" 2>/dev/null)" != "true" ]]; then
+          add_error "Merge receipt $merge_id Relation '$merge_relation' is not allowed for Source Task $src_task_id whose Role is '$src_role' (see references/state-machine.json)."
         fi
-        (( verification_ok == 1 )) ||
-          add_error "Merge receipt $merge_id Verification '$merge_verification' $verification_reason; use '<gate> <outcome>', an existing docs/ or .pps/ evidence path, or an EVENTS.md date that exists."
+      done < <(printf '%s\n' "$merge_sources" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
+      if [[ "$merge_relation" == "consumes_only" ]]; then
+        [[ -z "$merge_accepted" || "$merge_accepted" == "none" ]] ||
+          add_error "Merge receipt $merge_id Relation 'consumes_only' must have Accepted: none; nothing flows back from consumption."
+        [[ -z "$merge_deferred" || "$merge_deferred" == "none" ]] ||
+          add_error "Merge receipt $merge_id Relation 'consumes_only' must have Deferred: none."
+        [[ -z "$merge_rejected" || "$merge_rejected" == "none" ]] ||
+          add_error "Merge receipt $merge_id Relation 'consumes_only' must have Rejected: none."
+        if [[ -n "$merge_result" && "$merge_result" != "none" && "$merge_result" != "lineage_incomplete" ]]; then
+          add_error "Merge receipt $merge_id Relation 'consumes_only' must not declare a Result Checkpoint; consumption produces no canonical change."
+        fi
+        if [[ -z "$merge_base" || "$merge_base" == "none" ]]; then
+          add_error "Merge receipt $merge_id Relation 'consumes_only' must record a Base Checkpoint; consumption must say where it started from."
+        fi
+      fi
+      if [[ -n "$merge_verification" && "$merge_verification" != "none" ]]; then
+        # Verification must be TYPED evidence that the merge actually
+        # succeeded, judged by the shared engine: gate_result (an executed
+        # manifest check), file_evidence (an in-repo regular file), or event
+        # (a positive, non-negated chronicle line naming this merge). Free
+        # text — especially text containing fail/failed — proves nothing.
+        verification_verdict="$(python3 "$script_dir/pps_evidence.py" verification-parse "$root" "$merge_verification" "$merge_id" 2>/dev/null)"
+        if [[ "$verification_verdict" != ok* ]]; then
+          add_error "Merge receipt $merge_id Verification '$merge_verification' is not evidence the merge succeeded ($verification_verdict). Use 'gate_result: <check id>', 'file_evidence: <existing in-repo file>', 'event: <mergeId>' (or 'event: <date>:<mergeId>'), or a named gate with a positive outcome."
+        fi
       fi
       overlap_sets="$(
         for set_value in "$merge_accepted" "$merge_rejected" "$merge_deferred"; do
@@ -1471,21 +1506,34 @@ if (( is_pps12 == 1 )); then
           disposition_path="$(printf '%s' "$disposition_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           [[ -n "$disposition_path" ]] || continue
           safe_project_path "$disposition_path" "Merge receipt $merge_id $set_name path" >/dev/null
+          if [[ "$set_name" == "Deferred" || "$set_name" == "Rejected" ]]; then
+            kept_real=0
+            [[ -e "$root/$disposition_path" ]] && kept_real=1
+            if (( kept_real == 0 )) && [[ "$merge_base" != "lineage_incomplete" && -n "$merge_base" ]] &&
+              [[ "$(python3 "$script_dir/pps_evidence.py" in-commit "$root" "$merge_base" "$disposition_path" 2>/dev/null)" == "present" ]]; then
+              kept_real=1
+            fi
+            (( kept_real == 1 )) ||
+              add_error "Merge receipt $merge_id $set_name path '$disposition_path' does not exist in the worktree or in Base Checkpoint '$merge_base'; a terminal disposition must keep recoverable evidence."
+          fi
           if [[ "$set_name" == "Accepted" && "$merge_status" == "integrated" ]]; then
             # An accepted artifact must be demonstrably real: present in the
             # worktree or resolvable inside the Result Checkpoint. A ghost
             # path proves nothing was merged.
             accepted_real=0
-            if [[ -e "$root/$disposition_path" ]]; then
-              accepted_real=1
-            elif [[ "$merge_result" != "lineage_incomplete" && -n "$merge_result" ]] &&
-              command -v git >/dev/null 2>&1 &&
-              git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
-              git -C "$root" cat-file -e "${merge_result}:${disposition_path}" 2>/dev/null; then
+            if [[ "$merge_result" != "lineage_incomplete" && -n "$merge_result" ]]; then
+              # The Result tree is the truth of what merged. A path that
+              # exists only in a dirty worktree is pending, not merged.
+              if [[ "$(python3 "$script_dir/pps_evidence.py" in-commit "$root" "$merge_result" "$disposition_path" 2>/dev/null)" == "present" ]]; then
+                accepted_real=1
+              fi
+            elif [[ -e "$root/$disposition_path" ]]; then
+              # Only without a usable Result Checkpoint may the worktree
+              # stand in.
               accepted_real=1
             fi
             (( accepted_real == 1 )) ||
-              add_error "Merge receipt $merge_id Accepted path '$disposition_path' does not exist in the worktree or in Result Checkpoint '$merge_result'; an integration must point at real merged artifacts."
+              add_error "Merge receipt $merge_id Accepted path '$disposition_path' is not present in Result Checkpoint '$merge_result'; an integration must point at artifacts inside the result commit, not at dirty worktree ghosts."
             # An integration absorbs SOURCE TASK output. An accepted path that
             # belongs to no named source task's Output Root cannot have come
             # from this merge.
@@ -1517,12 +1565,31 @@ if (( is_pps12 == 1 )); then
         checkpoint_ok "$merge_base" ||
           add_error "Merge receipt $merge_id Base Checkpoint '$merge_base' is not a resolvable Git object or the explicit lineage_incomplete marker."
         checkpoint_ok "$merge_result" ||
-          add_error "Merge receipt $merge_id Result Checkpoint '$merge_result' is not a resolvable Git object or the explicit lineage_incomplete marker."
+          if [[ "$merge_relation" == "consumes_only" ]]; then
+            true
+          else
+            add_error "Merge receipt $merge_id Result Checkpoint '$merge_result' is not a resolvable Git object or the explicit lineage_incomplete marker."
+          fi
         # An integration moves the tree from one state to another. Identical
         # base and result checkpoints mean nothing was integrated.
         if [[ "$merge_base" != "lineage_incomplete" && "$merge_result" != "lineage_incomplete" &&
           -n "$merge_base" && "$merge_base" == "$merge_result" ]]; then
           add_error "Merge receipt $merge_id has identical Base and Result Checkpoints ('$merge_base'); an integration that changed nothing integrated nothing."
+        fi
+        if [[ "$merge_base" != "lineage_incomplete" && "$merge_result" != "lineage_incomplete" &&
+          -n "$merge_base" && -n "$merge_result" ]]; then
+          # Fingerprints are not lineage: two commits can share a tree, and a
+          # reversed pair is a regression, not an integration.
+          ancestor_verdict="$(python3 "$script_dir/pps_evidence.py" ancestor "$root" "$merge_base" "$merge_result" 2>/dev/null)"
+          if [[ "$ancestor_verdict" == "unresolvable" ]]; then
+            add_error "Merge receipt $merge_id Base/Result Checkpoints are not resolvable commits; lineage cannot be proven."
+          elif [[ "$ancestor_verdict" == "not-ancestor" ]]; then
+            add_error "Merge receipt $merge_id Result Checkpoint is not a descendant of its Base Checkpoint; reversed or forked lineage is not an integration."
+          fi
+          tree_verdict="$(python3 "$script_dir/pps_evidence.py" tree-diff "$root" "$merge_base" "$merge_result" 2>/dev/null)"
+          if [[ "$tree_verdict" == "same" ]]; then
+            add_error "Merge receipt $merge_id Base and Result Checkpoints carry the same tree; different commit ids with byte-identical content integrated nothing."
+          fi
         fi
         if [[ "$merge_base" == "lineage_incomplete" || "$merge_result" == "lineage_incomplete" ]]; then
           # The migration escape hatch is for history that predates the
@@ -1551,8 +1618,12 @@ if (( is_pps12 == 1 )); then
                   inside { print }
                 ' "$decisions")"
                 # The cited decision must actually be about migrating or
-                # adopting pre-layer history.
+                # adopting pre-layer history — and must not explicitly refuse
+                # it: "do not migrate" is a negation, not an authorization.
                 if printf '%s\n' "$lineage_decision_block" |
+                  grep -Eiq '\b(no|not|never|without|refuse|deny)[[:space:]]+(migrat|adopt|authoriz)'; then
+                  add_error "Merge receipt $merge_id Lineage Note cites $lineage_note_decision, but that decision explicitly refuses to migrate or adopt pre-layer history; a negation is not an authorization."
+                elif printf '%s\n' "$lineage_decision_block" |
                   grep -Eiq 'migrat|adopt|pre-layer|predates'; then
                   lineage_migration_ok=1
                 else
@@ -1803,24 +1874,12 @@ while IFS= read -r id; do
         elif [[ ! -e "$root/$coverage_ref" ]]; then
           coverage_evidence_reason="names '$coverage_ref' which does not exist in the project"
         else
-          coverage_wired=0
-          for coverage_entry in "$root/scripts/project_verify.sh" "$root/scripts/project_verify.ps1"; do
-            [[ -f "$coverage_entry" ]] || continue
-            if entry_invokes_path "$coverage_entry" "$coverage_ref"; then
-              coverage_wired=1
-              break
-            fi
-            if [[ -f "$root/.pps/verify-manifest.txt" ]] &&
-              grep -Fq "$coverage_ref" "$root/.pps/verify-manifest.txt" &&
-              entry_invokes_path "$coverage_entry" "verify-manifest"; then
-              coverage_wired=1
-              break
-            fi
-          done
-          if (( coverage_wired == 1 )); then
+          # Execution is proven by the gate's run record, not by text shape
+          # in the entry.
+          if [[ "$(python3 "$script_dir/pps_evidence.py" run-has-path "$root" "$coverage_ref" 2>/dev/null)" == "ok" ]]; then
             coverage_evidence_ok=1
           else
-            coverage_evidence_reason="names '$coverage_ref' which exists but is never called by scripts/project_verify.*; evidence that the gate does not run keeps the table green forever"
+            coverage_evidence_reason="names '$coverage_ref' which exists but no manifest check ran it successfully on this platform; evidence the gate did not run keeps the table green forever"
           fi
         fi
       fi

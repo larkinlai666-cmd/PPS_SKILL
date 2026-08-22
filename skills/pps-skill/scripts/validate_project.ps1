@@ -1080,23 +1080,23 @@ if ($isPps12) {
                     Add-ValidationError "Task $taskId declares '$dupTaskField' $dupTaskCount times; a task record must declare each field exactly once."
                 }
             }
+            $taskTitle = [regex]::Match($body, '(?m)^-\s+Title:\s*(.*?)\s*$').Groups[1].Value
+            if ([string]::IsNullOrWhiteSpace($taskTitle) -or $taskTitle -eq 'none') {
+                Add-ValidationError "Task $taskId has no Title; a task record without a Title is a shell of a record."
+            }
             $taskActivePackage = [regex]::Match($body, '(?m)^-\s+Active Package:\s*(.*?)\s*$').Groups[1].Value
             if ([string]::IsNullOrWhiteSpace($taskActivePackage)) {
                 Add-ValidationError "Task $taskId has no Active Package field."
             } elseif ($taskActivePackage -notmatch '^PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$') {
                 Add-ValidationError "Task $taskId Active Package must be a PKG-* ID, found '$taskActivePackage'."
             } elseif ($taskActivePackage -ne $package) {
-                $eventsFile4 = Join-Path $rootFull 'EVENTS.md'
-                $taskPackageKnown = $false
-                if (Test-Path -LiteralPath $eventsFile4 -PathType Leaf) {
-                    $taskEventPattern = '(?m)^-\s+\d{4}-\d{2}-\d{2}:\s+' +
-                        [regex]::Escape('[' + $taskActivePackage + ']') + '\s'
-                    if ((Read-Utf8File $eventsFile4) -match $taskEventPattern) {
-                        $taskPackageKnown = $true
-                    }
-                }
+                # Package identity must come from a positive event line, not
+                # from prose that happens to mention the ID. A line that says
+                # 'do not create this package' must not create the package.
+                $taskPackageProbe = & python3 "$PSScriptRoot/pps_evidence.py" event-positive $rootFull $taskActivePackage 2>&1 | ForEach-Object { "$_" }
+                $taskPackageKnown = (($taskPackageProbe -join "`n").Trim() -eq 'ok')
                 if (-not $taskPackageKnown) {
-                    Add-ValidationError "Task $taskId Active Package '$taskActivePackage' is neither the current package '$package' nor recorded as a real event line in EVENTS.md."
+                    Add-ValidationError "Task $taskId Active Package '$taskActivePackage' is neither the current package '$package' nor recorded as a positive event line in EVENTS.md."
                 }
             }
             if ($taskRole -notin @('integrator', 'worker', 'consumer')) {
@@ -1104,6 +1104,20 @@ if ($isPps12) {
             }
             if ($taskStatus -notin @('active', 'handoff_ready', 'integrated', 'rejected', 'deferred', 'archived')) {
                 Add-ValidationError "Task $taskId has invalid Status '$taskStatus'."
+            }
+            if ($taskStatus -eq 'handoff_ready') {
+                # The protocol promises a handoff carries a base checkpoint:
+                # the frozen state the next owner resumes from. Without one,
+                # 'handoff_ready' is a wish, not a recoverable state.
+                $taskBaseCheckpoint = [regex]::Match($body, '(?m)^-\s+Base Checkpoint:\s*(.*?)\s*$').Groups[1].Value
+                if ([string]::IsNullOrWhiteSpace($taskBaseCheckpoint) -or $taskBaseCheckpoint -eq 'none') {
+                    Add-ValidationError "Task $taskId is 'handoff_ready' without a 'Base Checkpoint' field; the handoff must record where the work was frozen."
+                } elseif ($taskBaseCheckpoint -ne 'lineage_incomplete') {
+                    $taskBaseResolve = & python3 "$PSScriptRoot/pps_evidence.py" resolve-commit $rootFull $taskBaseCheckpoint 2>&1 | ForEach-Object { "$_" }
+                    if ((($taskBaseResolve -join "`n").Trim()) -ne 'commit') {
+                        Add-ValidationError "Task $taskId Base Checkpoint '$taskBaseCheckpoint' is not a resolvable commit."
+                    }
+                }
             }
             if ($taskStatus -in @('integrated', 'deferred', 'rejected')) {
                 $terminalTasks += [pscustomobject]@{ Id = $taskId; Status = $taskStatus }
@@ -1129,6 +1143,9 @@ if ($isPps12) {
                             Add-ValidationError "Task $taskId (integrator) capsule must be CONTEXT.md itself, found '$taskCapsule'; a separate integrator capsule would bypass Workset validation."
                         }
                     } elseif ($taskRole -ne 'integrator') {
+                        if ($taskCapsule -notlike 'task-contexts/*') {
+                            Add-ValidationError "Task $taskId ($taskRole) capsule '$taskCapsule' must live under task-contexts/."
+                        }
                         Test-TaskCapsule $taskCapsulePath $taskId $taskRole
                         foreach ($refId in $script:taskCapsuleAuthorityIds) {
                             $allTaskAuthorityRefs += [pscustomobject]@{ Task = $taskId; Id = $refId }
@@ -1265,27 +1282,23 @@ if ($isPps12) {
                 Add-ValidationError "Merge receipt $mergeId Target Package must be a PKG-* ID, found '$($fields['Target Package'])'."
             }
             # The Target Package must be a real package: the current one or
-            # one recorded in the chronicle as a parsed event line. A substring
-            # in a comment, heading, or prose is not evidence.
+            # one recorded in the chronicle as a positive, non-negated event
+            # line. A substring in a comment, heading, or prose is not
+            # evidence, and a line saying 'do not create this package' must
+            # not create it.
             if ($fields['Target Package'] -match '^PKG-' -and $fields['Target Package'] -ne $package) {
-                $eventsFile = Join-Path $rootFull 'EVENTS.md'
-                $targetKnown = $false
-                if (Test-Path -LiteralPath $eventsFile -PathType Leaf) {
-                    $eventsBody = Read-Utf8File $eventsFile
-                    $eventLinePattern = '(?m)^-\s+\d{4}-\d{2}-\d{2}:\s+' +
-                        [regex]::Escape('[' + $fields['Target Package'] + ']') + '\s'
-                    if ($eventsBody -match $eventLinePattern) {
-                        $targetKnown = $true
-                    }
-                }
+                $targetProbe = & python3 "$PSScriptRoot/pps_evidence.py" event-positive $rootFull $fields['Target Package'] 2>&1 | ForEach-Object { "$_" }
+                $targetKnown = (($targetProbe -join "`n").Trim() -eq 'ok')
                 if (-not $targetKnown) {
-                    Add-ValidationError "Merge receipt $mergeId Target Package '$($fields['Target Package'])' is neither the current package '$package' nor recorded as a real event line in EVENTS.md."
+                    Add-ValidationError "Merge receipt $mergeId Target Package '$($fields['Target Package'])' is neither the current package '$package' nor recorded as a positive event line in EVENTS.md."
                 }
             }
             if ($fields['Status'] -eq 'integrated') {
                 # An integration without accepted content is a claim, not a
-                # receipt.
-                if ([string]::IsNullOrWhiteSpace($fields['Accepted']) -or $fields['Accepted'] -eq 'none') {
+                # receipt — unless the relation is consumes_only, whose whole
+                # point is that nothing flows back.
+                if ($fields['Relation'] -ne 'consumes_only' -and
+                    ([string]::IsNullOrWhiteSpace($fields['Accepted']) -or $fields['Accepted'] -eq 'none')) {
                     Add-ValidationError "Merge receipt $mergeId is 'integrated' with an empty Accepted set; an integration that accepted nothing is not an integration."
                 }
             } elseif ($fields['Status'] -eq 'deferred') {
@@ -1322,46 +1335,17 @@ if ($isPps12) {
                 }
             }
             if (-not [string]::IsNullOrWhiteSpace($fields['Verification']) -and $fields['Verification'] -ne 'none') {
-                # Verification must be a resolvable evidence reference, not
-                # text that merely looks like evidence.
+                # Verification must be TYPED evidence that the merge actually
+                # succeeded, judged by the shared engine: gate_result (an
+                # executed manifest check), file_evidence (an in-repo regular
+                # file), or event (a positive, non-negated chronicle line
+                # naming this merge). Free text — especially text containing
+                # fail/failed — proves nothing.
                 $verificationValue = $fields['Verification']
-                $verificationOk = $false
-                $verificationReason = ''
-                if ($verificationValue -match '(^|\s)(verify_gate|readiness_check|validate_project|asset_check|boundary_check)(\s|$)') {
-                    # A named gate must carry a recorded outcome.
-                    if ($verificationValue -match '(^|\s)(pass|passed|fail|failed|exit\s+\d+|OK)(\s|$|\)|,|\.|;)') {
-                        $verificationOk = $true
-                    } else {
-                        $verificationReason = "names a gate without a recorded outcome; add its result (for example 'validate_project pass')"
-                    }
-                } elseif ($verificationValue -match '(^|\s)(docs/|\.pps/)[^\s,]+') {
-                    $verificationMissing = $null
-                    foreach ($refMatch in [regex]::Matches($verificationValue, '(docs/|\.pps/)[^\s,]+')) {
-                        $refPath = Join-Path $rootFull $refMatch.Value
-                        if (-not (Test-Path -LiteralPath $refPath)) {
-                            $verificationMissing = $refMatch.Value
-                            break
-                        }
-                    }
-                    if ($null -eq $verificationMissing) {
-                        $verificationOk = $true
-                    } else {
-                        $verificationReason = "cites evidence document '$verificationMissing' which does not exist"
-                    }
-                } elseif ($verificationValue -match 'EVENTS\.md') {
-                    $eventDateMatch = [regex]::Match($verificationValue, '\d{4}-\d{2}-\d{2}')
-                    $eventsFile3 = Join-Path $rootFull 'EVENTS.md'
-                    if ($eventDateMatch.Success -and (Test-Path -LiteralPath $eventsFile3 -PathType Leaf) -and
-                        (Read-Utf8File $eventsFile3) -match ('(?m)^-\s+' + [regex]::Escape($eventDateMatch.Value) + ':')) {
-                        $verificationOk = $true
-                    } else {
-                        $verificationReason = 'cites EVENTS.md without naming a date that exists as an event line'
-                    }
-                } else {
-                    $verificationReason = 'is not a resolvable evidence reference'
-                }
-                if (-not $verificationOk) {
-                    Add-ValidationError "Merge receipt $mergeId Verification '$verificationValue' $verificationReason; use '<gate> <outcome>', an existing docs/ or .pps/ evidence path, or an EVENTS.md date that exists."
+                $verifProbe = & python3 "$PSScriptRoot/pps_evidence.py" verification-parse $rootFull $verificationValue $mergeId 2>&1 | ForEach-Object { "$_" }
+                $verifVerdict = ($verifProbe -join "`n").Trim()
+                if (-not $verifVerdict.StartsWith('ok')) {
+                    Add-ValidationError "Merge receipt $mergeId Verification '$verificationValue' is not evidence the merge succeeded ($verifVerdict). Use 'gate_result: <check id>', 'file_evidence: <existing in-repo file>', 'event: <mergeId>' (or 'event: <date>:<mergeId>'), or a named gate with a positive outcome."
                 }
             }
             $sourceTasks = @()
@@ -1396,6 +1380,42 @@ if ($isPps12) {
             } else {
                 Add-ValidationError "Merge receipt $mergeId must name at least one Source Task."
             }
+            # Role x Relation legal matrix (single source: state-machine.json).
+            # A consumer never produces project truth, so consumes_only is its
+            # only relation; absorbs/layers_on/supersedes by a consumer are
+            # rejected, and consumes_only itself must declare no output.
+            foreach ($srcTaskId in $sourceTasks) {
+                $srcRoleBlock = [regex]::Match(
+                    $taskIndexText,
+                    '(?ms)^###\s+' + [regex]::Escape($srcTaskId) + '\s*\r?\n(?<body>.*?)(?=^###\s+|\z)')
+                if (-not $srcRoleBlock.Success) { continue }
+                $srcRoleLine = [regex]::Match(
+                    $srcRoleBlock.Groups['body'].Value, '(?m)^-\s+Role:\s*(.*?)\s*$')
+                if (-not $srcRoleLine.Success) { continue }
+                $srcRole = $srcRoleLine.Groups[1].Value
+                $allowsProbe = & python3 "$PSScriptRoot/pps_evidence.py" role-allows $srcRole $fields['Relation'] 2>&1 | ForEach-Object { "$_" }
+                if ((($allowsProbe -join "`n").Trim()) -ne 'true') {
+                    Add-ValidationError "Merge receipt $mergeId Relation '$($fields['Relation'])' is not allowed for Source Task $srcTaskId whose Role is '$srcRole' (see references/state-machine.json)."
+                }
+            }
+            if ($fields['Relation'] -eq 'consumes_only') {
+                if (-not [string]::IsNullOrWhiteSpace($fields['Accepted']) -and $fields['Accepted'] -ne 'none') {
+                    Add-ValidationError "Merge receipt $mergeId Relation 'consumes_only' must have Accepted: none; nothing flows back from consumption."
+                }
+                if (-not [string]::IsNullOrWhiteSpace($fields['Deferred']) -and $fields['Deferred'] -ne 'none') {
+                    Add-ValidationError "Merge receipt $mergeId Relation 'consumes_only' must have Deferred: none."
+                }
+                if (-not [string]::IsNullOrWhiteSpace($fields['Rejected']) -and $fields['Rejected'] -ne 'none') {
+                    Add-ValidationError "Merge receipt $mergeId Relation 'consumes_only' must have Rejected: none."
+                }
+                if (-not [string]::IsNullOrWhiteSpace($fields['Result Checkpoint']) -and
+                    $fields['Result Checkpoint'] -ne 'none' -and $fields['Result Checkpoint'] -ne 'lineage_incomplete') {
+                    Add-ValidationError "Merge receipt $mergeId Relation 'consumes_only' must not declare a Result Checkpoint; consumption produces no canonical change."
+                }
+                if ([string]::IsNullOrWhiteSpace($fields['Base Checkpoint']) -or $fields['Base Checkpoint'] -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId Relation 'consumes_only' must record a Base Checkpoint; consumption must say where it started from."
+                }
+            }
             if (-not [string]::IsNullOrWhiteSpace($fields['Approval']) -and $fields['Approval'] -ne 'none') {
                 foreach ($approvalId in @($fields['Approval'].Split(',') | ForEach-Object { $_.Trim() })) {
                     if ([string]::IsNullOrWhiteSpace($approvalId)) { continue }
@@ -1413,6 +1433,30 @@ if ($isPps12) {
                             $approvalStatusMatch.Groups['status'].Value -notin @('active', 'superseded')) {
                             Add-ValidationError "Merge receipt $mergeId Approval cites $approvalId whose status is '[$($approvalStatusMatch.Groups['status'].Value)]'; a decision that never authorized the merge cannot approve it."
                         }
+                        # Polarity: a decision whose body says it does NOT
+                        # authorize this merge is not a grant, whatever other
+                        # keywords its summary contains.
+                        $approvalBlockMatch2 = [regex]::Match(
+                            $decisionText,
+                            '(?ms)^###\s+' + [regex]::Escape($approvalId) + '\s+\[[^\]]+\]\s*\r?\n(?<body>.*?)(?=^###\s+|^##\s+|\z)')
+                        if ($approvalBlockMatch2.Success) {
+                            $approvalBody2 = $approvalBlockMatch2.Groups['body'].Value
+                            $decisionField2 = [regex]::Match($approvalBody2, '(?m)^-\s+Decision:\s*(.*?)\s*$')
+                            if ($decisionField2.Success) {
+                                $decisionValue2 = $decisionField2.Groups[1].Value
+                                if ($decisionValue2 -notmatch '(?i)approve|authoriz') {
+                                    Add-ValidationError "Merge receipt $mergeId Approval cites $approvalId whose Decision field ('$decisionValue2') does not approve; only an approving decision can authorize a merge."
+                                }
+                                $subjectField2 = [regex]::Match($approvalBody2, '(?m)^-\s+Subject:\s*(.*?)\s*$')
+                                if ($subjectField2.Success -and
+                                    $subjectField2.Groups[1].Value -notmatch '(?i)\ball\b|\bany\b|none' -and
+                                    $subjectField2.Groups[1].Value -notmatch [regex]::Escape($mergeId)) {
+                                    Add-ValidationError "Merge receipt $mergeId Approval cites $approvalId whose Subject ('$($subjectField2.Groups[1].Value)') does not include $mergeId."
+                                }
+                            } elseif ($approvalBody2 -match '(?i)\b(no|not|never|without|refuse|deny|decline)\s+(authoriz|approve|grant|migrat|adopt|merge)') {
+                                Add-ValidationError "Merge receipt $mergeId Approval cites $approvalId whose body explicitly denies the authorization."
+                            }
+                        }
                     }
                 }
             }
@@ -1428,26 +1472,40 @@ if ($isPps12) {
                         $dispositionPaths[$pathEntry] = $setName
                     }
                     $null = Resolve-ProjectFile $rootFull $pathEntry "Merge receipt $mergeId $setName path"
+                    if ($setName -in @('Deferred', 'Rejected')) {
+                        # A terminal disposition that keeps no recoverable
+                        # evidence is a ghost: the next session cannot tell
+                        # 'preserved' from 'never existed'.
+                        $keptReal = Test-Path -LiteralPath (Join-Path $rootFull $pathEntry)
+                        if (-not $keptReal -and
+                            $fields['Base Checkpoint'] -ne 'lineage_incomplete' -and
+                            -not [string]::IsNullOrWhiteSpace($fields['Base Checkpoint'])) {
+                            $inBaseProbe = & python3 "$PSScriptRoot/pps_evidence.py" in-commit $rootFull $fields['Base Checkpoint'] $pathEntry 2>&1 | ForEach-Object { "$_" }
+                            if ((($inBaseProbe -join "`n").Trim()) -eq 'present') { $keptReal = $true }
+                        }
+                        if (-not $keptReal) {
+                            Add-ValidationError "Merge receipt $mergeId $setName path '$pathEntry' does not exist in the worktree or in Base Checkpoint '$($fields['Base Checkpoint'])'; a terminal disposition must keep recoverable evidence."
+                        }
+                    }
                     if ($setName -eq 'Accepted' -and $fields['Status'] -eq 'integrated') {
                         # An accepted artifact must be demonstrably real:
                         # present in the worktree or resolvable inside the
                         # Result Checkpoint. A ghost path proves nothing.
                         $acceptedReal = $false
-                        $acceptedFull = Join-Path $rootFull $pathEntry
-                        if (Test-Path -LiteralPath $acceptedFull) {
-                            $acceptedReal = $true
-                        } elseif ($fields['Result Checkpoint'] -ne 'lineage_incomplete' -and
+                        if ($fields['Result Checkpoint'] -ne 'lineage_incomplete' -and
                             -not [string]::IsNullOrWhiteSpace($fields['Result Checkpoint'])) {
-                            $gitCmd = Get-Command git -ErrorAction SilentlyContinue
-                            if ($null -ne $gitCmd) {
-                                $catProbe = Invoke-NativeProbe {
-                                    & $gitCmd.Source -C $rootFull cat-file -e "$($fields['Result Checkpoint']):$pathEntry"
-                                }
-                                if ($catProbe.Code -eq 0) { $acceptedReal = $true }
-                            }
+                            # The Result tree is the truth of what merged. A
+                            # path that exists only in a dirty worktree is not
+                            # merged — it is pending.
+                            $inCommitProbe = & python3 "$PSScriptRoot/pps_evidence.py" in-commit $rootFull $fields['Result Checkpoint'] $pathEntry 2>&1 | ForEach-Object { "$_" }
+                            if ((($inCommitProbe -join "`n").Trim()) -eq 'present') { $acceptedReal = $true }
+                        } elseif (Test-Path -LiteralPath (Join-Path $rootFull $pathEntry)) {
+                            # Only without a usable Result Checkpoint may the
+                            # worktree stand in.
+                            $acceptedReal = $true
                         }
                         if (-not $acceptedReal) {
-                            Add-ValidationError "Merge receipt $mergeId Accepted path '$pathEntry' does not exist in the worktree or in Result Checkpoint '$($fields['Result Checkpoint'])'; an integration must point at real merged artifacts."
+                            Add-ValidationError "Merge receipt $mergeId Accepted path '$pathEntry' is not present in Result Checkpoint '$($fields['Result Checkpoint'])'; an integration must point at artifacts inside the result commit, not at dirty worktree ghosts."
                         }
                         # An integration absorbs SOURCE TASK output.
                         $acceptedOwned = $false
@@ -1477,7 +1535,8 @@ if ($isPps12) {
                 if (-not (Test-CheckpointResolvable $fields['Base Checkpoint'])) {
                     Add-ValidationError "Merge receipt $mergeId Base Checkpoint '$($fields['Base Checkpoint'])' is not a resolvable Git object or the explicit lineage_incomplete marker."
                 }
-                if (-not (Test-CheckpointResolvable $fields['Result Checkpoint'])) {
+                if ($fields['Relation'] -ne 'consumes_only' -and
+                    -not (Test-CheckpointResolvable $fields['Result Checkpoint'])) {
                     Add-ValidationError "Merge receipt $mergeId Result Checkpoint '$($fields['Result Checkpoint'])' is not a resolvable Git object or the explicit lineage_incomplete marker."
                 }
                 # An integration moves the tree from one state to another.
@@ -1486,6 +1545,26 @@ if ($isPps12) {
                     -not [string]::IsNullOrWhiteSpace($fields['Base Checkpoint']) -and
                     $fields['Base Checkpoint'] -eq $fields['Result Checkpoint']) {
                     Add-ValidationError "Merge receipt $mergeId has identical Base and Result Checkpoints ('$($fields['Base Checkpoint'])'); an integration that changed nothing integrated nothing."
+                }
+                # Fingerprints are not lineage: two different commits can carry
+                # the same tree, and a reversed Base/Result pair is a
+                # regression, not an integration. Both are judged by Git.
+                if ($fields['Base Checkpoint'] -ne 'lineage_incomplete' -and
+                    $fields['Result Checkpoint'] -ne 'lineage_incomplete' -and
+                    -not [string]::IsNullOrWhiteSpace($fields['Base Checkpoint']) -and
+                    -not [string]::IsNullOrWhiteSpace($fields['Result Checkpoint'])) {
+                    $ancProbe = & python3 "$PSScriptRoot/pps_evidence.py" ancestor $rootFull $fields['Base Checkpoint'] $fields['Result Checkpoint'] 2>&1 | ForEach-Object { "$_" }
+                    $ancVerdict = ($ancProbe -join "`n").Trim()
+                    if ($ancVerdict -eq 'unresolvable') {
+                        Add-ValidationError "Merge receipt $mergeId Base/Result Checkpoints are not resolvable commits; lineage cannot be proven."
+                    } elseif ($ancVerdict -eq 'not-ancestor') {
+                        Add-ValidationError "Merge receipt $mergeId Result Checkpoint is not a descendant of its Base Checkpoint; reversed or forked lineage is not an integration."
+                    }
+                    $treeProbe = & python3 "$PSScriptRoot/pps_evidence.py" tree-diff $rootFull $fields['Base Checkpoint'] $fields['Result Checkpoint'] 2>&1 | ForEach-Object { "$_" }
+                    $treeVerdict = ($treeProbe -join "`n").Trim()
+                    if ($treeVerdict -eq 'same') {
+                        Add-ValidationError "Merge receipt $mergeId Base and Result Checkpoints carry the same tree; different commit ids with byte-identical content integrated nothing."
+                    }
                 }
                 if ($fields['Base Checkpoint'] -eq 'lineage_incomplete' -or
                     $fields['Result Checkpoint'] -eq 'lineage_incomplete') {
@@ -1521,7 +1600,9 @@ if ($isPps12) {
                                 $decisionText,
                                 '(?ms)^###\s+' + [regex]::Escape($noteDecisionMatch.Value) + '\s+\[[^\]]+\]\s*\r?\n(?<body>.*?)(?=^###\s+|^##\s+|\z)')
                             $decisionBody = if ($decisionBlockMatch.Success) { $decisionBlockMatch.Groups['body'].Value } else { '' }
-                            if ($decisionBody -match '(?i)migrat|adopt|pre-layer|predates') {
+                            if ($decisionBody -match '(?i)\b(no|not|never|without|refuse|deny)\s+(migrat|adopt|authoriz)') {
+                                Add-ValidationError "Merge receipt $mergeId Lineage Note cites $($noteDecisionMatch.Value), but that decision explicitly refuses to migrate or adopt pre-layer history; a negation is not an authorization."
+                            } elseif ($decisionBody -match '(?i)migrat|adopt|pre-layer|predates') {
                                 $migrationOk = $true
                             } else {
                                 Add-ValidationError "Merge receipt $mergeId Lineage Note cites $($noteDecisionMatch.Value), but that decision does not authorize migrating or adopting pre-layer history."
@@ -1718,27 +1799,15 @@ foreach ($id in $requiredIds) {
                 } elseif (-not (Test-Path -LiteralPath (Join-Path $rootFull $refMatch.Value))) {
                     $coverageReason = "names '$($refMatch.Value)' which does not exist in the project"
                 } else {
-                    # A file that exists but is never executed makes the table
+                    # A file that exists but never executes makes the table
                     # green forever: the original "bare Present" defect with
-                    # extra syntax.
-                    $coverageWired = $false
-                    foreach ($entryCandidate in @(
-                        (Join-Path $rootFull 'scripts/project_verify.ps1'),
-                        (Join-Path $rootFull 'scripts/project_verify.sh'))) {
-                        if (-not (Test-Path -LiteralPath $entryCandidate -PathType Leaf)) { continue }
-                        if (Test-EntryCallsPath $entryCandidate $refMatch.Value) { $coverageWired = $true; break }
-                        $manifestCandidate = Join-Path $rootFull '.pps/verify-manifest.txt'
-                        if ((Test-Path -LiteralPath $manifestCandidate -PathType Leaf) -and
-                            (Read-Utf8File $manifestCandidate).Contains($refMatch.Value) -and
-                            (Test-EntryCallsPath $entryCandidate 'verify-manifest')) {
-                            $coverageWired = $true
-                            break
-                        }
-                    }
-                    if ($coverageWired) {
+                    # extra syntax. Execution is proven by the gate's run
+                    # record, not by text shape in the entry.
+                    $covRunProbe = & python3 "$PSScriptRoot/pps_evidence.py" run-has-path $rootFull $refMatch.Value 2>&1 | ForEach-Object { "$_" }
+                    if ((($covRunProbe -join "`n").Trim()) -eq 'ok') {
                         $coverageOk = $true
                     } else {
-                        $coverageReason = "names '$($refMatch.Value)' which exists but is never called by scripts/project_verify.*; evidence that the gate does not run keeps the table green forever"
+                        $coverageReason = "names '$($refMatch.Value)' which exists but no manifest check ran it successfully on this platform; evidence the gate did not run keeps the table green forever"
                     }
                 }
             }

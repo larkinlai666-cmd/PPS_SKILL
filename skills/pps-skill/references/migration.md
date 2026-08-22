@@ -113,3 +113,21 @@ Migration is complete only when:
 - validation passes;
 - every core/current supporting asset has a durable sync backend, verified materialization, and—when cloud-backed—a reachable rclone object with matching size;
 - a Git checkpoint makes the pre-migration state recoverable.
+
+## Automated migration tool
+
+`scripts/migrate_project.sh` / `scripts/migrate_project.ps1` provide the
+auditable upgrade path:
+
+- `--dry-run` (default): prints the full plan — one bootstrap integrator
+  task, an empty typed merge registry, a `Decision: approve` migration
+  decision, one `migration_authorized` event, and the generated check
+  manifest. Writes nothing.
+- `--apply --confirm`: backs up every touched file under
+  `.pps/migration-backup-<timestamp>/`, writes the new files, and appends the
+  decision and event. It does NOT flip the `Protocol:` field — you flip it
+  only after `validate_project` passes on both platforms.
+- `--rollback <backup dir>`: restores the backup.
+
+The upgrader never guesses historical merges into typed relations; pre-layer
+history uses the `lineage_incomplete` escape hatch with an explicit decision.

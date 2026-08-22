@@ -27,7 +27,8 @@ Grammar rules:
 - `Role` is `integrator`, `worker`, or `consumer`.
 - `Status` is `active`, `handoff_ready`, `integrated`, `rejected`, `deferred`, or `archived`.
 - Exactly one task may hold `Role: integrator` with `Status: active` at any time. That task ID must equal the `Writer:` line in hot state.
-- `Capsule` names a per-task file under `task-contexts/`; it must exist for every non-archived task.
+- `Capsule` names a per-task file under `task-contexts/`; it must exist for every non-archived task, and a worker/consumer capsule outside `task-contexts/` is rejected. `Title` is a required field.
+- Package identity comes from a positive, non-negated chronicle line; an event line that says "do not create [PKG-x]" must not create the package.
 - `Output Root` is required for `worker` and `consumer` tasks: a bounded project-relative directory (conventionally under `local-task-output/`, which is git-ignored) where all task writes land. `none` is valid only for the integrator.
 - `External Locator` optionally records the host application's thread ID (for example `codex:<uuid>`) for evidence navigation. It is never authority and never a substitute for the `T-*` ID.
 
@@ -50,11 +51,13 @@ Hot state carries `- Writer: T-*` naming the current canonical writer. Rules:
 
 `Status` deliberately splits meanings that field practice proved get confused:
 
-- `handoff_ready`: the task's own work is done and its outputs carry a base checkpoint; nothing has entered the project yet.
+- `handoff_ready`: the task's own work is done and its outputs carry a base checkpoint; nothing has entered the project yet. The task block MUST carry a resolvable `Base Checkpoint` (or `lineage_incomplete` with a note), otherwise the handoff is a wish, not a recoverable state.
+- `deferred` and `rejected` paths are recoverable evidence, not ghosts: each named path must exist in the worktree or inside the Base Checkpoint.
 - `integrated`: a merge receipt records how the outputs entered a package.
 - `deferred`: complete in itself, deliberately not merged; the receipt records the reactivation condition.
 - `rejected`: evidence retained, outputs excluded; rejection never deletes the record.
 - A consumer task finishing (`consume-only`) never makes its outputs project truth.
+- Role x Relation legality is a machine-read matrix in `references/state-machine.json`: `integrator` may `absorbs`/`layers_on`/`supersedes`/`rollback_to`, `worker` additionally `deferred`/`rejected`, and `consumer` may ONLY `consumes_only`. A `consumes_only` receipt must have `Accepted: none`, `Deferred: none`, `Rejected: none`, a `Base Checkpoint`, and no `Result Checkpoint`.
 
 "Task complete" therefore never implies "merged into the project"; only a receipt does.
 
@@ -95,9 +98,9 @@ Receipt rules:
 - Every field in a task record and in a receipt must be declared exactly once. Duplicate fields are rejected: first-match parsing would let a second, contradictory line hide in plain sight.
 - `Active Package` in a task record must be a real package: the current Hot State package or one recorded in `EVENTS.md` as a parsed event line.
 - `Status: integrated` requires both a base checkpoint and a result checkpoint (Git commits, or an explicit `lineage_incomplete` marker when history predates the layer). Without checkpoints the receipt may exist but must not claim `integrated`.
-- `Status: integrated` also requires real disposition evidence: a non-empty `Accepted` set whose paths resolve to real artifacts (in the worktree or inside the Result Checkpoint) **and** sit inside one of the named Source Tasks' Output Roots, an `Approval` naming an authorizing `D-*` decision that is `active` or `superseded` (never `rejected`), and a resolvable `Verification`.
-- `Verification` accepts exactly three resolvable forms: `<gate> <outcome>` (a named gate — verify_gate, readiness_check, validate_project, asset_check, boundary_check — plus its recorded result, e.g. `validate_project pass`), an existing `docs/` or `.pps/` evidence path, or an `EVENTS.md` reference naming a date that exists as an event line. A bare gate name without an outcome, a path that does not exist, and reassuring prose all fail.
-- Base and Result Checkpoints must differ: an integration that leaves the tree byte-identical integrated nothing.
+- `Status: integrated` also requires real disposition evidence: a non-empty `Accepted` set whose paths resolve **inside the Result Checkpoint** (a dirty-worktree-only path is pending, not merged) **and** sit inside one of the named Source Tasks' Output Roots, an `Approval` naming an authorizing `D-*` decision whose polarity is positive (an explicit `Decision: reject` or a body that denies the grant never authorizes), and a typed `Verification`.
+- `Verification` is TYPED evidence judged by the shared engine, never free text: `gate_result: <check id>` (an executed check-manifest row), `file_evidence: <existing in-repo regular file>`, or `event: <mergeId>` / `event: <date>:<mergeId>` (a positive, non-negated chronicle line naming this merge). Text containing `fail`/`failed`, a directory path, a path escaping the project root, or an unrelated event date all fail. The legacy `<gate> <outcome>` form still works but only with a positive outcome.
+- Base and Result Checkpoints must differ by CONTENT, not by commit id: `git merge-base --is-ancestor Base Result` must hold, the trees must differ, and reversed pairs are regressions, not integrations.
 - `deferred` receipts require a non-empty `Deferred` set and a `Reactivate When` field; `rejected` receipts require a non-empty `Rejected` set and a `Reason` field. Every terminal disposition (`integrated`/`deferred`/`rejected`) requires Approval and Verification.
 - The `Target Package` must be a real package: the current Hot State package or one recorded in `EVENTS.md` **as a parsed event line** — a substring in a comment or heading proves nothing.
 - An `archived` task keeps exactly one final disposition: exactly one terminal receipt (or one consistent status story) must name it. Contradictory terminal receipts about the same archived task fail validation.

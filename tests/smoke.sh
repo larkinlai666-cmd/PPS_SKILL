@@ -975,7 +975,7 @@ cp -R "$receipt_base" "$temp_root/receipt-phantom-package"
 printf '<!-- [PKG-999] -->\n' >>"$temp_root/receipt-phantom-package/EVENTS.md"
 write_receipt "$temp_root/receipt-phantom-package" D-001 "validate_project pass" local-task-output/T-002/real.md PKG-999
 expect_invalid "$temp_root/receipt-phantom-package" \
-  "nor recorded as a real event line" \
+  "nor recorded as a positive event line" \
   "Receipt targeting package only mentioned in a comment"
 
 cp -R "$receipt_base" "$temp_root/receipt-rejected-approval"
@@ -987,25 +987,25 @@ expect_invalid "$temp_root/receipt-rejected-approval" \
 cp -R "$receipt_base" "$temp_root/receipt-prose-verification"
 write_receipt "$temp_root/receipt-prose-verification" D-001 "looked fine to me" local-task-output/T-002/real.md PKG-001
 expect_invalid "$temp_root/receipt-prose-verification" \
-  "is not a resolvable evidence reference" \
+  "is not evidence the merge succeeded" \
   "Receipt with prose-only verification"
 
 cp -R "$receipt_base" "$temp_root/receipt-ghost-accepted"
 write_receipt "$temp_root/receipt-ghost-accepted" D-001 "validate_project pass" local-task-output/T-002/ghost.md PKG-001
 expect_invalid "$temp_root/receipt-ghost-accepted" \
-  "an integration must point at real merged artifacts" \
+  "an integration must point at artifacts inside the result commit" \
   "Receipt accepting a nonexistent artifact"
 
 cp -R "$receipt_base" "$temp_root/receipt-missing-evidence-doc"
 write_receipt "$temp_root/receipt-missing-evidence-doc" D-001 "docs/nonexistent-evidence.md" local-task-output/T-002/real.md PKG-001
 expect_invalid "$temp_root/receipt-missing-evidence-doc" \
-  "which does not exist" \
+  "not evidence the merge succeeded" \
   "Receipt citing a nonexistent evidence document"
 
 cp -R "$receipt_base" "$temp_root/receipt-bare-gate-name"
 write_receipt "$temp_root/receipt-bare-gate-name" D-001 "verify_gate" local-task-output/T-002/real.md PKG-001
 expect_invalid "$temp_root/receipt-bare-gate-name" \
-  "names a gate without a recorded outcome" \
+  "not evidence the merge succeeded" \
   "Receipt naming a gate without an outcome"
 
 cp -R "$receipt_base" "$temp_root/receipt-unowned-accepted"
@@ -1144,6 +1144,240 @@ PYEOF
 expect_invalid "$temp_root/archived-contradiction" \
   "contradictory terminal receipts" \
   "Archived task with contradictory receipts"
+
+# ==== 049 adversarial matrix: evidence must prove the merge actually happened ====
+matrix_base="$temp_root/matrix-base"
+cp -R "$receipt_base" "$matrix_base"
+write_matrix_receipt() {
+  local dir="$1" verification="$2" accepted="$3" relation="$4" base="$5" result="$6" approval="$7" status="$8" target="$9"
+  {
+    printf '# Merges\n\n## Merge Receipts\n\n'
+    printf '### MERGE-001\n- Target Package: %s\n- Source Tasks: T-002\n- Relation: %s\n- Accepted: %s\n- Rejected: none\n- Deferred: none\n- Base Checkpoint: %s\n- Result Checkpoint: %s\n- Lineage Note: migration per D-001\n- Approval: %s\n- Verification: %s\n- Status: %s\n' \
+      "$target" "$relation" "$accepted" "$base" "$result" "$approval" "$verification" "$status"
+  } >"$dir/MERGES.md"
+}
+
+cp -R "$matrix_base" "$temp_root/mx-verification-failed"
+write_matrix_receipt "$temp_root/mx-verification-failed" "validate_project failed" local-task-output/T-002/real.md absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-verification-failed" \
+  "not evidence the merge succeeded" \
+  "Verification that says failed must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-verification-wrapper"
+write_matrix_receipt "$temp_root/mx-verification-wrapper" "validate_project pass, though tests failed" local-task-output/T-002/real.md absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-verification-wrapper" \
+  "not evidence the merge succeeded" \
+  "Verification prose wrapping a failure must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-verification-directory"
+write_matrix_receipt "$temp_root/mx-verification-directory" "file_evidence: docs" local-task-output/T-002/real.md absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-verification-directory" \
+  "not evidence the merge succeeded" \
+  "Verification naming a directory must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-verification-escape"
+printf 'outside evidence\n' >"$temp_root/outside-evidence.md"
+write_matrix_receipt "$temp_root/mx-verification-escape" "file_evidence: docs/../../outside-evidence.md" local-task-output/T-002/real.md absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-verification-escape" \
+  "not evidence the merge succeeded" \
+  "Verification escaping the project root must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-verification-unrelated-event"
+write_matrix_receipt "$temp_root/mx-verification-unrelated-event" "event: 2020-01-01:MERGE-001" local-task-output/T-002/real.md absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-verification-unrelated-event" \
+  "not evidence the merge succeeded" \
+  "Verification borrowing an unrelated event date must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-approval-negative"
+python3 - "$temp_root/mx-approval-negative" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/DECISIONS.md'
+t = open(p, encoding='utf-8').read()
+t = t.replace('## Status Events', '### D-003 [active]\n\n- Date: 2026-08-22\n- Decision: reject\n- Subject: MERGE-001\n- Summary: Approving nothing.\n\n## Status Events')
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+write_matrix_receipt "$temp_root/mx-approval-negative" "validate_project pass" local-task-output/T-002/real.md absorbs lineage_incomplete lineage_incomplete D-003 integrated PKG-001
+expect_invalid "$temp_root/mx-approval-negative" \
+  "does not approve" \
+  "A Decision: reject field must not authorize a merge"
+
+cp -R "$matrix_base" "$temp_root/mx-deferred-ghost"
+perl -0pi -e 's/(- Status: )integrated/${1}deferred/' "$temp_root/mx-deferred-ghost/TASK_INDEX.md"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: deferred\n- Accepted: none\n- Rejected: none\n- Deferred: local-task-output/T-002/ghost.md\n- Base Checkpoint: lineage_incomplete\n- Result Checkpoint: none\n- Reactivate When: when upstream lands\n- Approval: D-001\n- Verification: validate_project pass\n- Status: deferred\n'
+} >"$temp_root/mx-deferred-ghost/MERGES.md"
+expect_invalid "$temp_root/mx-deferred-ghost" \
+  "must keep recoverable evidence" \
+  "A deferred path that does not exist must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-rejected-ghost"
+perl -0pi -e 's/(- Status: )integrated/${1}rejected/' "$temp_root/mx-rejected-ghost/TASK_INDEX.md"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: rejected\n- Accepted: none\n- Rejected: local-task-output/T-002/ghost.md\n- Deferred: none\n- Base Checkpoint: lineage_incomplete\n- Result Checkpoint: none\n- Reason: does not fit\n- Approval: D-001\n- Verification: validate_project pass\n- Status: rejected\n'
+} >"$temp_root/mx-rejected-ghost/MERGES.md"
+expect_invalid "$temp_root/mx-rejected-ghost" \
+  "must keep recoverable evidence" \
+  "A rejected path that does not exist must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-handoff-no-checkpoint"
+perl -0pi -e 's/(- Status: )integrated/${1}handoff_ready/' "$temp_root/mx-handoff-no-checkpoint/TASK_INDEX.md"
+expect_invalid "$temp_root/mx-handoff-no-checkpoint" \
+  "is 'handoff_ready' without a 'Base Checkpoint'" \
+  "handoff_ready without a base checkpoint must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-consumer-absorbs"
+sed -i.bak 's/^- Role: worker$/- Role: consumer/' "$temp_root/mx-consumer-absorbs/TASK_INDEX.md"
+write_matrix_receipt "$temp_root/mx-consumer-absorbs" "validate_project pass" local-task-output/T-002/real.md absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-consumer-absorbs" \
+  "is not allowed for Source Task T-002 whose Role is 'consumer'" \
+  "A consumer claiming absorbs must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-consumes-only-accepted"
+sed -i.bak 's/^- Role: worker$/- Role: consumer/' "$temp_root/mx-consumes-only-accepted/TASK_INDEX.md"
+write_matrix_receipt "$temp_root/mx-consumes-only-accepted" "validate_project pass" local-task-output/T-002/real.md consumes_only lineage_incomplete none D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-consumes-only-accepted" \
+  "must have Accepted: none" \
+  "consumes_only with a non-empty Accepted set must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-consumes-only-none"
+sed -i.bak 's/^- Role: worker$/- Role: consumer/' "$temp_root/mx-consumes-only-none/TASK_INDEX.md"
+write_matrix_receipt "$temp_root/mx-consumes-only-none" "validate_project pass" none consumes_only lineage_incomplete none D-001 integrated PKG-001
+bash "$temp_root/mx-consumes-only-none/scripts/validate_project.sh" \
+  "$temp_root/mx-consumes-only-none" --quiet
+
+cp -R "$matrix_base" "$temp_root/mx-package-negative-event"
+printf -- '- 2026-08-22: Do not create [PKG-999] here. | files: none | verify: none | pending: none\n' >>"$temp_root/mx-package-negative-event/EVENTS.md"
+write_matrix_receipt "$temp_root/mx-package-negative-event" "validate_project pass" local-task-output/T-002/real.md absorbs lineage_incomplete lineage_incomplete D-001 integrated PKG-999
+expect_invalid "$temp_root/mx-package-negative-event" \
+  "nor recorded as a positive event line" \
+  "A negated event line must not create a package identity"
+
+cp -R "$matrix_base" "$temp_root/mx-task-capsule-outside"
+sed -i.bak 's|^- Capsule: task-contexts/T-002.md$|- Capsule: docs/MAIN.md|' \
+  "$temp_root/mx-task-capsule-outside/TASK_INDEX.md"
+expect_invalid "$temp_root/mx-task-capsule-outside" \
+  "must live under task-contexts/" \
+  "A worker capsule outside task-contexts/ must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-task-missing-title"
+sed -i.bak '/^- Title: Worker$/d' "$temp_root/mx-task-missing-title/TASK_INDEX.md"
+expect_invalid "$temp_root/mx-task-missing-title" \
+  "has no Title" \
+  "A task without a Title must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-checkpoint-empty-tree"
+git -C "$temp_root/mx-checkpoint-empty-tree" init -q
+git -C "$temp_root/mx-checkpoint-empty-tree" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" add -A
+git -C "$temp_root/mx-checkpoint-empty-tree" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" commit -q -m base
+git -C "$temp_root/mx-checkpoint-empty-tree" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" commit -q --allow-empty -m empty
+empty_tree_base="$(git -C "$temp_root/mx-checkpoint-empty-tree" rev-parse HEAD~1)"
+empty_tree_result="$(git -C "$temp_root/mx-checkpoint-empty-tree" rev-parse HEAD)"
+write_matrix_receipt "$temp_root/mx-checkpoint-empty-tree" "validate_project pass" local-task-output/T-002/real.md absorbs "$empty_tree_base" "$empty_tree_result" D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-checkpoint-empty-tree" \
+  "carry the same tree" \
+  "Different commits with the same tree must be rejected"
+
+cp -R "$matrix_base" "$temp_root/mx-checkpoint-reversed"
+git -C "$temp_root/mx-checkpoint-reversed" init -q
+git -C "$temp_root/mx-checkpoint-reversed" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" add -A
+git -C "$temp_root/mx-checkpoint-reversed" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" commit -q -m base
+printf 'extra\n' >"$temp_root/mx-checkpoint-reversed/docs/extra.md"
+git -C "$temp_root/mx-checkpoint-reversed" add -A
+git -C "$temp_root/mx-checkpoint-reversed" -c user.name="PPS Smoke" \
+  -c user.email="pps-smoke@example.invalid" commit -q -m result
+rev_base="$(git -C "$temp_root/mx-checkpoint-reversed" rev-parse HEAD)"
+rev_result="$(git -C "$temp_root/mx-checkpoint-reversed" rev-parse HEAD~1)"
+write_matrix_receipt "$temp_root/mx-checkpoint-reversed" "validate_project pass" local-task-output/T-002/real.md absorbs "$rev_base" "$rev_result" D-001 integrated PKG-001
+expect_invalid "$temp_root/mx-checkpoint-reversed" \
+  "not a descendant of its Base Checkpoint" \
+  "Reversed Base/Result checkpoints must be rejected"
+
+mx_gate_exit9="$temp_root/mx-gate-exit9"
+cp -R "$temp_root/software-case" "$mx_gate_exit9"
+mkdir -p "$mx_gate_exit9/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$mx_gate_exit9/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_gate_exit9/PROJECT_STATE.md"
+mkdir -p "$mx_gate_exit9/tests"
+printf '#!/usr/bin/env bash\nexit 9\n' >"$mx_gate_exit9/tests/real-check.sh"
+printf 'M-002\tany\t.\t60\t0\tbash tests/real-check.sh\tfailing test\n' \
+  >>"$mx_gate_exit9/.pps/verify-manifest.txt"
+rm -f "$mx_gate_exit9/.pps/verify-stamp"
+bash "$mx_gate_exit9/scripts/session_begin.sh" "$mx_gate_exit9" >/dev/null 2>&1 || true
+set +e
+bash "$mx_gate_exit9/scripts/verify_gate.sh" "$mx_gate_exit9" >"$temp_root/mx-gate-exit9.out" 2>&1
+mx_gate_exit9_code=$?
+set -e
+[[ "$mx_gate_exit9_code" != "0" ]]
+grep -q 'check manifest execution' "$temp_root/mx-gate-exit9.out"
+[[ ! -f "$mx_gate_exit9/.pps/verify-stamp" ]]
+python3 - "$mx_gate_exit9" <<'PYEOF'
+import json, sys
+r = json.load(open(sys.argv[1] + '/.pps/verify-run.json'))
+assert r['result'] == 'fail', r
+for item in r['items']:
+    if item['id'] == 'M-002':
+        assert item['exit_code'] == 9 and item['ok'] is False, item
+PYEOF
+
+mx_gate_mention="$temp_root/mx-gate-mention"
+cp -R "$temp_root/software-case" "$mx_gate_mention"
+mkdir -p "$mx_gate_mention/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$mx_gate_mention/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_gate_mention/PROJECT_STATE.md"
+mkdir -p "$mx_gate_mention/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$mx_gate_mention/tests/parity-harness.sh"
+python3 - "$mx_gate_mention" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+t = t[:j] + '\n- Never ship without parity. (verify: tests/parity-harness.sh)\n' + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+printf 'M-002\tbash\t.\t60\t0\tbash -c "echo tests/parity-harness.sh"\tprint only\n' \
+  >>"$mx_gate_mention/.pps/verify-manifest.txt"
+rm -f "$mx_gate_mention/.pps/verify-stamp"
+bash "$mx_gate_mention/scripts/session_begin.sh" "$mx_gate_mention" >/dev/null 2>&1 || true
+set +e
+bash "$mx_gate_mention/scripts/verify_gate.sh" "$mx_gate_mention" >"$temp_root/mx-gate-mention.out" 2>&1
+mx_gate_mention_code=$?
+set -e
+[[ "$mx_gate_mention_code" != "0" ]]
+grep -q 'red line not wired to an executed check' "$temp_root/mx-gate-mention.out"
+
+mx_gate_wired="$temp_root/mx-gate-wired"
+cp -R "$temp_root/software-case" "$mx_gate_wired"
+mkdir -p "$mx_gate_wired/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$mx_gate_wired/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_gate_wired/PROJECT_STATE.md"
+mkdir -p "$mx_gate_wired/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$mx_gate_wired/tests/parity-harness.sh"
+python3 - "$mx_gate_wired" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+t = t[:j] + '\n- Never ship without parity. (verify: tests/parity-harness.sh)\n' + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+printf 'M-002\tbash\t.\t60\t0\tbash tests/parity-harness.sh\treal check\n' \
+  >>"$mx_gate_wired/.pps/verify-manifest.txt"
+rm -f "$mx_gate_wired/.pps/verify-stamp"
+bash "$mx_gate_wired/scripts/session_begin.sh" "$mx_gate_wired" >/dev/null 2>&1 || true
+bash "$mx_gate_wired/scripts/verify_gate.sh" "$mx_gate_wired" >"$temp_root/mx-gate-wired.out" 2>&1
+grep -q 'red line wiring: all named checks are wired to executed manifest checks' "$temp_root/mx-gate-wired.out"
 
 cp -R "$receipt_base" "$temp_root/empty-deferred"
 perl -0pi -e 's/(- Status: )integrated/${1}deferred/' \
@@ -1383,6 +1617,9 @@ grep -q 'relay takeover' "$stale_snapshot_case/EVENTS.md"
 
 comment_wiring_case="$temp_root/comment-wiring-case"
 cp -R "$temp_root/software-case" "$comment_wiring_case"
+mkdir -p "$comment_wiring_case/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$comment_wiring_case/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$comment_wiring_case/PROJECT_STATE.md"
 mkdir -p "$comment_wiring_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$comment_wiring_case/tests/parity-harness.sh"
 python3 - "$comment_wiring_case" <<'PYEOF2'
@@ -1408,11 +1645,14 @@ bash "$comment_wiring_case/scripts/verify_gate.sh" "$comment_wiring_case" \
 comment_wiring_code=$?
 set -e
 [[ "$comment_wiring_code" != "0" ]]
-grep -q 'never calls it' "$temp_root/comment-wiring.out"
+grep -q 'no manifest check ran it successfully' "$temp_root/comment-wiring.out"
 [[ ! -f "$comment_wiring_case/.pps/verify-stamp" ]]
 
 always_true_case="$temp_root/always-true-case"
 cp -R "$temp_root/software-case" "$always_true_case"
+mkdir -p "$always_true_case/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$always_true_case/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$always_true_case/PROJECT_STATE.md"
 python3 - "$always_true_case" <<'PYEOF2'
 import re, sys
 p = sys.argv[1] + '/scripts/project_verify.sh'
@@ -1443,7 +1683,7 @@ t = re.sub(r'(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', r'\1 prototypes/hardening-smok
 open(p, 'w', encoding='utf-8').write(t)
 PYEOF2
 expect_invalid "$coverage_unwired_case" \
-  "never called by scripts/project_verify" \
+  "no manifest check ran it successfully" \
   "Coverage evidence that the gate never runs"
 
 note_laundry_case="$temp_root/note-laundry-case"
@@ -1479,6 +1719,9 @@ grep -q 'Relay: BOUNDARY MISSING' "$temp_root/gate-boundary-missing.out"
 
 dead_fn_wiring_case="$temp_root/dead-fn-wiring-case"
 cp -R "$temp_root/software-case" "$dead_fn_wiring_case"
+mkdir -p "$dead_fn_wiring_case/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$dead_fn_wiring_case/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$dead_fn_wiring_case/PROJECT_STATE.md"
 mkdir -p "$dead_fn_wiring_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$dead_fn_wiring_case/tests/parity-harness.sh"
 python3 - "$dead_fn_wiring_case" <<'PYEOF2'
@@ -1504,11 +1747,14 @@ bash "$dead_fn_wiring_case/scripts/verify_gate.sh" "$dead_fn_wiring_case" \
 dead_fn_wiring_code=$?
 set -e
 [[ "$dead_fn_wiring_code" != "0" ]]
-grep -q 'never calls it' "$temp_root/dead-fn-wiring.out"
+grep -q 'no manifest check ran it successfully' "$temp_root/dead-fn-wiring.out"
 [[ ! -f "$dead_fn_wiring_case/.pps/verify-stamp" ]]
 
 dead_branch_wiring_case="$temp_root/dead-branch-wiring-case"
 cp -R "$temp_root/software-case" "$dead_branch_wiring_case"
+mkdir -p "$dead_branch_wiring_case/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$dead_branch_wiring_case/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$dead_branch_wiring_case/PROJECT_STATE.md"
 mkdir -p "$dead_branch_wiring_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$dead_branch_wiring_case/tests/parity-harness.sh"
 python3 - "$dead_branch_wiring_case" <<'PYEOF2'
@@ -1534,10 +1780,13 @@ bash "$dead_branch_wiring_case/scripts/verify_gate.sh" "$dead_branch_wiring_case
 dead_branch_wiring_code=$?
 set -e
 [[ "$dead_branch_wiring_code" != "0" ]]
-grep -q 'never calls it' "$temp_root/dead-branch-wiring.out"
+grep -q 'no manifest check ran it successfully' "$temp_root/dead-branch-wiring.out"
 
 mention_wiring_case="$temp_root/mention-wiring-case"
 cp -R "$temp_root/software-case" "$mention_wiring_case"
+mkdir -p "$mention_wiring_case/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$mention_wiring_case/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mention_wiring_case/PROJECT_STATE.md"
 mkdir -p "$mention_wiring_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$mention_wiring_case/tests/parity-harness.sh"
 python3 - "$mention_wiring_case" <<'PYEOF2'
@@ -1562,11 +1811,14 @@ bash "$mention_wiring_case/scripts/verify_gate.sh" "$mention_wiring_case" \
 mention_wiring_code=$?
 set -e
 [[ "$mention_wiring_code" != "0" ]]
-grep -q 'never calls it' "$temp_root/mention-wiring.out"
+grep -q 'no manifest check ran it successfully' "$temp_root/mention-wiring.out"
 [[ ! -f "$mention_wiring_case/.pps/verify-stamp" ]]
 
 while_false_case="$temp_root/while-false-case"
 cp -R "$temp_root/software-case" "$while_false_case"
+mkdir -p "$while_false_case/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$while_false_case/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$while_false_case/PROJECT_STATE.md"
 mkdir -p "$while_false_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$while_false_case/tests/parity-harness.sh"
 python3 - "$while_false_case" <<'PYEOF2'
@@ -1591,7 +1843,7 @@ bash "$while_false_case/scripts/verify_gate.sh" "$while_false_case" \
 while_false_code=$?
 set -e
 [[ "$while_false_code" != "0" ]]
-grep -q 'never calls it' "$temp_root/while-false.out"
+grep -q 'no manifest check ran it successfully' "$temp_root/while-false.out"
 
 relay_discard_case="$temp_root/relay-discard-case"
 bash "$skill/scripts/init_project.sh" relay-discard-case \
@@ -1682,6 +1934,9 @@ grep -q 'software package needs a behavioral check' "$temp_root/struct-only.out"
 
 redline_unwired_case="$temp_root/redline-unwired-case"
 cp -R "$temp_root/software-case" "$redline_unwired_case"
+mkdir -p "$redline_unwired_case/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$redline_unwired_case/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$redline_unwired_case/PROJECT_STATE.md"
 python3 - "$redline_unwired_case" <<'PYEOF2'
 import sys
 root = sys.argv[1]
@@ -1694,13 +1949,15 @@ t = t[:j] + '\n' + tail + t[j:]
 open(p, 'w', encoding='utf-8').write(t)
 PYEOF2
 rm -f "$redline_unwired_case/.pps/verify-stamp"
+bash "$redline_unwired_case/scripts/session_begin.sh" \
+  "$redline_unwired_case" >/dev/null 2>&1 || true
 set +e
 bash "$redline_unwired_case/scripts/verify_gate.sh" "$redline_unwired_case" \
   >"$temp_root/redline-unwired.out" 2>&1
 redline_unwired_code=$?
 set -e
 [[ "$redline_unwired_code" != "0" ]]
-grep -q 'red line not wired to the gate' "$temp_root/redline-unwired.out"
+grep -q 'red line not wired to an executed check' "$temp_root/redline-unwired.out"
 [[ ! -f "$redline_unwired_case/.pps/verify-stamp" ]]
 
 coverage_prose_case="$temp_root/coverage-prose-case"
@@ -1855,7 +2112,7 @@ if bash "$gate_fail_case/scripts/verify_gate.sh" "$gate_fail_case" \
   echo "Verify gate wrote a green stamp for a failing project verification." >&2
   exit 1
 fi
-grep -q 'PPS verify gate: FAILED (project verification)' "$temp_root/gate-fail.out"
+grep -q 'PPS verify gate: FAILED' "$temp_root/gate-fail.out"
 if [[ -f "$gate_fail_case/.pps/verify-stamp" ]]; then
   echo "Verify gate left a stamp behind after a failed verification." >&2
   exit 1

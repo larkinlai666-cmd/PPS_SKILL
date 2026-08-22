@@ -4,6 +4,35 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-22
+
+Execution-proof round. The 0.4.9 convergence audit found that the core state
+machine still substitutes text-shape, path-existence, different-commit-id and
+keyword presence for command-execution, verification-success, evidence
+belonging and Git lineage. This round follows the audit's own instruction:
+first a machine-readable schema and a single-source evidence engine, then the
+verifiers rewritten on top of them — not eight more regexes.
+
+### Fixed
+
+- **The gate now EXECUTES a check manifest (P0-001)**: `.pps/verify-manifest.txt` is a TAB-separated run list (`check_id`, `platform`, `cwd`, `timeout_s`, `expected_exit`, `command`, `note`). The gate runs every row for its own platform, compares the exit code with the expected one, and records `.pps/verify-run.json`. The pass stamp binds `manifest_sha256` and `run_sha256`. A test that exits 9 fails the gate on both platforms with no stamp; a row that only prints the path is not a call (call-shape analysis runs on the executed commands). Red-line and coverage wiring resolve against rows that actually ran successfully — static entry text is lint only, and one platform cannot satisfy the other's wiring.
+- **Typed Verification (P0-002)**: `gate_result: <check id>`, `file_evidence: <in-repo regular file>`, or `event: <mergeId>` / `event: <date>:<mergeId>` — judged by the shared engine. Text containing `fail`/`failed`, directories, root-escapes, and unrelated event dates all fail.
+- **Git lineage (P0-003)**: Base must be an ancestor of Result (`git merge-base --is-ancestor`), the trees must differ, and Accepted paths must exist inside the Result tree — dirty-worktree-only artifacts are pending, not merged.
+- **Recoverable terminal states (P0-004)**: `deferred`/`rejected` paths must exist in the worktree or Base Checkpoint; `handoff_ready` requires a resolvable `Base Checkpoint`.
+- **Role x Relation matrix (P1-005)**: machine-read from `references/state-machine.json`. A consumer may only `consumes_only`; `consumes_only` requires `Accepted: none` plus a `Base Checkpoint` and no `Result Checkpoint`. The correct `consumes_only + Accepted: none` receipt now passes.
+- **Decision polarity (P1-006)**: a structured `- Decision:` field (approve/reject/revoke) and `- Subject:` are honored; a body that explicitly denies authorization or migration is a negation, not a grant.
+- **Task/package syntax (P1-007)**: `Title` is required; worker/consumer capsules must live under `task-contexts/`; package identity requires a positive, non-negated chronicle line.
+- **Auditable migration (P1-008)**: `scripts/migrate_project.sh` / `.ps1` with `--dry-run`, `--apply --confirm`, and `--rollback`. The upgrader never guesses history into typed relations and never flips the `Protocol:` field itself.
+
+### Architecture
+
+- `references/state-machine.json` is the single machine-readable source for the role matrix, word lists, and manifest columns; PowerShell and Bash both read it.
+- `scripts/pps_evidence.py` is the single implementation of run-record checks, Git lineage, and Verification parsing; the shell scripts call it instead of carrying copies. Both scripts ship to projects at init.
+
+### Adversarial matrix
+
+Both smoke suites now run the same 049 matrix (verification-failed/wrapper/directory/escape/unrelated-event, negative approval, deferred/rejected ghosts, handoff without checkpoint, consumer-absorbs, consumes-only both ways, negated package event, capsule outside, missing title, same-tree checkpoints, reversed checkpoints, gate exit-9, print-only manifest row, executed red-line row) plus the whole 0.4.1..0.4.9 regression set.
+
 ## [0.4.9] - 2026-08-22
 
 Self-collision round. The 0.4.8 audit accepted the four 047 closures and then found the new machines can still be fooled: the automatic discard title trips the chronicle's own closing-verb rule, the live-line Contains still treats a string mention as a call, dead-branch dropping missed `if (0)` / `while ($false)`, and the "one parser" is three copies. All three F-048 findings closed; the two deferred items stay deferred.
