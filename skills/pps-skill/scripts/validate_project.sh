@@ -428,26 +428,114 @@ coverage_tally_manual="$(mktemp "${TMPDIR:-/tmp}/pps-cov-manual.XXXXXX")"
 coverage_tally_rows="$(mktemp "${TMPDIR:-/tmp}/pps-cov-rows.XXXXXX")"
 trap 'rm -f "$coverage_tally_manual" "$coverage_tally_rows"' EXIT
 
-coverage_entry_calls() {
+# Same live-call analysis as verify_gate.sh (identical text on both sides of
+# the checks): a mention is not a call, a definition is not a call, an unused
+# function proves nothing, and dead branches are dropped.
+entry_live_lines() {
   local entry_file="$1"
-  local wanted="$2"
-  awk -v wanted="$wanted" '
-    {
-      line = $0
-      sub(/^[[:space:]]+/, "", line)
-      if (line ~ /^#/) next
+  awk '
+    function strip_comments(line,    hash) {
+      if (line ~ /^[[:space:]]*#/) return ""
       hash = index(line, "#")
       if (hash > 0) line = substr(line, 1, hash - 1)
-      if (index(line, wanted) == 0) next
-      if (line ~ /(^|[^[:alnum:]_])(check|Invoke-Check|bash|sh|pwsh|powershell|python3?|node|npm|npx|source|\.)[[:space:]]/ ||
-          line ~ /^&[[:space:]]/ || line ~ /\$\(/ ||
-          line ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)/) {
-        found = 1
-        exit
-      }
+      sub(/[[:space:]]+$/, "", line)
+      sub(/^[[:space:]]+/, "", line)
+      return line
     }
-    END { exit found ? 0 : 1 }
+    { raw[NR] = $0 }
+    END {
+      n = NR
+      in_fn = 0
+      for (i = 1; i <= n; i++) {
+        line = strip_comments(raw[i])
+        cleaned[i] = line
+        is_fnline[i] = 0
+        fn_name[i] = ""
+        if (in_fn) {
+          is_fnline[i] = 1
+          fn_name[i] = cur_fn
+          if (line ~ /^\}[[:space:]]*$/) { in_fn = 0; is_fnline[i] = 0 }
+          continue
+        }
+        if (line ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*\{/) {
+          name = line
+          sub(/\(\)[[:space:]]*\{.*$/, "", name)
+          cur_fn = name
+          is_fnline[i] = 1
+          fn_name[i] = name
+          if (line !~ /\}[[:space:]]*$/) in_fn = 1
+          continue
+        }
+        if (line ~ /^function[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\([[:space:]]*\)[[:space:]]*\{/) {
+          name = line
+          sub(/^function[[:space:]]+/, "", name)
+          sub(/[[:space:]]*\(.*$/, "", name)
+          cur_fn = name
+          is_fnline[i] = 1
+          fn_name[i] = name
+          if (line !~ /\}[[:space:]]*$/) in_fn = 1
+          continue
+        }
+      }
+      in_dead = 0
+      for (i = 1; i <= n; i++) {
+        line = cleaned[i]
+        if (line == "") continue
+        if (line ~ /^if[[:space:]]+(false|!)[[:space:]]*([;:]|then|$)/) {
+          if (line !~ /;[[:space:]]*fi[[:space:]]*$/) in_dead = 1
+          continue
+        }
+        if (in_dead) {
+          if (line ~ /^fi[[:space:]]*$/) { in_dead = 0 }
+          continue
+        }
+        if (is_fnline[i]) {
+          body[fn_name[i]] = body[fn_name[i]] line "\n"
+        } else {
+          top_lines[ntop++] = line
+        }
+      }
+      for (i = 0; i < ntop; i++) {
+        l = top_lines[i]
+        rest = l
+        sub(/^.*check[[:space:]]+"[^"]*"/, "", rest)
+        if (rest ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) {
+          sub(/^[[:space:]]*/, "", rest)
+          sub(/[[:space:]]*$/, "", rest)
+          queue[nq++] = rest
+        }
+        if (l ~ /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) queue[nq++] = l
+      }
+      for (qi = 0; qi < nq; qi++) {
+        f = queue[qi]
+        if (seen[f]) continue
+        seen[f] = 1
+        if (!(f in body)) continue
+        nlines = split(body[f], bl, "\n")
+        for (k = 1; k <= nlines; k++) {
+          b = bl[k]
+          if (b == "") continue
+          if (b ~ /^if[[:space:]]+(false|!)[[:space:]]*([;:]|then|$)/) continue
+          body_out[fno++] = "F " f " " b
+          rest = b
+          sub(/^.*check[[:space:]]+"[^"]*"/, "", rest)
+          if (rest ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) {
+            sub(/^[[:space:]]*/, "", rest); sub(/[[:space:]]*$/, "", rest)
+            queue[nq++] = rest
+          }
+          if (b ~ /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) queue[nq++] = b
+        }
+      }
+      for (i = 0; i < ntop; i++) print "T " top_lines[i]
+      for (i = 0; i < fno; i++) print body_out[i]
+    }
   ' "$entry_file"
+}
+
+entry_invokes_path() {
+  local entry_file="$1"
+  local wanted="$2"
+  entry_live_lines "$entry_file" | grep -Fq -- "$wanted"
 }
 
 
@@ -818,8 +906,8 @@ if (( is_pps12 == 1 )); then
         [[ -e "$root/$runtime_probe" ]] ||
           add_error "Runtime surface $runtime_id probe '$runtime_probe' does not exist."
         verify_entry_file="$root/scripts/project_verify.sh"
-        [[ ! -f "$verify_entry_file" ]] || grep -Fq "$runtime_probe" "$verify_entry_file" ||
-          add_error "Runtime surface $runtime_id probe '$runtime_probe' is not referenced by scripts/project_verify.sh; an unwired probe never runs."
+        [[ ! -f "$verify_entry_file" ]] || entry_invokes_path "$verify_entry_file" "$runtime_probe" ||
+          add_error "Runtime surface $runtime_id probe '$runtime_probe' is not called by scripts/project_verify.sh; an unwired probe never runs."
       fi
     done <<< "$runtime_rows"
   fi
@@ -1712,13 +1800,13 @@ while IFS= read -r id; do
           coverage_wired=0
           for coverage_entry in "$root/scripts/project_verify.sh" "$root/scripts/project_verify.ps1"; do
             [[ -f "$coverage_entry" ]] || continue
-            if coverage_entry_calls "$coverage_entry" "$coverage_ref"; then
+            if entry_invokes_path "$coverage_entry" "$coverage_ref"; then
               coverage_wired=1
               break
             fi
             if [[ -f "$root/.pps/verify-manifest.txt" ]] &&
               grep -Fq "$coverage_ref" "$root/.pps/verify-manifest.txt" &&
-              coverage_entry_calls "$coverage_entry" "verify-manifest"; then
+              entry_invokes_path "$coverage_entry" "verify-manifest"; then
               coverage_wired=1
               break
             fi

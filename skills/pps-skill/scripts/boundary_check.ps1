@@ -245,6 +245,7 @@ if (Test-Path -LiteralPath $baselinePath -PathType Leaf) {
 # overwrite of a dirty Write-set file destroys work silently.
 $snapshotPath = Join-Path $rootFull '.pps/session-snapshot'
 $protectedViolations = 0
+$discardedPaths = @()
 if (Test-Path -LiteralPath $snapshotPath -PathType Leaf) {
     $snapshotLines = [System.IO.File]::ReadAllLines($snapshotPath, [System.Text.Encoding]::UTF8)
     $inDirty = $false
@@ -264,12 +265,37 @@ if (Test-Path -LiteralPath $snapshotPath -PathType Leaf) {
         }
         if ($currentHash -eq $protectedHash) { continue }
         if ($DiscardHandover -contains $protectedPath) {
-            Write-Host "handover_discarded: $protectedPath (explicitly discarded; record it with scripts/append_event.*)"
+            Write-Host "handover_discarded: $protectedPath"
+            $discardedPaths += $protectedPath
             continue
         }
         Write-Host "protected_overwrite: $protectedPath (carried uncommitted work at session start and has changed since)"
         $protectedViolations++
     }
+}
+# A discard that leaves no trace is the silent relay this lock exists to
+# prevent: the predecessor's uncommitted bytes are gone and nobody wrote down
+# that this was a decision. Record it here; if the chronicle cannot be
+# written, the discard does not stand.
+if ($discardedPaths.Count -gt 0) {
+    $appendScript = Join-Path $rootFull 'scripts/append_event.ps1'
+    if (-not (Test-Path -LiteralPath $appendScript -PathType Leaf)) {
+        Write-Host 'ERROR: -DiscardHandover requires scripts/append_event.ps1 to record the relay event.'
+        exit 4
+    }
+    $engineCmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($null -eq $engineCmd) { $engineCmd = Get-Command powershell -ErrorAction SilentlyContinue }
+    $discardList = $discardedPaths -join ','
+    & $engineCmd.Source -NoProfile -ExecutionPolicy Bypass -File $appendScript `
+        -Root $rootFull -Title 'relay discard released protected paths' `
+        -Files $discardList -Verify 'discard recorded by boundary_check' `
+        -Pending 'none' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'ERROR: the discard could not be recorded in EVENTS.md; a discard without a trace is a silent relay.'
+        Write-Host 'Fix the chronicle (scripts/append_event.ps1) and re-run with -DiscardHandover.'
+        exit 4
+    }
+    Write-Host 'Relay discard event recorded in EVENTS.md.'
 }
 if ($protectedViolations -gt 0) {
     Write-Host "PPS boundary check: FAILED ($protectedViolations protected_overwrite)"

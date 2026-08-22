@@ -76,9 +76,11 @@ Structural success is necessary, not sufficient.
 Declared verification runs through the project verify gate:
 
 1. `Verify` in the workset is an ordered declaration; its first step should be `scripts/verify_gate.sh` / `.ps1`.
-2. The gate runs structural validation, then the project's declared checks, in order, failing fast.
+2. The gate runs structural validation, gate substance (for software/hybrid: a behavioral check that names a real, reachable project artifact), red-line wiring, the handover lock, then the project's declared checks, in order, failing fast.
+3. Wiring is judged by LIVE calls, not mentions: a path counts only on an uncommented line that is actually reached — a top-level call, the body of a helper that a top-level `check` reaches, never an unused function or a dead branch (`if false`). The same parser serves red-line tails, coverage evidence, and runtime probes.
 3. Include at least one behavioral assertion for software packages—a user-visible end-to-end check—because two field incidents proved that unit-green plus deploy-success can still mean a dead system: unit tests can bypass the changed call path, and a deployed file is not necessarily a loaded file. Liveness probes ("is the new code actually running?") are legitimate and encouraged `Verify` members.
 4. A successful gate writes `.pps/verify-stamp` with UTC time and package ID. `readiness_check.* --verified` rejects readiness when the stamp is missing or names another package.
+5. The gate refuses to stamp when the handover safety proof itself is absent: software/hybrid packages fail on a missing `.pps/session-snapshot` or a missing `scripts/boundary_check.*`, because a stamp written without them certifies a handover nobody checked.
 5. Nothing auto-executes `Verify`. The agent inspects commands before running them; the stamp records that the inspected gate ran on this device.
 
 Knowing the rule is not running the rule. The stamp turns "I should have verified" into a checkable artifact.

@@ -59,31 +59,121 @@ if ! printf '%s' "$verify_decl" | grep -Eq 'scripts/(verify_gate|project_verify)
 fi
 echo "Verify routing: declaration routes through the gate entry"
 
-# A mention is not a call. Grepping the whole file lets a comment satisfy the
-# wiring requirement, which is the same "keyword matching pretends to be
-# parsing" defect already closed in the receipt layer. Only uncommented lines
-# that look like an invocation count.
+# A mention is not a call, and a definition is not a call either. This is the
+# ONE parser shared by the gate's wiring checks and validate_project's
+# coverage/probe checks (an identical copy lives in validate_project.sh; the
+# PowerShell scripts carry the same semantics). Rules:
+#   1. comments (whole-line and trailing) are stripped before anything;
+#   2. a path inside a function body counts only if that function is reached
+#      from a top-level call (closure over `check "label" helper` and bare
+#      helper calls) — an unused `never_used() { bash x.sh; }` proves nothing;
+#   3. dead branches (`if false ...`, block or one-line) are dropped;
+#   4. output lines are prefixed T (top level) or F <fnname> (reached body).
+entry_live_lines() {
+  local entry_file="$1"
+  awk '
+    function strip_comments(line,    hash) {
+      if (line ~ /^[[:space:]]*#/) return ""
+      hash = index(line, "#")
+      if (hash > 0) line = substr(line, 1, hash - 1)
+      sub(/[[:space:]]+$/, "", line)
+      sub(/^[[:space:]]+/, "", line)
+      return line
+    }
+    { raw[NR] = $0 }
+    END {
+      n = NR
+      in_fn = 0
+      for (i = 1; i <= n; i++) {
+        line = strip_comments(raw[i])
+        cleaned[i] = line
+        is_fnline[i] = 0
+        fn_name[i] = ""
+        if (in_fn) {
+          is_fnline[i] = 1
+          fn_name[i] = cur_fn
+          if (line ~ /^\}[[:space:]]*$/) { in_fn = 0; is_fnline[i] = 0 }
+          continue
+        }
+        if (line ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*\{/) {
+          name = line
+          sub(/\(\)[[:space:]]*\{.*$/, "", name)
+          cur_fn = name
+          is_fnline[i] = 1
+          fn_name[i] = name
+          if (line !~ /\}[[:space:]]*$/) in_fn = 1
+          continue
+        }
+        if (line ~ /^function[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\([[:space:]]*\)[[:space:]]*\{/) {
+          name = line
+          sub(/^function[[:space:]]+/, "", name)
+          sub(/[[:space:]]*\(.*$/, "", name)
+          cur_fn = name
+          is_fnline[i] = 1
+          fn_name[i] = name
+          if (line !~ /\}[[:space:]]*$/) in_fn = 1
+          continue
+        }
+      }
+      in_dead = 0
+      for (i = 1; i <= n; i++) {
+        line = cleaned[i]
+        if (line == "") continue
+        if (line ~ /^if[[:space:]]+(false|!)[[:space:]]*([;:]|then|$)/) {
+          if (line !~ /;[[:space:]]*fi[[:space:]]*$/) in_dead = 1
+          continue
+        }
+        if (in_dead) {
+          if (line ~ /^fi[[:space:]]*$/) { in_dead = 0 }
+          continue
+        }
+        if (is_fnline[i]) {
+          body[fn_name[i]] = body[fn_name[i]] line "\n"
+        } else {
+          top_lines[ntop++] = line
+        }
+      }
+      for (i = 0; i < ntop; i++) {
+        l = top_lines[i]
+        rest = l
+        sub(/^.*check[[:space:]]+"[^"]*"/, "", rest)
+        if (rest ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) {
+          sub(/^[[:space:]]*/, "", rest)
+          sub(/[[:space:]]*$/, "", rest)
+          queue[nq++] = rest
+        }
+        if (l ~ /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) queue[nq++] = l
+      }
+      for (qi = 0; qi < nq; qi++) {
+        f = queue[qi]
+        if (seen[f]) continue
+        seen[f] = 1
+        if (!(f in body)) continue
+        nlines = split(body[f], bl, "\n")
+        for (k = 1; k <= nlines; k++) {
+          b = bl[k]
+          if (b == "") continue
+          if (b ~ /^if[[:space:]]+(false|!)[[:space:]]*([;:]|then|$)/) continue
+          body_out[fno++] = "F " f " " b
+          rest = b
+          sub(/^.*check[[:space:]]+"[^"]*"/, "", rest)
+          if (rest ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) {
+            sub(/^[[:space:]]*/, "", rest); sub(/[[:space:]]*$/, "", rest)
+            queue[nq++] = rest
+          }
+          if (b ~ /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/) queue[nq++] = b
+        }
+      }
+      for (i = 0; i < ntop; i++) print "T " top_lines[i]
+      for (i = 0; i < fno; i++) print body_out[i]
+    }
+  ' "$entry_file"
+}
+
 entry_invokes_path() {
   local entry_file="$1"
   local wanted="$2"
-  awk -v wanted="$wanted" '
-    {
-      line = $0
-      sub(/^[[:space:]]+/, "", line)
-      if (line ~ /^#/) next
-      # Strip a trailing comment so "cmd foo.sh # see bar.sh" cannot claim bar.
-      hash = index(line, "#")
-      if (hash > 0) line = substr(line, 1, hash - 1)
-      if (index(line, wanted) == 0) next
-      if (line ~ /(^|[^[:alnum:]_])(check|Invoke-Check|bash|sh|pwsh|powershell|python3?|node|npm|npx|source|\.)[[:space:]]/ ||
-          line ~ /^&[[:space:]]/ || line ~ /[|&;][[:space:]]*[^[:space:]]/ ||
-          line ~ /\$\(/ || line ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)/) {
-        found = 1
-        exit
-      }
-    }
-    END { exit found ? 0 : 1 }
-  ' "$entry_file"
+  entry_live_lines "$entry_file" | grep -Fq -- "$wanted"
 }
 
 echo "-- Step 2b/4: gate substance"
@@ -124,7 +214,7 @@ case "$mode_value" in
     # An always-true script block satisfies a lexical "has a check" rule while
     # asserting nothing. Require the behavioral check to name a real artifact
     # in the project: a test file, a probe, or the product entry point.
-    behavioral_paths="$(awk '
+    behavioral_lines="$(awk '
       {
         line = $0
         sub(/^[[:space:]]+/, "", line)
@@ -138,58 +228,55 @@ case "$mode_value" in
         if (line ~ /validate_project|validate_skill/) next
         if (line ~ /PROJECT_STATE|EVENTS\.md|DECISIONS|CONTEXT\.md|PROJECT_MAP|TASK_INDEX|MERGES|coverage/) next
         if (line ~ /main artifact exists/) next
+        sub(/[[:space:]]+$/, "", line)
         print line
       }
     ' "$verify_entry")"
     behavioral_real=0
-    if [[ -n "$behavioral_paths" ]]; then
+    if [[ -n "$behavioral_lines" ]]; then
+      live_lines="$(entry_live_lines "$verify_entry")"
+      live_top="$(printf '%s\n' "$live_lines" | sed -n 's/^T //p')"
+      refs_of() {
+        printf '%s\n' "$1" |
+          grep -Eo '[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9]+' | sed 's/^\.\///' |
+          sed -E 's#^(root|rootFull|PSScriptRoot|projectRoot|repo|repoRoot)/##' |
+          grep -vE '^(PROJECT_STATE|EVENTS|DECISIONS|CONTEXT|PROJECT_MAP|TASK_INDEX|MERGES|ASSETS|ENVIRONMENT|SOURCE_INDEX|AGENTS)\.md$'
+      }
       while IFS= read -r behavioral_line; do
         [[ -n "$behavioral_line" ]] || continue
-        # A path in the LABEL proves nothing: the label is documentation. Only
-        # the executable part of the line (after the quoted label) and the body
-        # of the helper it calls can carry the assertion.
+        # The behavioral line must itself be live: a check declared inside a
+        # dead branch (`if false`) proves nothing.
+        printf '%s\n' "$live_top" | grep -Fxq -- "$behavioral_line" || continue
+        # The LABEL is documentation; only the executable part, the live block
+        # body, and the body of the helper it reaches can carry the assertion.
         behavioral_exec="$(printf '%s\n' "$behavioral_line" |
-          sed -E 's/^[^"]*"[^"]*"//')"
+          sed -E 's/^.*check[[:space:]]+"[^"]*"//')"
+        behavioral_sources="$behavioral_exec"
+        block_body="$(printf '%s\n' "$live_top" | awk -v line="$behavioral_line" '
+          $0 == line { take = 1; next }
+          take { if ($0 ~ /^\}[[:space:]]*$/) exit; print }
+        ')"
+        [[ -z "$block_body" ]] ||
+          behavioral_sources="${behavioral_sources};${block_body}"
+        helper_name="$(printf '%s\n' "$behavioral_exec" |
+          grep -Eo '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*' | tr -d '[:space:]')"
+        if [[ -n "$helper_name" ]]; then
+          # The F lines are exactly the bodies the live analysis proved reachable.
+          helper_live="$(printf '%s\n' "$live_lines" |
+            grep "^F ${helper_name} " | sed "s/^F ${helper_name} //" | tr '\n' ';')"
+          [[ -z "$helper_live" ]] ||
+            behavioral_sources="${behavioral_sources};${helper_live}"
+        fi
         while IFS= read -r behavioral_ref; do
           [[ -n "$behavioral_ref" ]] || continue
           if [[ -e "$root/$behavioral_ref" ]]; then
             behavioral_real=1
             break 2
           fi
-        done < <(printf '%s\n' "$behavioral_exec" |
-          grep -Eo '[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9]+' | sed 's/^\.\///' |
-          sed -E 's#^(root|rootFull|PSScriptRoot|projectRoot|repo|repoRoot)/##' |
-          grep -vE '^(PROJECT_STATE|EVENTS|DECISIONS|CONTEXT|PROJECT_MAP|TASK_INDEX|MERGES|ASSETS|ENVIRONMENT|SOURCE_INDEX|AGENTS)\.md$')
-        # A named helper function counts when its body references a real path.
-        helper_name="$(printf '%s\n' "$behavioral_exec" |
-          grep -Eo '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*' | tr -d '[:space:]')"
-        if [[ -n "$helper_name" && "$helper_name" != "$behavioral_line" ]]; then
-          # Helpers are written both ways: a one-liner (`fn() { cmd; }`) and a
-          # multi-line block. Read the definition line itself plus any body.
-          helper_body="$(awk -v fn="$helper_name" '
-            index($0, fn "()") == 1 {
-              print
-              if ($0 ~ /\}[[:space:]]*$/) exit
-              inside = 1
-              next
-            }
-            inside && /^\}/ { exit }
-            inside { print }
-          ' "$verify_entry")"
-          while IFS= read -r helper_ref; do
-            [[ -n "$helper_ref" ]] || continue
-            if [[ -e "$root/$helper_ref" ]]; then
-              behavioral_real=1
-              break 2
-            fi
-          done < <(printf '%s\n' "$helper_body" |
-            grep -Eo '[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9]+' | sed 's/^\.\///' |
-            sed -E 's#^(root|rootFull|PSScriptRoot|projectRoot|repo|repoRoot)/##' |
-          grep -vE '^(PROJECT_STATE|EVENTS|DECISIONS|CONTEXT|PROJECT_MAP|TASK_INDEX|MERGES|ASSETS|ENVIRONMENT|SOURCE_INDEX|AGENTS)\.md$')
-        fi
-      done <<< "$behavioral_paths"
+        done < <(refs_of "$behavioral_sources")
+      done <<< "$behavioral_lines"
     fi
-    if [[ -z "$behavioral_paths" ]]; then
+    if [[ -z "$behavioral_lines" ]]; then
       echo "ERROR: software package needs a behavioral check: scripts/project_verify.sh declares only structural validation." >&2
       echo "Add at least one check that exercises the product the way a user reaches it." >&2
       echo "PPS verify gate: FAILED (no behavioral check)" >&2
@@ -304,7 +391,20 @@ if [[ -f "$root/scripts/boundary_check.sh" ]]; then
   fi
   echo "relay handover lock: no protected path was overwritten"
 else
-  echo "relay handover lock: boundary_check.sh unavailable; cannot verify handover safety" >&2
+  case "$mode_value" in
+    software | hybrid)
+      # Deleting the checker must not restore the old "no lock at all" path:
+      # the gate cannot honestly stamp when the handover safety proof itself
+      # is absent. This is the same duty as SNAPSHOT MISSING.
+      echo "Relay: BOUNDARY MISSING; scripts/boundary_check.sh is required on the completion path." >&2
+      echo "Without it the gate cannot prove this session did not overwrite uncommitted handover work." >&2
+      echo "PPS verify gate: FAILED (Relay: BOUNDARY MISSING)" >&2
+      exit 1
+      ;;
+    *)
+      echo "relay handover lock: boundary_check.sh unavailable; cannot verify handover safety (warning in $mode_value mode)." >&2
+      ;;
+  esac
 fi
 
 echo "-- Step 3/4: project verification entry"

@@ -270,6 +270,7 @@ is_discarded() {
 }
 
 protected_violations=0
+discarded_paths=""
 if [[ -n "$protected_records" ]]; then
   while IFS= read -r protected_record; do
     [[ -n "$protected_record" ]] || continue
@@ -282,12 +283,35 @@ if [[ -n "$protected_records" ]]; then
     fi
     [[ "$current_hash" != "$protected_hash" ]] || continue
     if is_discarded "$protected_path"; then
-      echo "handover_discarded: $protected_path (explicitly discarded; record it with scripts/append_event.*)"
+      echo "handover_discarded: $protected_path"
+      discarded_paths="${discarded_paths}${protected_path},"
       continue
     fi
     echo "protected_overwrite: $protected_path (carried uncommitted work at session start and has changed since)" >&2
     protected_violations=$((protected_violations + 1))
   done <<< "$protected_records"
+fi
+# A discard that leaves no trace is the silent relay this lock exists to
+# prevent: the predecessor's uncommitted bytes are gone and nobody wrote down
+# that this was a decision. Record it here rather than trusting the operator
+# to remember; if the chronicle cannot be written, the discard does not stand.
+if [[ -n "$discarded_paths" ]]; then
+  discarded_list="${discarded_paths%,}"
+  if [[ ! -f "$root/scripts/append_event.sh" ]]; then
+    echo "ERROR: --discard-handover requires scripts/append_event.sh to record the relay event." >&2
+    exit 4
+  fi
+  if bash "$root/scripts/append_event.sh" "$root" \
+    --title "relay discard released protected paths" \
+    --files "$discarded_list" \
+    --verify "discard recorded by boundary_check" \
+    --pending "none" >/dev/null 2>&1; then
+    echo "Relay discard event recorded in EVENTS.md."
+  else
+    echo "ERROR: the discard could not be recorded in EVENTS.md; a discard without a trace is a silent relay." >&2
+    echo "Fix the chronicle (scripts/append_event.sh) and re-run with --discard-handover." >&2
+    exit 4
+  fi
 fi
 if (( protected_violations > 0 )); then
   echo "PPS boundary check: FAILED ($protected_violations protected_overwrite)" >&2

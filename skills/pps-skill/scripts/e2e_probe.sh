@@ -33,7 +33,22 @@ if [[ -z "$main_rel" ]]; then
   echo "e2e probe: no Main declared in Hot State" >&2
   exit 1
 fi
-if [[ ! -e "$root/$main_rel" ]]; then
+# A directory proves nothing. The template defaults Main to '.', and a probe
+# that passes on the repository root would let a fresh project claim a
+# behavioral check it does not have: that is how the wired system dies while
+# the gate is green. Refuse it and demand a real entry point.
+if [[ "$main_rel" == "." || "$main_rel" == "./" ]]; then
+  echo "e2e probe: Main is '$main_rel' (the repository root) — a directory is not a product entry point." >&2
+  echo "Set Hot State 'Main:' to the artifact this product ships (script, binary, entry file)," >&2
+  echo "or replace scripts/e2e_probe.sh with a probe that exercises the real user path." >&2
+  exit 1
+fi
+if [[ -d "$root/$main_rel" ]]; then
+  echo "e2e probe: Main artifact '$main_rel' is a directory; name the entry file inside it instead." >&2
+  echo "A directory existing proves nothing about the product; the gate must not stamp on that." >&2
+  exit 1
+fi
+if [[ ! -f "$root/$main_rel" ]]; then
   echo "e2e probe: Main artifact '$main_rel' is not reachable" >&2
   exit 1
 fi
@@ -41,4 +56,4 @@ if ! grep -Eq '^\|[[:space:]]*C-' "$root/PROJECT_MAP.md"; then
   echo "e2e probe: PROJECT_MAP.md declares no component row" >&2
   exit 1
 fi
-echo "e2e probe: main artifact reachable and component map populated"
+echo "e2e probe: main artifact '$main_rel' reachable and component map populated"

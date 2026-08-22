@@ -1444,6 +1444,130 @@ bash "$installer_runtime_case/scripts/validate_project.sh" "$installer_runtime_c
   >"$temp_root/installer-runtime.out" 2>&1
 grep -q "declares no '## Runtime Surfaces' row" "$temp_root/installer-runtime.out"
 
+# --- 047 necessary-path round two (F-047-01..04) ---------------------------
+gate_boundary_missing_case="$temp_root/gate-boundary-missing-case"
+cp -R "$temp_root/software-case" "$gate_boundary_missing_case"
+rm -f "$gate_boundary_missing_case/scripts/boundary_check.sh" \
+  "$gate_boundary_missing_case/.pps/verify-stamp"
+bash "$gate_boundary_missing_case/scripts/session_begin.sh" \
+  "$gate_boundary_missing_case" >/dev/null 2>&1 || true
+set +e
+bash "$gate_boundary_missing_case/scripts/verify_gate.sh" "$gate_boundary_missing_case" \
+  >"$temp_root/gate-boundary-missing.out" 2>&1
+gate_boundary_missing_code=$?
+set -e
+[[ "$gate_boundary_missing_code" != "0" ]]
+grep -q 'Relay: BOUNDARY MISSING' "$temp_root/gate-boundary-missing.out"
+[[ ! -f "$gate_boundary_missing_case/.pps/verify-stamp" ]]
+
+dead_fn_wiring_case="$temp_root/dead-fn-wiring-case"
+cp -R "$temp_root/software-case" "$dead_fn_wiring_case"
+mkdir -p "$dead_fn_wiring_case/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$dead_fn_wiring_case/tests/parity-harness.sh"
+python3 - "$dead_fn_wiring_case" <<'PYEOF2'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+t = t[:j] + '\n- Never ship without parity. (verify: tests/parity-harness.sh)\n' + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+p = root + '/scripts/project_verify.sh'
+t = open(p, encoding='utf-8').read()
+t += '\nnever_used() { bash "$root/tests/parity-harness.sh"; }\n'
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+rm -f "$dead_fn_wiring_case/.pps/verify-stamp"
+bash "$dead_fn_wiring_case/scripts/session_begin.sh" \
+  "$dead_fn_wiring_case" >/dev/null 2>&1 || true
+set +e
+bash "$dead_fn_wiring_case/scripts/verify_gate.sh" "$dead_fn_wiring_case" \
+  >"$temp_root/dead-fn-wiring.out" 2>&1
+dead_fn_wiring_code=$?
+set -e
+[[ "$dead_fn_wiring_code" != "0" ]]
+grep -q 'never calls it' "$temp_root/dead-fn-wiring.out"
+[[ ! -f "$dead_fn_wiring_case/.pps/verify-stamp" ]]
+
+dead_branch_wiring_case="$temp_root/dead-branch-wiring-case"
+cp -R "$temp_root/software-case" "$dead_branch_wiring_case"
+mkdir -p "$dead_branch_wiring_case/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$dead_branch_wiring_case/tests/parity-harness.sh"
+python3 - "$dead_branch_wiring_case" <<'PYEOF2'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+t = t[:j] + '\n- Never ship without parity. (verify: tests/parity-harness.sh)\n' + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+p = root + '/scripts/project_verify.sh'
+t = open(p, encoding='utf-8').read()
+t += '\nif false; then bash "$root/tests/parity-harness.sh"; fi\n'
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF2
+rm -f "$dead_branch_wiring_case/.pps/verify-stamp"
+bash "$dead_branch_wiring_case/scripts/session_begin.sh" \
+  "$dead_branch_wiring_case" >/dev/null 2>&1 || true
+set +e
+bash "$dead_branch_wiring_case/scripts/verify_gate.sh" "$dead_branch_wiring_case" \
+  >"$temp_root/dead-branch-wiring.out" 2>&1
+dead_branch_wiring_code=$?
+set -e
+[[ "$dead_branch_wiring_code" != "0" ]]
+grep -q 'never calls it' "$temp_root/dead-branch-wiring.out"
+
+relay_discard_case="$temp_root/relay-discard-case"
+bash "$skill/scripts/init_project.sh" relay-discard-case \
+  --profile standard --parent "$temp_root" \
+  --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+printf 'session A work\n' >"$relay_discard_case/docs/MAIN.md"
+bash "$relay_discard_case/scripts/session_begin.sh" "$relay_discard_case" >/dev/null 2>&1
+printf 'session B overwrite\n' >"$relay_discard_case/docs/MAIN.md"
+# The discarded path remains dirty, so boundary still reports unclaimed writes
+# (exit 1). The discard contract is the chronicle trace, not a clean exit.
+set +e
+bash "$relay_discard_case/scripts/boundary_check.sh" "$relay_discard_case" \
+  --discard-handover docs/MAIN.md >"$temp_root/relay-discard.out" 2>&1
+relay_discard_code=$?
+set -e
+grep -q 'Relay discard event recorded' "$temp_root/relay-discard.out"
+grep -q 'relay discard released protected paths' "$relay_discard_case/EVENTS.md"
+
+floor_probe_dir_case="$temp_root/floor-probe-dir-case"
+cp -R "$temp_root/software-case" "$floor_probe_dir_case"
+rm -f "$floor_probe_dir_case/.pps/verify-stamp"
+bash "$floor_probe_dir_case/scripts/session_begin.sh" \
+  "$floor_probe_dir_case" >/dev/null 2>&1 || true
+set +e
+bash "$floor_probe_dir_case/scripts/verify_gate.sh" "$floor_probe_dir_case" \
+  >"$temp_root/floor-probe-dir.out" 2>&1
+floor_probe_dir_code=$?
+set -e
+[[ "$floor_probe_dir_code" != "0" ]]
+grep -q 'directory is not a product entry point' "$temp_root/floor-probe-dir.out"
+[[ ! -f "$floor_probe_dir_case/.pps/verify-stamp" ]]
+
+floor_probe_file_case="$temp_root/floor-probe-file-case"
+cp -R "$temp_root/software-case" "$floor_probe_file_case"
+mkdir -p "$floor_probe_file_case/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$floor_probe_file_case/src/main.sh"
+python3 - "$floor_probe_file_case" <<'PYEOF2'
+import sys
+p = sys.argv[1] + '/PROJECT_STATE.md'
+t = open(p, encoding='utf-8').read()
+open(p, 'w', encoding='utf-8').write(t.replace('- Main: .', '- Main: src/main.sh', 1))
+PYEOF2
+rm -f "$floor_probe_file_case/.pps/verify-stamp"
+bash "$floor_probe_file_case/scripts/session_begin.sh" \
+  "$floor_probe_file_case" >/dev/null 2>&1
+bash "$floor_probe_file_case/scripts/verify_gate.sh" "$floor_probe_file_case" \
+  >"$temp_root/floor-probe-file.out" 2>&1
+grep -q 'PPS verify gate: OK' "$temp_root/floor-probe-file.out"
+
+
 # --- Core duty fixtures (D-CORE series) ------------------------------------
 hollow_gate_case="$temp_root/hollow-gate-case"
 cp -R "$temp_root/software-case" "$hollow_gate_case"

@@ -55,8 +55,14 @@ Invoke-Check "EVENTS.md records at least one event" {
 # stamp unless at least one non-structural check names a real project artifact.
 # Replace scripts/e2e_probe.ps1 with the real user path as soon as one exists.
 Invoke-Check "behavioral probe (scripts/e2e_probe.ps1)" {
-    & (Join-Path $rootFull 'scripts/e2e_probe.ps1') -Root $rootFull | Out-Null
-    $LASTEXITCODE -eq 0
+    # Capture the probe output explicitly: if it leaked into the script block's
+    # output stream, $ok would become a non-empty array and the check would be
+    # vacuously green. Its diagnostics still flow through via Write-Host so a
+    # failure tells the reader WHY the behavioral floor refused to pass.
+    $probeOutput = & (Join-Path $rootFull 'scripts/e2e_probe.ps1') -Root $rootFull 2>&1
+    $probeCode = $LASTEXITCODE
+    $probeOutput | ForEach-Object { Write-Host $_ }
+    $probeCode -eq 0
 }
 
 # Add project-specific checks here, for example:

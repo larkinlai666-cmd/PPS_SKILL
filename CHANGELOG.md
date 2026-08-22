@@ -4,6 +4,21 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-08-22
+
+Live-call round. The 0.4.7 audit accepted that the machines are welded onto the completion path and then moved the fight up one level again: the machines on the path can still be satisfied by dead code, and one floor is too low. Four findings (F-047-01..04) closed; the two deferred items stay deferred (Runtime Surfaces stays a warning, the 1.1→1.2 upgrader stays out of scope).
+
+### Fixed
+
+- **The handover checker itself is now on the completion path (F-047-01)**: deleting `scripts/boundary_check.*` fails the gate in software/hybrid mode (`Relay: BOUNDARY MISSING`), same as a missing snapshot. A stamp written without the safety proof would have certified a handover nobody checked.
+- **Wiring is judged by live calls, not mentions or definitions (F-047-02)**: the gate and the validator now share ONE parser. It strips comments, drops dead branches (`if false ...` block or one-line, both platforms), and treats a path inside a function body as wired only when that function is reached from a top-level call (closure over `check "label" helper` and bare helper calls). An unused `function Never { ... }` proves nothing. Red-line tails, coverage evidence, and runtime probes all use it; the two previously divergent implementations are gone.
+- **Discard lands in the chronicle like takeover does (F-047-03)**: `boundary_check --discard-handover` appends its own `relay discard released protected paths` event and fails the discard (exit 4) if the chronicle cannot be written.
+- **The floor probe refuses a directory Main (F-047-04)**: `scripts/e2e_probe.*` now fails when Hot State `Main` is `.` or a directory, demanding a real entry file. A fresh software project can no longer claim a behavioral check off the repository root existing. The template's probe call was also fixed so its output no longer leaks into the script block output stream — which had made the check vacuously green in PowerShell.
+
+### Changed
+
+- The template behavioral probe's diagnostics flow through to the gate output, so a failed floor explains itself instead of vanishing behind a redirection.
+
 ## [0.4.7] - 2026-08-21
 
 Necessary-path round. The 0.4.6 core-duty re-review accepted that the machines now exist, and then made the decisive point: several of them were not welded onto the path an agent must walk to claim completion, and a few measured shape instead of behavior. Its verdict was "machine built, not yet welded in". This release welds them in. Nine new defects (D-CORE-012..020) closed.

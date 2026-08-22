@@ -242,19 +242,92 @@ $contextText = Read-Utf8File $contextPath
 $script:coverageManualCount = 0
 $script:coverageRowCount = 0
 
-# Same rule as the gate's red-line wiring: a mention is not a call.
-function Test-EntryCallsPath([string]$EntryPath, [string]$Wanted) {
-    foreach ($rawLine in [System.IO.File]::ReadAllLines($EntryPath, [System.Text.Encoding]::UTF8)) {
-        $line = $rawLine.TrimStart()
-        if ($line.StartsWith('#')) { continue }
-        $hash = $line.IndexOf('#')
-        if ($hash -ge 0) { $line = $line.Substring(0, $hash) }
-        if (-not $line.Contains($Wanted)) { continue }
-        if ($line -match '(^|[^A-Za-z0-9_])(Invoke-Check|check|bash|sh|pwsh|powershell|python3?|node|npm|npx|source)\s' -or
-            $line -match '^&\s' -or $line -match '\)\s*\{' -or
-            $line -match '^[A-Za-z_][A-Za-z0-9_]*\(\)' -or $line -match '^\$\w+\s*=\s*&') {
-            return $true
+# Same live-call analysis as verify_gate.ps1 (identical semantics): a mention
+# is not a call, a definition is not a call, an unused function proves
+# nothing, and dead branches are dropped.
+function Get-EntryLiveLines([string]$EntryPath) {
+    $raw = [System.IO.File]::ReadAllLines($EntryPath, [System.Text.Encoding]::UTF8)
+    $cleaned = New-Object string[] $raw.Count
+    $isFn = New-Object bool[] $raw.Count
+    $fnName = New-Object string[] $raw.Count
+    $inFn = $false
+    $curFn = ''
+    for ($i = 0; $i -lt $raw.Count; $i++) {
+        $line = $raw[$i].TrimStart()
+        if ($line.StartsWith('#')) { $line = '' }
+        else {
+            $hash = $line.IndexOf('#')
+            if ($hash -ge 0) { $line = $line.Substring(0, $hash) }
         }
+        $line = $line.TrimEnd()
+        $cleaned[$i] = $line
+        if ($inFn) {
+            $isFn[$i] = $true
+            $fnName[$i] = $curFn
+            if ($line -match '^\}\s*$') { $inFn = $false; $isFn[$i] = $false }
+            continue
+        }
+        if ($line -match '^function\s+[A-Za-z_][A-Za-z0-9_-]*\s*\{') {
+            $m = [regex]::Match($line, '^function\s+([A-Za-z_][A-Za-z0-9_-]*)')
+            $curFn = $m.Groups[1].Value
+            $isFn[$i] = $true
+            $fnName[$i] = $curFn
+            if ($line -notmatch '\}\s*$') { $inFn = $true }
+            continue
+        }
+    }
+    $bodies = @{}
+    $top = @()
+    $inDead = $false
+    for ($i = 0; $i -lt $raw.Count; $i++) {
+        $line = $cleaned[$i]
+        if ($line -eq '') { continue }
+        if ($line -match '^if\s*\(\s*(\$false|!\s*\$true)\s*\)') {
+            if ($line -notmatch '\}\s*$') { $inDead = $true }
+            continue
+        }
+        if ($inDead) {
+            if ($line -match '^\}\s*$') { $inDead = $false }
+            continue
+        }
+        if ($isFn[$i]) {
+            if (-not $bodies.ContainsKey($fnName[$i])) {
+                $bodies[$fnName[$i]] = New-Object System.Collections.ArrayList
+            }
+            $null = $bodies[$fnName[$i]].Add($line)
+        } else {
+            $top += $line
+        }
+    }
+    $queue = New-Object System.Collections.ArrayList
+    foreach ($l in $top) {
+        $helperMatch = [regex]::Match($l, '(?:Invoke-Check|check)\s+"[^"]*"\s*([A-Za-z_][A-Za-z0-9_-]*)\s*$')
+        if ($helperMatch.Success) { $null = $queue.Add($helperMatch.Groups[1].Value) }
+        elseif ($l -match '^[A-Za-z_][A-Za-z0-9_-]*\s*$') { $null = $queue.Add($l) }
+    }
+    $result = New-Object System.Collections.ArrayList
+    foreach ($l in $top) { $null = $result.Add("T $l") }
+    $visited = @{}
+    $qi = 0
+    while ($qi -lt $queue.Count) {
+        $f = $queue[$qi]; $qi++
+        if ($visited.ContainsKey($f)) { continue }
+        $visited[$f] = $true
+        if (-not $bodies.ContainsKey($f)) { continue }
+        foreach ($b in $bodies[$f]) {
+            if ($b -match '^if\s*\(\s*(\$false|!\s*\$true)\s*\)') { continue }
+            $null = $result.Add("F $f $b")
+            $helperMatch = [regex]::Match($b, '(?:Invoke-Check|check)\s+"[^"]*"\s*([A-Za-z_][A-Za-z0-9_-]*)\s*$')
+            if ($helperMatch.Success) { $null = $queue.Add($helperMatch.Groups[1].Value) }
+            elseif ($b -match '^[A-Za-z_][A-Za-z0-9_-]*\s*$') { $null = $queue.Add($b) }
+        }
+    }
+    return $result.ToArray()
+}
+
+function Test-EntryCallsPath([string]$EntryPath, [string]$Wanted) {
+    foreach ($l in @(Get-EntryLiveLines $EntryPath)) {
+        if ($l.Contains($Wanted)) { return $true }
     }
     return $false
 }
@@ -925,8 +998,8 @@ if ($isPps12) {
                     }
                     $verifyEntryPs = Join-Path $rootFull 'scripts/project_verify.ps1'
                     if ((Test-Path -LiteralPath $verifyEntryPs -PathType Leaf) -and
-                        -not (Read-Utf8File $verifyEntryPs).Contains($runtimeProbe)) {
-                        Add-ValidationError "Runtime surface $runtimeId probe '$runtimeProbe' is not referenced by scripts/project_verify.ps1; an unwired probe never runs."
+                        -not (Test-EntryCallsPath $verifyEntryPs $runtimeProbe)) {
+                        Add-ValidationError "Runtime surface $runtimeId probe '$runtimeProbe' is not called by scripts/project_verify.ps1; an unwired probe never runs."
                     }
                 }
             }

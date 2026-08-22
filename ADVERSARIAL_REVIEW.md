@@ -1,7 +1,7 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-21 (updated for the 0.4.7 necessary-path round)
-- Scope: skill 0.4.7, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
+- Review date: 2026-08-22 (updated for the 0.4.8 live-call round)
+- Scope: skill 0.4.8, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
 
@@ -20,6 +20,19 @@
 | D-CORE-009 single writer never checked in tooling | DUTY-F | **Closed**: an unexpired snapshot forces `--takeover`, which must then be recorded as an event; deliberately not a lock |
 | D-CORE-010 review text lagged the code | DUTY-I | **Closed**: `validate_skill` fails when `ADVERSARIAL_REVIEW.md` does not name the current VERSION in its opening lines |
 | D-CORE-011 half-activated multitask layer | DUTY-A/I | **Partially closed**: an empty `TASK_INDEX.md` now fails with an explicit "delete the file to stay single-task" diagnostic. The 1.1→1.2 upgrade command remains on the 0.5 roadmap; field 1.1 projects must not be force-migrated yet |
+
+### 0.4.8 live-call round (F-047-01..04)
+
+The 0.4.7 audit accepted the necessary-path weld and then moved the fight up one level: the machines on the path could still be satisfied by dead code, and the shipped floor probe was too low. All four follow-ups are closed:
+
+| ID | Status in 0.4.8 |
+|---|---|
+| F-047-01 deleting boundary_check restored the no-lock path | **Closed**: software/hybrid gates fail on `Relay: BOUNDARY MISSING`, same as a missing snapshot |
+| F-047-02 wiring parsers diverged and accepted dead code | **Closed**: one shared parser — comment-stripped, dead branches dropped, function bodies reachable only via closure from top-level calls; used by red-line tails, coverage evidence, and runtime probes on both platforms |
+| F-047-03 Discard still relied on conscience | **Closed**: `--discard-handover` appends its own `relay discard released protected paths` event or fails (exit 4) |
+| F-047-04 floor probe was true on the repository root | **Closed**: `e2e_probe.*` fails on `Main: .` or a directory; the template probe call captures its output so the check cannot be vacuously green |
+
+Deferred by agreement, not forgotten: Runtime Surfaces stays a warning until a live I3 recurrence justifies an error, and the 1.1→1.2 upgrader stays out of scope.
 
 ### 0.4.7 necessary-path round (D-CORE-012..020)
 

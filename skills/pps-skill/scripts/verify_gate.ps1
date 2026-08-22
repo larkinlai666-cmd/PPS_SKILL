@@ -58,21 +58,93 @@ if ($verifyDecl -notmatch 'scripts/(verify_gate|project_verify)') {
 }
 Write-Host "Verify routing: declaration routes through the gate entry"
 
-# A mention is not a call. Grepping the whole file lets a comment satisfy the
-# wiring requirement, which is the same "keyword matching pretends to be
-# parsing" defect already closed in the receipt layer.
-function Test-EntryInvokesPath([string]$EntryPath, [string]$Wanted) {
-    foreach ($rawLine in [System.IO.File]::ReadAllLines($EntryPath, [System.Text.Encoding]::UTF8)) {
-        $line = $rawLine.TrimStart()
-        if ($line.StartsWith('#')) { continue }
-        $hash = $line.IndexOf('#')
-        if ($hash -ge 0) { $line = $line.Substring(0, $hash) }
-        if (-not $line.Contains($Wanted)) { continue }
-        if ($line -match '(^|[^A-Za-z0-9_])(Invoke-Check|check|bash|sh|pwsh|powershell|python3?|node|npm|npx)\s' -or
-            $line -match '^&\s' -or $line -match '^\s*function\s' -or
-            $line -match '\)\s*\{' -or $line -match '^\$\w+\s*=\s*&') {
-            return $true
+# A mention is not a call, and a definition is not a call either. Same
+# semantics as the Bash entry_live_lines (shared by validate_project.ps1):
+# comments stripped, dead branches dropped, function bodies reachable only via
+# closure. Output lines are "T <line>" or "F <fnname> <line>".
+function Get-EntryLiveLines([string]$EntryPath) {
+    $raw = [System.IO.File]::ReadAllLines($EntryPath, [System.Text.Encoding]::UTF8)
+    $cleaned = New-Object string[] $raw.Count
+    $isFn = New-Object bool[] $raw.Count
+    $fnName = New-Object string[] $raw.Count
+    $inFn = $false
+    $curFn = ''
+    for ($i = 0; $i -lt $raw.Count; $i++) {
+        $line = $raw[$i].TrimStart()
+        if ($line.StartsWith('#')) { $line = '' }
+        else {
+            $hash = $line.IndexOf('#')
+            if ($hash -ge 0) { $line = $line.Substring(0, $hash) }
         }
+        $line = $line.TrimEnd()
+        $cleaned[$i] = $line
+        if ($inFn) {
+            $isFn[$i] = $true
+            $fnName[$i] = $curFn
+            if ($line -match '^\}\s*$') { $inFn = $false; $isFn[$i] = $false }
+            continue
+        }
+        if ($line -match '^function\s+[A-Za-z_][A-Za-z0-9_-]*\s*\{') {
+            $m = [regex]::Match($line, '^function\s+([A-Za-z_][A-Za-z0-9_-]*)')
+            $curFn = $m.Groups[1].Value
+            $isFn[$i] = $true
+            $fnName[$i] = $curFn
+            if ($line -notmatch '\}\s*$') { $inFn = $true }
+            continue
+        }
+    }
+    $bodies = @{}
+    $top = @()
+    $inDead = $false
+    for ($i = 0; $i -lt $raw.Count; $i++) {
+        $line = $cleaned[$i]
+        if ($line -eq '') { continue }
+        if ($line -match '^if\s*\(\s*(\$false|!\s*\$true)\s*\)') {
+            if ($line -notmatch '\}\s*$') { $inDead = $true }
+            continue
+        }
+        if ($inDead) {
+            if ($line -match '^\}\s*$') { $inDead = $false }
+            continue
+        }
+        if ($isFn[$i]) {
+            if (-not $bodies.ContainsKey($fnName[$i])) {
+                $bodies[$fnName[$i]] = New-Object System.Collections.ArrayList
+            }
+            $null = $bodies[$fnName[$i]].Add($line)
+        } else {
+            $top += $line
+        }
+    }
+    $queue = New-Object System.Collections.ArrayList
+    foreach ($l in $top) {
+        $helperMatch = [regex]::Match($l, '(?:Invoke-Check|check)\s+"[^"]*"\s*([A-Za-z_][A-Za-z0-9_-]*)\s*$')
+        if ($helperMatch.Success) { $null = $queue.Add($helperMatch.Groups[1].Value) }
+        elseif ($l -match '^[A-Za-z_][A-Za-z0-9_-]*\s*$') { $null = $queue.Add($l) }
+    }
+    $result = New-Object System.Collections.ArrayList
+    foreach ($l in $top) { $null = $result.Add("T $l") }
+    $visited = @{}
+    $qi = 0
+    while ($qi -lt $queue.Count) {
+        $f = $queue[$qi]; $qi++
+        if ($visited.ContainsKey($f)) { continue }
+        $visited[$f] = $true
+        if (-not $bodies.ContainsKey($f)) { continue }
+        foreach ($b in $bodies[$f]) {
+            if ($b -match '^if\s*\(\s*(\$false|!\s*\$true)\s*\)') { continue }
+            $null = $result.Add("F $f $b")
+            $helperMatch = [regex]::Match($b, '(?:Invoke-Check|check)\s+"[^"]*"\s*([A-Za-z_][A-Za-z0-9_-]*)\s*$')
+            if ($helperMatch.Success) { $null = $queue.Add($helperMatch.Groups[1].Value) }
+            elseif ($b -match '^[A-Za-z_][A-Za-z0-9_-]*\s*$') { $null = $queue.Add($b) }
+        }
+    }
+    return $result.ToArray()
+}
+
+function Test-EntryInvokesPath([string]$EntryPath, [string]$Wanted) {
+    foreach ($l in @(Get-EntryLiveLines $EntryPath)) {
+        if ($l.Contains($Wanted)) { return $true }
     }
     return $false
 }
@@ -126,13 +198,18 @@ if ($modeValue -in @('software', 'hybrid')) {
     # needs at least one check that is not the structural validator itself.
     # The template ships structural self-checks (state files exist, chronicle
     # non-empty). Those are PPS bookkeeping, not evidence the product works.
-    $behavioral = @($entryLinesAll | Where-Object {
+    $cleanedCandidates = @($entryLinesAll | ForEach-Object {
         $candidate = $_.TrimStart()
-        (-not $candidate.StartsWith('#')) -and
-        ($candidate -match 'Invoke-Check\s|check\s+"') -and
-        ($candidate -notmatch 'validate_project|validate_skill') -and
-        ($candidate -notmatch 'PROJECT_STATE|EVENTS\.md|DECISIONS|CONTEXT\.md|PROJECT_MAP|TASK_INDEX|MERGES|coverage') -and
-        ($candidate -notmatch 'main artifact exists')
+        $hash = $candidate.IndexOf('#')
+        if ($hash -ge 0) { $candidate = $candidate.Substring(0, $hash) }
+        $candidate.TrimEnd()
+    })
+    $behavioral = @($cleanedCandidates | Where-Object {
+        (-not $_.StartsWith('#')) -and
+        ($_ -match 'Invoke-Check\s|check\s+"') -and
+        ($_ -notmatch 'validate_project|validate_skill') -and
+        ($_ -notmatch 'PROJECT_STATE|EVENTS\.md|DECISIONS|CONTEXT\.md|PROJECT_MAP|TASK_INDEX|MERGES|coverage') -and
+        ($_ -notmatch 'main artifact exists')
     })
     if ($behavioral.Count -lt 1) {
         Write-Host "ERROR: software package needs a behavioral check: scripts/project_verify.ps1 declares only structural validation."
@@ -142,32 +219,41 @@ if ($modeValue -in @('software', 'hybrid')) {
     }
     # An always-true script block satisfies a lexical rule while asserting
     # nothing. Require a real project artifact on the behavioral line, in its
-    # inline script block, or in the helper it calls.
+    # live block body, or in the helper it reaches. A check declared inside a
+    # dead branch proves nothing: only the live analysis output counts.
+    $liveLines = @(Get-EntryLiveLines $verifyEntry)
+    $liveTop = @($liveLines | Where-Object { $_ -like 'T *' } |
+        ForEach-Object { $_.Substring(2) })
     $behavioralReal = $false
     foreach ($behavioralLine in $behavioral) {
-        if ((Get-RealArtifactRefs $behavioralLine $rootFull).Count -gt 0) {
-            $behavioralReal = $true
-            break
+        if ($liveTop -notcontains $behavioralLine) { continue }
+        $execPart = [regex]::Replace(
+            $behavioralLine, '^.*?(Invoke-Check|check)\s+"[^"]*"', '')
+        $sources = New-Object System.Collections.ArrayList
+        $null = $sources.Add($execPart)
+        $idx = [Array]::IndexOf($liveTop, $behavioralLine)
+        for ($i = $idx + 1; $i -lt $liveTop.Count; $i++) {
+            $blockLine = $liveTop[$i]
+            if ($blockLine.TrimStart().StartsWith('}')) { break }
+            $null = $sources.Add($blockLine)
         }
-        $labelMatch = [regex]::Match($behavioralLine, 'Invoke-Check\s+"[^"]*"\s*\{(?<inline>.*)$')
-        if ($labelMatch.Success -and
-            (Get-RealArtifactRefs $labelMatch.Groups['inline'].Value $rootFull).Count -gt 0) {
-            $behavioralReal = $true
-            break
-        }
-        # A multi-line script block: read forward until the closing brace.
-        $startIndex = [Array]::IndexOf($entryLinesAll, $behavioralLine)
-        if ($startIndex -ge 0) {
-            $blockText = ''
-            for ($i = $startIndex; $i -lt [Math]::Min($startIndex + 12, $entryLinesAll.Count); $i++) {
-                $blockText += "`n" + $entryLinesAll[$i]
-                if ($i -gt $startIndex -and $entryLinesAll[$i].TrimStart().StartsWith('}')) { break }
+        $helperMatch = [regex]::Match($execPart, '^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*$')
+        if ($helperMatch.Success) {
+            $helperName = $helperMatch.Groups[1].Value
+            $prefix = "F $helperName "
+            foreach ($l in $liveLines) {
+                if ($l -like "F $helperName *") {
+                    $null = $sources.Add($l.Substring($prefix.Length))
+                }
             }
-            if ((Get-RealArtifactRefs $blockText $rootFull).Count -gt 0) {
+        }
+        foreach ($src in $sources) {
+            if ((Get-RealArtifactRefs $src $rootFull).Count -gt 0) {
                 $behavioralReal = $true
                 break
             }
         }
+        if ($behavioralReal) { break }
     }
     if (-not $behavioralReal) {
         Write-Host "ERROR: the behavioral check in scripts/project_verify.ps1 names no real project artifact; an always-true assertion checks nothing."
@@ -260,7 +346,14 @@ if (Test-Path -LiteralPath $boundaryScript -PathType Leaf) {
     }
     Write-Host 'relay handover lock: no protected path was overwritten'
 } else {
-    Write-Host 'relay handover lock: boundary_check.ps1 unavailable; cannot verify handover safety'
+    if ($modeValue -in @('software', 'hybrid')) {
+        # Deleting the checker must not restore the old "no lock at all" path.
+        Write-Host 'Relay: BOUNDARY MISSING; scripts/boundary_check.ps1 is required on the completion path.'
+        Write-Host 'Without it the gate cannot prove this session did not overwrite uncommitted handover work.'
+        Write-Host 'PPS verify gate: FAILED (Relay: BOUNDARY MISSING)'
+        exit 1
+    }
+    Write-Host "relay handover lock: boundary_check.ps1 unavailable; cannot verify handover safety (warning in $modeValue mode)."
 }
 
 Write-Host "-- Step 3/4: project verification entry"

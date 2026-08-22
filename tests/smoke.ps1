@@ -2224,6 +2224,164 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw 'An installer-shaped project with no runtime surface produced no warning.'
     }
 
+    # --- 047 necessary-path round two (F-047-01..04) -----------------------
+    $gateBoundaryMissing = Join-Path $tempRoot "gate-boundary-missing-case"
+    Copy-Item -LiteralPath $software -Destination $gateBoundaryMissing -Recurse
+    foreach ($leftover in @('scripts/boundary_check.ps1', '.pps/verify-stamp')) {
+        $leftoverPath = Join-Path $gateBoundaryMissing $leftover
+        if (Test-Path -LiteralPath $leftoverPath) { Remove-Item -LiteralPath $leftoverPath }
+    }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $gateBoundaryMissing 'scripts/session_begin.ps1') `
+        -Root $gateBoundaryMissing 2>&1 | Out-Null
+    $gateBoundaryResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gateBoundaryMissing 'scripts/verify_gate.ps1') `
+            -Root $gateBoundaryMissing 2>&1
+    }
+    if ($gateBoundaryResult.Code -eq 0 -or $gateBoundaryResult.Text -notmatch 'Relay: BOUNDARY MISSING') {
+        throw 'Deleting boundary_check.ps1 restored the no-lock gate path.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $gateBoundaryMissing '.pps/verify-stamp')) {
+        throw 'The gate stamped without the handover checker.'
+    }
+
+    $deadFnWiring = Join-Path $tempRoot "dead-fn-wiring-case"
+    Copy-Item -LiteralPath $software -Destination $deadFnWiring -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $deadFnWiring 'tests') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $deadFnWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
+    $agentsFile = Join-Path $deadFnWiring 'AGENTS.md'
+    $agentsBody = [System.IO.File]::ReadAllText($agentsFile, [System.Text.Encoding]::UTF8)
+    $redIndex = $agentsBody.IndexOf('## Red Lines')
+    $nextIndex = $agentsBody.IndexOf("`n## ", $redIndex + 5)
+    $agentsBody = $agentsBody.Substring(0, $nextIndex) +
+        "`n- Never ship without parity. (verify: tests/parity-harness.ps1)`n" +
+        $agentsBody.Substring($nextIndex)
+    [System.IO.File]::WriteAllText($agentsFile, $agentsBody, $utf8NoBom)
+    $entryFile = Join-Path $deadFnWiring 'scripts/project_verify.ps1'
+    $entryBody = [System.IO.File]::ReadAllText($entryFile, [System.Text.Encoding]::UTF8)
+    $entryBody += "`nfunction Never-Called { & tests/parity-harness.ps1 }`n"
+    [System.IO.File]::WriteAllText($entryFile, $entryBody, $utf8NoBom)
+    $stampToClear = Join-Path $deadFnWiring '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $deadFnWiring 'scripts/session_begin.ps1') `
+        -Root $deadFnWiring 2>&1 | Out-Null
+    $deadFnResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $deadFnWiring 'scripts/verify_gate.ps1') `
+            -Root $deadFnWiring 2>&1
+    }
+    if ($deadFnResult.Code -eq 0 -or $deadFnResult.Text -notmatch 'never calls it') {
+        throw 'A red line path inside an unreached function satisfied the wiring gate.'
+    }
+
+    $deadBranchWiring = Join-Path $tempRoot "dead-branch-wiring-case"
+    Copy-Item -LiteralPath $software -Destination $deadBranchWiring -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $deadBranchWiring 'tests') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $deadBranchWiring 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
+    $agentsFile = Join-Path $deadBranchWiring 'AGENTS.md'
+    $agentsBody = [System.IO.File]::ReadAllText($agentsFile, [System.Text.Encoding]::UTF8)
+    $redIndex = $agentsBody.IndexOf('## Red Lines')
+    $nextIndex = $agentsBody.IndexOf("`n## ", $redIndex + 5)
+    $agentsBody = $agentsBody.Substring(0, $nextIndex) +
+        "`n- Never ship without parity. (verify: tests/parity-harness.ps1)`n" +
+        $agentsBody.Substring($nextIndex)
+    [System.IO.File]::WriteAllText($agentsFile, $agentsBody, $utf8NoBom)
+    $entryFile = Join-Path $deadBranchWiring 'scripts/project_verify.ps1'
+    $entryBody = [System.IO.File]::ReadAllText($entryFile, [System.Text.Encoding]::UTF8)
+    $entryBody += "`nif (`$false) { & tests/parity-harness.ps1 }`n"
+    [System.IO.File]::WriteAllText($entryFile, $entryBody, $utf8NoBom)
+    $stampToClear = Join-Path $deadBranchWiring '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $deadBranchWiring 'scripts/session_begin.ps1') `
+        -Root $deadBranchWiring 2>&1 | Out-Null
+    $deadBranchResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $deadBranchWiring 'scripts/verify_gate.ps1') `
+            -Root $deadBranchWiring 2>&1
+    }
+    if ($deadBranchResult.Code -eq 0 -or $deadBranchResult.Text -notmatch 'never calls it') {
+        throw 'A red line path inside a dead branch satisfied the wiring gate.'
+    }
+
+    $relayDiscard = Join-Path $tempRoot "relay-discard-case"
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill "scripts/init_project.ps1") `
+        -ProjectName relay-discard-case -Profile standard `
+        -ParentDir $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Relay discard fixture initialization failed.' }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $relayDiscard 'docs/MAIN.md'), "session A work`n", $utf8NoBom)
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $relayDiscard 'scripts/session_begin.ps1') `
+        -Root $relayDiscard | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $relayDiscard 'docs/MAIN.md'), "session B overwrite`n", $utf8NoBom)
+    # The discarded path remains dirty, so boundary still reports unclaimed
+    # writes. The discard contract is the chronicle trace, not a clean exit.
+    $discardResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $relayDiscard 'scripts/boundary_check.ps1') `
+            -Root $relayDiscard -DiscardHandover docs/MAIN.md 2>&1
+    }
+    if ($discardResult.Text -notmatch 'Relay discard event recorded') {
+        throw 'A discard left no relay event in the chronicle.'
+    }
+    $discardEvents = [System.IO.File]::ReadAllText(
+        (Join-Path $relayDiscard 'EVENTS.md'), [System.Text.Encoding]::UTF8)
+    if ($discardEvents -notmatch 'relay discard released protected paths') {
+        throw 'The relay discard event is absent from EVENTS.md.'
+    }
+
+    $floorProbeDir = Join-Path $tempRoot "floor-probe-dir-case"
+    Copy-Item -LiteralPath $software -Destination $floorProbeDir -Recurse
+    $stampToClear = Join-Path $floorProbeDir '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $floorProbeDir 'scripts/session_begin.ps1') `
+        -Root $floorProbeDir 2>&1 | Out-Null
+    $floorProbeDirResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $floorProbeDir 'scripts/verify_gate.ps1') `
+            -Root $floorProbeDir 2>&1
+    }
+    if ($floorProbeDirResult.Code -eq 0 -or
+        $floorProbeDirResult.Text -notmatch 'directory is not a product entry point') {
+        throw 'The floor probe passed on a directory Main.'
+    }
+    if (Test-Path -LiteralPath $stampToClear) {
+        throw 'The gate stamped a project whose only behavioral probe passed on a directory.'
+    }
+
+    $floorProbeFile = Join-Path $tempRoot "floor-probe-file-case"
+    Copy-Item -LiteralPath $software -Destination $floorProbeFile -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $floorProbeFile 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $floorProbeFile 'src/main.ps1'), "param()`n", $utf8NoBom)
+    $stateFile = Join-Path $floorProbeFile 'PROJECT_STATE.md'
+    $stateBody = [System.IO.File]::ReadAllText($stateFile, [System.Text.Encoding]::UTF8)
+    $stateBody = $stateBody.Replace('- Main: .', '- Main: src/main.ps1')
+    [System.IO.File]::WriteAllText($stateFile, $stateBody, $utf8NoBom)
+    $stampToClear = Join-Path $floorProbeFile '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $stampToClear) { Remove-Item -LiteralPath $stampToClear }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $floorProbeFile 'scripts/session_begin.ps1') `
+        -Root $floorProbeFile 2>&1 | Out-Null
+    $floorProbeFileResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $floorProbeFile 'scripts/verify_gate.ps1') `
+            -Root $floorProbeFile 2>&1
+    }
+    if ($floorProbeFileResult.Code -ne 0 -or
+        $floorProbeFileResult.Text -notmatch 'PPS verify gate: OK') {
+        throw 'The floor probe failed on a real file Main.'
+    }
+
+
     # --- Core duty fixtures (D-CORE series) --------------------------------
     $hollowGateCase = Join-Path $tempRoot "hollow-gate-case"
     Copy-Item -LiteralPath $software -Destination $hollowGateCase -Recurse
