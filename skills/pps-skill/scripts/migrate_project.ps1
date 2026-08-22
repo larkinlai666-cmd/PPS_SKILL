@@ -66,7 +66,7 @@ function Get-EventText {
     "- $today : [$packageId] migration_authorized $decisionId | files: TASK_INDEX.md, MERGES.md | verify: validate_project pass | pending: none"
 }
 function Get-ManifestText {
-    "# PPS check manifest — check_id`tplatform`tcwd`ttimeout_s`texpected_exit`tcommand`tnote`nM-001`tpowershell`t.`t60`t0`tpwsh -NoProfile -ExecutionPolicy Bypass -File scripts/project_verify.ps1 -Root .`tgate entry runs all project checks`nM-001`tbash`t.`t60`t0`tbash scripts/project_verify.sh .`tgate entry runs all project checks`n"
+    "# PPS check manifest - check_id`tplatform`tcwd`ttimeout_s`texpected_exit`tcommand`tnote`nM-001`tpowershell`t.`t60`t0`tpwsh -NoProfile -ExecutionPolicy Bypass -File scripts/project_verify.ps1 -Root .`tgate entry runs all project checks`nM-001`tbash`t.`t60`t0`tbash scripts/project_verify.sh .`tgate entry runs all project checks`n"
 }
 function Write-Utf8([string]$Path, [string]$Text) {
     [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
@@ -85,12 +85,12 @@ switch ($Mode) {
         Write-Host "an explicit decision ($decisionId)."
         Write-Host ''
         Write-Host 'Planned changes (new files and append-only edits):'
-        Write-Host ' 1. TASK_INDEX.md   — one integrator task T-001 (bootstrap)'
-        Write-Host ' 2. MERGES.md       — empty typed registry; no invented relations'
-        Write-Host " 3. DECISIONS.md    — append $decisionId (Decision: approve, Subject: T-001)"
-        Write-Host ' 4. EVENTS.md       — append one migration_authorized event'
-        Write-Host ' 5. .pps/verify-manifest.txt — generated check manifest (gate requirement)'
-        Write-Host " 6. PROJECT_STATE.md — 'Protocol: PPS/1.2' is NOT flipped by -Mode apply;"
+        Write-Host ' 1. TASK_INDEX.md   - one integrator task T-001 (bootstrap)'
+        Write-Host ' 2. MERGES.md       - empty typed registry; no invented relations'
+        Write-Host " 3. DECISIONS.md    - append $decisionId (Decision: approve, Subject: T-001)"
+        Write-Host ' 4. EVENTS.md       - append one migration_authorized event'
+        Write-Host ' 5. .pps/verify-manifest.txt - generated check manifest (gate requirement)'
+        Write-Host " 6. PROJECT_STATE.md - 'Protocol: PPS/1.2' is NOT flipped by -Mode apply;"
         Write-Host '                       flip it yourself only after validate_project passes'
         Write-Host ''
         Write-Host 'Risks:'
