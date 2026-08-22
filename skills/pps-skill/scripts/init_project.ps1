@@ -197,7 +197,7 @@ foreach ($scriptName in @(
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $scriptName) -Destination (Join-Path $scriptsDir $scriptName)
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'pps_evidence.py') -Destination (Join-Path $scriptsDir 'pps_evidence.py')
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..' 'references' 'state-machine.json') -Destination (Join-Path $scriptsDir 'state-machine.json')
+Copy-Item -LiteralPath (Join-Path (Join-Path $PSScriptRoot '..') 'references/state-machine.json') -Destination (Join-Path $scriptsDir 'state-machine.json')
 
 # The check manifest is the executable truth for verify_gate: every row is a
 # command the gate runs on its own platform, exit code compared with
