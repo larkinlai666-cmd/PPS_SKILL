@@ -225,6 +225,52 @@ for phrase, reason in stale_review_phrases.items():
             f"ADVERSARIAL_REVIEW.md still describes a superseded mechanism ({phrase!r}): {reason}."
         )
 
+
+def check_self_description() -> None:
+    """P2-01: the distribution must describe its own version honestly.
+
+    The template README, the hot state template, the roadmap, the default
+    capsule, and the skill text must agree with the shipped protocol. A
+    distribution that drifts here misleads cold starts and self-checks.
+    """
+    templates = SKILL / "assets" / "templates"
+    state = read(templates / "PROJECT_STATE.md")
+    readme = read(templates / "PROJECT_README.md")
+    state_proto = re.search(r"- Protocol:\s*(\S+)", state)
+    readme_proto = re.search(r"PPS/\d\.\d", readme)
+    if state_proto and readme_proto:
+        if readme_proto.group(0) != state_proto.group(1):
+            error(
+                "PROJECT_README.md template says %s but PROJECT_STATE.md template says %s; "
+                "the protocol self-description drifted."
+                % (readme_proto.group(0), state_proto.group(1))
+            )
+    else:
+        error(
+            "Cannot reconcile protocol tokens between the PROJECT_STATE and "
+            "PROJECT_README templates."
+        )
+    roadmap = REPO / "ROADMAP.md"
+    if roadmap.is_file():
+        for line in read(roadmap).splitlines():
+            if line.startswith("- [ ]") and "upgrade" in line.lower():
+                error(
+                    "ROADMAP.md still lists an upgrade task as unchecked: %s"
+                    % line.strip()
+                )
+    context_tpl = read(templates / "CONTEXT.md")
+    context_lines = len(context_tpl.splitlines())
+    if context_lines > 60:
+        error(
+            "CONTEXT.md template has %d lines; the compact target is 60, so a "
+            "fresh project immediately warns." % context_lines
+        )
+    if "PPS/1.2" not in skill_md:
+        error("SKILL.md no longer names the PPS/1.2 protocol.")
+
+
+check_self_description()
+
 if ERRORS:
     print(f"PPS distribution validation: FAILED ({len(ERRORS)} error(s))")
     for item in ERRORS:

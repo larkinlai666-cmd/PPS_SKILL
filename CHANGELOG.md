@@ -4,6 +4,51 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-23
+
+Deep adversarial review round three (PPS-AUDIT-20260823-V3). The reviewer
+replayed real PPS/1.1 projects against the migrator and the multitask
+receipt rules and found five PPS-scope gaps; all five are closed except the
+documented behavior boundaries.
+
+### Fixed
+
+- **P0-01 real 1.1 migration did not complete its claim**: the migrator is
+  rewritten as a core protocol upgrade (scripts refresh, Red Lines section,
+  coverage evidence, proposal dates, active-block decision, EVENTS.md,
+  verify-manifest, .gitignore) that runs validate_project on both engines
+  and the verify gate on the current platform, rolling back byte-identically
+  on any failure. Multitask is now a separate opt-in (`--with-multitask` /
+  `-WithMultitask`); a single-task project never gains TASK_INDEX.md. The
+  test matrix migrates four fixtures initialized by the real 1.1 skill
+  release and asserts the FINAL state (valid + gated + ready + rollback
+  byte identity).
+- **P1-03 mixed dispositions masked by integrated**: every non-empty
+  Rejected set requires a Reason and every non-empty Deferred set requires a
+  Reactivate When, on any receipt; `integrated` may not carry open
+  dispositions; `partially_integrated` is the explicit partial state (full
+  per-set evidence, task stays active). Both platforms + negative/positive
+  fixtures.
+- **P1-01 legacy auditor misclassified non-standard structure**: detection
+  is now candidates + evidence + confidence (state/decisions/rules/risks/
+  task-list/sources/coverage families), documents count outside docs/, code
+  exists is separated from code is Main, and empty targets report `unknown`
+  instead of `unstructured`.
+- **P1-02 migration tests proved reversibility, not semantics**: the smoke
+  suites assert the migrated project validates, gates, and reaches
+  readiness, and that rollback restores the pre-apply file set and hashes.
+- **P2-01 self-description drift**: template README now says PPS/1.2,
+  ROADMAP marks the upgrader shipped, the CONTEXT template fits the 60-line
+  compact target, and the distribution validator reconciles the template
+  protocols, the roadmap, and the capsule template.
+
+### Notes
+
+- Same-workspace true multi-writer concurrency stays out of scope (the
+  multitask layer is a serial-integration ledger, as documented).
+- The migrator refuses to fabricate evidence: a project whose coverage
+  cannot be upgraded honestly fails loudly and rolls back.
+
 ## [0.5.1] - 2026-08-23
 
 Field-consistency round. A second review chain re-ran the frozen matrix on a

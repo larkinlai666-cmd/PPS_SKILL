@@ -99,7 +99,6 @@ has_context=0
 has_agents=0
 has_plan_control=0
 has_pps_protocol=0
-has_other_state=0
 
 [[ -f "$root/PROJECT_STATE.md" ]] && has_state=1
 [[ -f "$root/DECISIONS.md" ]] && has_decisions=1
@@ -112,32 +111,121 @@ if [[ "$protocol" == "PPS/1.0" || "$protocol" == "PPS/1.1" || "$protocol" == "PP
   (( has_state == 1 && has_decisions == 1 && has_context == 1 && has_agents == 1 )); then
   has_pps_protocol=1
 fi
-other_state_candidates="$(
-  project_find \
-    -type f \( \
-      -name 'STATE.md' -o \
-      -name 'CURRENT_STATE.md' -o \
-      -name 'WORKFLOW_STATE.md' \
-    \) -print
-)"
-other_state_count="$(
-  printf '%s\n' "$other_state_candidates" |
-    sed '/^$/d' |
-    wc -l |
-    tr -d ' '
-)"
-(( other_state_count > 0 )) && has_other_state=1
 
+# P1-01: structure detection is candidate + evidence + confidence, not a
+# single heuristic. Every family is a NAME PATTERN + FILE GLOB so custom
+# namespaces (rules/, decisions/, risks/, todos/) are recognized, and the
+# report lists what was actually found. The plan-control trio is a family of
+# its own; its three files are subtracted from the generic families below so
+# a plain plan-project-sync layout does not look "mixed".
+family_files() {
+  # $1 = find expression
+  project_find -type f \( "$@" \) -print 2>/dev/null
+}
+
+generic_state="$(family_files \
+  -name 'STATE.md' -o \
+  -name 'CURRENT_STATE.md' -o \
+  -name 'WORKFLOW_STATE.md' -o \
+  -iname '*_STATE.md' -o \
+  -iname '*-STATE.md' -o \
+  -iname 'STATE_*.md' -o \
+  -iname 'STATE-*.md')"
+decisions_family="$(family_files \
+  -name 'DECISION_LOG.md' -o \
+  -name 'ADL.md' \
+  -path '*/decisions/*.md' -o \
+  -path '*/docs/decisions/*.md' -o \
+  -path '*/adr/*.md' -o \
+  -path '*/docs/adr/*.md')"
+rules_family="$(family_files \
+  -name 'CLAUDE.md' -o \
+  -name '.cursorrules' -o \
+  -name 'RULES.md' -o \
+  -name '.ai-rules.md' \
+  -path '*/rules/*.md')"
+risks_family="$(family_files \
+  -name 'RISKS.md' -o \
+  -name 'RISK_REGISTER.md' \
+  -path '*/risks/*.md')"
+todos_family="$(family_files \
+  -name 'TODOS.md' -o \
+  -name 'TODOS.md' -o \
+  -name 'TASKS.md' -o \
+  -name 'ACTIONS.md' -o \
+  -name 'BACKLOG.md' \
+  -path '*/todos/*.md' \
+  -path '*/actions/*.md')"
+sources_family="$(family_files \
+  -name 'SOURCES.md' -o \
+  -name 'SOURCE_INDEX.md' \
+  -path '*/sources/*.md' \
+  -path '*/references/*.md')"
+coverage_family="$(family_files \
+  -name 'COVERAGE.md' -o \
+  -name 'EVIDENCE.md' -o \
+  -path '*/docs/coverage.md' -o \
+  -path '*/docs/CURRENT_REVIEW_EVIDENCE.md' \
+  -path '*/docs/evidence/*.md')"
+
+count_lines() {
+  printf '%s\n' "$1" | sed '/^$/d' | wc -l | tr -d ' '
+}
+
+# The plan-control trio files (when the trio is the only structure) must not
+# be re-counted as generic families; keep their raw counts for the report.
+generic_state_raw="$generic_state"
+if (( has_plan_control == 1 )); then
+  generic_state="$(printf '%s\n' "$generic_state" | grep -v '^'"$root"'/PROJECT_STATE.md$' || true)"
+  decisions_family="$(printf '%s\n' "$decisions_family" | grep -v '^'"$root"'/DECISIONS.md$' || true)"
+  rules_family="$(printf '%s\n' "$rules_family" | grep -v '^'"$root"'/AGENTS.md$' || true)"
+fi
+
+generic_state_count="$(count_lines "$generic_state")"
+decisions_family_count="$(count_lines "$decisions_family")"
+rules_family_count="$(count_lines "$rules_family")"
+risks_family_count="$(count_lines "$risks_family")"
+todos_family_count="$(count_lines "$todos_family")"
+sources_family_count="$(count_lines "$sources_family")"
+coverage_family_count="$(count_lines "$coverage_family")"
+
+other_state_count="$generic_state_count"
+
+extra_family_count=0
+for family_count in \
+  "$generic_state_count" "$decisions_family_count" "$rules_family_count" \
+  "$risks_family_count" "$todos_family_count" "$sources_family_count" \
+  "$coverage_family_count"; do
+  (( family_count > 0 )) && extra_family_count=$((extra_family_count + 1))
+done
+
+detected=""
+confidence=""
 if (( has_pps_protocol == 1 )); then
   detected="pps"
-elif (( has_plan_control == 1 && has_other_state == 1 )); then
-  detected="mixed"
+  confidence="high"
 elif (( has_plan_control == 1 )); then
-  detected="plan-project-sync"
-elif (( has_other_state == 1 )); then
-  detected="other-state-system"
+  if (( extra_family_count > 0 )); then
+    detected="mixed"
+    confidence="medium"
+  else
+    detected="plan-project-sync"
+    confidence="medium"
+  fi
 else
-  detected="unstructured"
+  # No recognized system. Structure families still count: a project with
+  # custom state/decisions/rules files is a STRUCTURED CANDIDATE, never
+  # "unstructured".
+  if (( extra_family_count >= 2 )); then
+    detected="mixed"
+    confidence="low"
+  elif (( extra_family_count == 1 )); then
+    detected="structured-candidate"
+    confidence="low"
+  else
+    detected="unknown"
+    confidence="low"
+  fi
 fi
 
 recommended_profile="standard (provisional)"
@@ -174,12 +262,6 @@ software_signal_count="$(
     wc -l |
     tr -d ' '
 )"
-document_signal_count="$(
-  project_find \
-    -path "$root/docs/*" -type f -name '*.md' -print |
-    wc -l |
-    tr -d ' '
-)"
 dependency_manifest_count="$(
   project_find \
     -type f \( \
@@ -201,17 +283,6 @@ binary_candidate_count="$(
     wc -l |
     tr -d ' '
 )"
-if [[ "$declared_mode" == "document" ||
-  "$declared_mode" == "software" ||
-  "$declared_mode" == "hybrid" ]]; then
-  recommended_mode="$declared_mode (declared)"
-elif (( implementation_code_count > 0 && document_signal_count > 0 )); then
-  recommended_mode="hybrid"
-elif (( implementation_code_count > 0 || software_signal_count > 0 )); then
-  recommended_mode="software"
-else
-  recommended_mode="document"
-fi
 
 markdown_count="$(
   project_find \
@@ -219,6 +290,22 @@ markdown_count="$(
     wc -l |
     tr -d ' '
 )"
+
+# P1-01: "code exists" and "code is Main" are different facts. Markdown is
+# counted ANYWHERE (a formal document outside docs/ still counts), so code
+# plus documents anywhere recommends hybrid, code alone recommends software,
+# and documents alone recommend document.
+if [[ "$declared_mode" == "document" ||
+  "$declared_mode" == "software" ||
+  "$declared_mode" == "hybrid" ]]; then
+  recommended_mode="$declared_mode (declared)"
+elif (( implementation_code_count > 0 && markdown_count > 0 )); then
+  recommended_mode="hybrid"
+elif (( implementation_code_count > 0 || software_signal_count > 0 )); then
+  recommended_mode="software"
+else
+  recommended_mode="document"
+fi
 
 authority_ids="$(
   project_find \
@@ -283,14 +370,47 @@ if command -v git >/dev/null 2>&1 &&
   git_status="present"
 fi
 
+sample_paths() {
+  # Print up to three relative example paths for a family file list.
+  printf '%s\n' "$1" |
+    sed '/^$/d' |
+    sed "s|^$root/||" |
+    head -n 3 |
+    paste -sd ',' - || true
+}
+
 render_report() {
   printf '# PPS Legacy Project Audit\n\n'
   printf -- '- Target: `%s`\n' "$root"
   printf -- '- Generated: `%s`\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   printf -- '- Audit mode: read-only\n'
   printf -- '- Detected system: `%s`\n' "$detected"
+  printf -- '- Confidence: `%s`\n' "$confidence"
   printf -- '- Recommended mode: `%s`\n' "$recommended_mode"
   printf -- '- Recommended profile: `%s`\n\n' "$recommended_profile"
+
+  printf '## Structure candidates\n\n'
+  printf 'The detected system is a CANDIDATE with evidence and confidence, not a\n'
+  printf 'verdict. Review the listed files before any migration decision.\n\n'
+  printf '| Family | Files | Examples |\n'
+  printf '|---|---|---|\n'
+  printf '| plan control (PROJECT_STATE + DECISIONS + AGENTS) | %s | %s |\n' \
+    "$(( has_plan_control == 1 ? 1 : 0 ))" \
+    "$(if (( has_plan_control == 1 )); then printf 'PROJECT_STATE.md, DECISIONS.md, AGENTS.md'; else printf 'none'; fi)"
+  printf '| state files (STATE / CURRENT_STATE / WORKFLOW_STATE / *-state) | %s | %s |\n' \
+    "$generic_state_count" "$(sample_paths "$generic_state_raw")"
+  printf '| decisions (DECISION_LOG / decisions / ADR) | %s | %s |\n' \
+    "$decisions_family_count" "$(sample_paths "$decisions_family")"
+  printf '| rules (CLAUDE / RULES / rules) | %s | %s |\n' \
+    "$rules_family_count" "$(sample_paths "$rules_family")"
+  printf '| risks (RISKS / RISK_REGISTER / risks) | %s | %s |\n' \
+    "$risks_family_count" "$(sample_paths "$risks_family")"
+  printf '| task lists (TODOS.md / TASKS / ACTIONS / BACKLOG) | %s | %s |\n' \
+    "$todos_family_count" "$(sample_paths "$todos_family")"
+  printf '| sources (SOURCES / SOURCE_INDEX / references) | %s | %s |\n' \
+    "$sources_family_count" "$(sample_paths "$sources_family")"
+  printf '| coverage (COVERAGE / EVIDENCE / review evidence) | %s | %s |\n\n' \
+    "$coverage_family_count" "$(sample_paths "$coverage_family")"
 
   printf '## Inventory\n\n'
   printf '| Signal | Status |\n'
@@ -314,6 +434,16 @@ render_report() {
   printf -- '- Profile: `%s`\n' "${profile:-not declared}"
   printf -- '- Mode: `%s`\n' "${declared_mode:-not declared}"
   printf -- '- Main artifact: `%s`\n\n' "${main_artifact:-not declared}"
+
+  printf '## Mode signals\n\n'
+  printf '| Signal | Result |\n'
+  printf '|---|---|\n'
+  printf '| Implementation/prototype code files | %s |\n' "$implementation_code_count"
+  printf '| Software build manifests | %s |\n' "$software_signal_count"
+  printf '| Markdown files (any directory) | %s |\n' "$markdown_count"
+  printf '| Binary asset candidates | %s |\n' "$binary_candidate_count"
+  printf '| Recommended mode | `%s` |\n' "$recommended_mode"
+  printf '| Mode note | code exists is not code is Main; a declared Main decides |\n\n'
 
   printf '## Migration review signals\n\n'
   printf '| Signal | Result |\n'
@@ -345,12 +475,12 @@ render_report() {
       printf '4. Add coverage and project-local validation scripts on a branch.\n'
       printf '5. Switch AGENTS.md only after validation passes.\n'
       ;;
-    other-state-system)
-      printf 'Treat the existing state system as authoritative until an explicit cutover is approved.\n\n'
-      printf '1. Inventory current project, requirements, state, roadmap, context, plan, and summary files.\n'
-      printf '2. Map only binding M/F/D authority and resolve repeated stage-local IDs.\n'
-      printf '3. Select the current deliverable and build one explicit workset.\n'
-      printf '4. Validate the proposed PPS state before stopping the legacy state system.\n'
+    structured-candidate)
+      printf 'Structure signals were found, but no single system is recognizable yet.\n\n'
+      printf '1. Review the structure candidates table with the user.\n'
+      printf '2. Identify which files currently control workflow and decisions.\n'
+      printf '3. Map only binding M/F/D authority; do not promote proposals or assumptions.\n'
+      printf '4. Validate the proposed PPS state before any cutover.\n'
       ;;
     mixed)
       printf 'Multiple state systems are present. Do not write until one authority is selected.\n\n'
@@ -359,8 +489,8 @@ render_report() {
       printf '3. Build and validate one proposed PPS authority index and workset.\n'
       printf '4. Stop running both state machines after cutover.\n'
       ;;
-    unstructured)
-      printf 'No supported state system was detected. User review is required before authority is created.\n\n'
+    unknown)
+      printf 'No structure signal was detected. User review is required before authority is created.\n\n'
       printf '1. Identify the current deliverable and authoritative user facts.\n'
       printf '2. Separate binding constraints from historical AI suggestions.\n'
       printf '3. Mark uncertainty as proposals or assumptions, not decisions.\n'

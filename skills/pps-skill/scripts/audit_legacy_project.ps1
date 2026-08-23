@@ -96,22 +96,116 @@ $hasPlanControl = $hasState -and $hasDecisions -and $hasAgents
 $hasPpsProtocol = $protocol -in @('PPS/1.0', 'PPS/1.1', 'PPS/1.2') -and $hasPlanControl -and $hasContext
 
 $projectFiles = @(Get-ProjectFiles)
-$stateCandidateNames = @('STATE.md', 'CURRENT_STATE.md', 'WORKFLOW_STATE.md')
-$otherStateCandidates = @(
-    $projectFiles | Where-Object { $stateCandidateNames -contains $_.Name }
+# P1-01: structure detection is candidate + evidence + confidence, not a
+# single heuristic. Each family is a NAME + RELATIVE-PATH pattern so custom
+# namespaces (rules/, decisions/, risks/, todos/) are recognized. The
+# plan-control trio is a family of its own; its files are subtracted from the
+# generic families below so a plain plan-project-sync layout is not "mixed".
+$stateFamilyNames = @('STATE.md', 'CURRENT_STATE.md', 'WORKFLOW_STATE.md')
+$genericStateFiles = @(
+    $projectFiles | Where-Object {
+        $_.Name -in $stateFamilyNames -or
+        $_.Name -like '*_STATE.md' -or $_.Name -like '*-STATE.md' -or
+        $_.Name -like 'STATE_*.md' -or $_.Name -like 'STATE-*.md'
+    }
 )
-$hasOtherState = $otherStateCandidates.Count -gt 0
+$decisionsFamilyFiles = @(
+    $projectFiles | Where-Object {
+        $_.Name -in @('DECISION_LOG.md', 'ADL.md') -or
+        $_.FullName -like '*\decisions\*.md' -or
+        $_.FullName -like '*/decisions/*.md' -or
+        $_.FullName -like '*\docs\decisions\*.md' -or
+        $_.FullName -like '*/docs/decisions/*.md' -or
+        $_.FullName -like '*dr\*.md' -or $_.FullName -like '*/adr/*.md' -or
+        $_.FullName -like '*\docsdr\*.md' -or $_.FullName -like '*/docs/adr/*.md'
+    }
+)
+$rulesFamilyFiles = @(
+    $projectFiles | Where-Object {
+        $_.Name -in @('CLAUDE.md', '.cursorrules', 'RULES.md', '.ai-rules.md') -or
+        $_.FullName -like '*
+ules\*.md' -or $_.FullName -like '*/rules/*.md'
+    }
+)
+$risksFamilyFiles = @(
+    $projectFiles | Where-Object {
+        $_.Name -in @('RISKS.md', 'RISK_REGISTER.md') -or
+        $_.FullName -like '*
+isks\*.md' -or $_.FullName -like '*/risks/*.md'
+    }
+)
+$todosFamilyFiles = @(
+    $projectFiles | Where-Object {
+        $_.Name -in @('TODOS.md', 'TASKS.md', 'ACTIONS.md', 'BACKLOG.md') -or
+        $_.FullName -like '*	odos\*.md' -or $_.FullName -like '*/todos/*.md' -or
+        $_.FullName -like '*ctions\*.md' -or $_.FullName -like '*/actions/*.md'
+    }
+)
+$sourcesFamilyFiles = @(
+    $projectFiles | Where-Object {
+        $_.Name -in @('SOURCES.md', 'SOURCE_INDEX.md') -or
+        $_.FullName -like '*\sources\*.md' -or $_.FullName -like '*/sources/*.md' -or
+        $_.FullName -like '*
+eferences\*.md' -or $_.FullName -like '*/references/*.md'
+    }
+)
+$coverageFamilyFiles = @(
+    $projectFiles | Where-Object {
+        $_.Name -in @('COVERAGE.md', 'EVIDENCE.md') -or
+        $_.FullName -like '*\docs\coverage.md' -or $_.FullName -like '*/docs/coverage.md' -or
+        $_.FullName -like '*\docs\CURRENT_REVIEW_EVIDENCE.md' -or $_.FullName -like '*/docs/CURRENT_REVIEW_EVIDENCE.md' -or
+        $_.FullName -like '*\docs\evidence\*.md' -or $_.FullName -like '*/docs/evidence/*.md'
+    }
+)
+$genericStateRaw = @($genericStateFiles)
+$otherStateCandidates = @($genericStateFiles)
+$rootPrefixForTrim = $rootFull.TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+) + [System.IO.Path]::DirectorySeparatorChar
+if ($hasPlanControl) {
+    $genericStateFiles = @(
+        $genericStateFiles | Where-Object {
+            $_.FullName -ne (Join-Path $rootFull 'PROJECT_STATE.md')
+        }
+    )
+    $decisionsFamilyFiles = @(
+        $decisionsFamilyFiles | Where-Object {
+            $_.FullName -ne (Join-Path $rootFull 'DECISIONS.md')
+        }
+    )
+    $rulesFamilyFiles = @(
+        $rulesFamilyFiles | Where-Object {
+            $_.FullName -ne (Join-Path $rootFull 'AGENTS.md')
+        }
+    )
+}
+$extraFamilyCount = 0
+foreach ($familyCount in @(
+    $genericStateFiles.Count, $decisionsFamilyFiles.Count, $rulesFamilyFiles.Count,
+    $risksFamilyFiles.Count, $todosFamilyFiles.Count, $sourcesFamilyFiles.Count,
+    $coverageFamilyFiles.Count
+)) {
+    if ($familyCount -gt 0) { $extraFamilyCount++ }
+}
 
 $detected = if ($hasPpsProtocol) {
     'pps'
-} elseif ($hasPlanControl -and $hasOtherState) {
-    'mixed'
 } elseif ($hasPlanControl) {
-    'plan-project-sync'
-} elseif ($hasOtherState) {
-    'other-state-system'
+    if ($extraFamilyCount -gt 0) { 'mixed' } else { 'plan-project-sync' }
+} elseif ($extraFamilyCount -ge 2) {
+    'mixed'
+} elseif ($extraFamilyCount -eq 1) {
+    'structured-candidate'
 } else {
-    'unstructured'
+    'unknown'
+}
+$confidence = if ($hasPpsProtocol) {
+    'high'
+} elseif ($hasPlanControl) {
+    'medium'
+} else {
+    'low'
 }
 
 $recommendedProfile = if (
@@ -146,14 +240,10 @@ $softwareSignals = @(
         )
     }
 )
+# P1-01: a formal document outside docs/ still counts; "code exists" and
+# "code is Main" are different facts, so markdown is counted anywhere.
 $documentSignals = @(
-    $projectFiles | Where-Object {
-        $_.Extension -eq '.md' -and
-        $_.FullName.StartsWith(
-            (Join-Path $rootFull 'docs') + [System.IO.Path]::DirectorySeparatorChar,
-            [System.StringComparison]::OrdinalIgnoreCase
-        )
-    }
+    $projectFiles | Where-Object { $_.Extension -eq '.md' }
 )
 $dependencyManifestNames = @(
     'pyproject.toml', 'package-lock.json', 'pnpm-lock.yaml',
@@ -267,8 +357,44 @@ Add-ReportLine "- Target: ``$rootFull``"
 Add-ReportLine "- Generated: ``$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))``"
 Add-ReportLine '- Audit mode: read-only'
 Add-ReportLine "- Detected system: ``$detected``"
+Add-ReportLine "- Confidence: ``$confidence``"
 Add-ReportLine "- Recommended mode: ``$recommendedMode``"
 Add-ReportLine "- Recommended profile: ``$recommendedProfile``"
+Add-ReportLine
+Add-ReportLine '## Structure candidates'
+Add-ReportLine
+Add-ReportLine 'The detected system is a CANDIDATE with evidence and confidence, not a verdict. Review the listed files before any migration decision.'
+Add-ReportLine
+Add-ReportLine '| Family | Files | Examples |'
+Add-ReportLine '|---|---|---|'
+function Add-FamilyRow([string]$FamilyName, $Files) {
+    $examples = if ($Files.Count -gt 0) {
+        ($Files | Select-Object -First 3 | ForEach-Object {
+            $path = if ($_ -is [System.IO.FileInfo]) { $_.FullName } else { [string]$_ }
+            if ($path.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $path.Substring($rootFull.Length).TrimStart(
+                    [System.IO.Path]::DirectorySeparatorChar,
+                    [System.IO.Path]::AltDirectorySeparatorChar
+                )
+            } else {
+                $path
+            }
+        }) -join ', '
+    } else {
+        'none'
+    }
+    Add-ReportLine "| $FamilyName | $($Files.Count) | $examples |"
+}
+Add-FamilyRow 'plan control (PROJECT_STATE + DECISIONS + AGENTS)' @(
+    if ($hasPlanControl) { @('PROJECT_STATE.md', 'DECISIONS.md', 'AGENTS.md') } else { @() }
+)
+Add-FamilyRow 'state files (STATE / CURRENT_STATE / WORKFLOW_STATE / *-state)' $genericStateRaw
+Add-FamilyRow 'decisions (DECISION_LOG / decisions / ADR)' $decisionsFamilyFiles
+Add-FamilyRow 'rules (CLAUDE / RULES / rules)' $rulesFamilyFiles
+Add-FamilyRow 'risks (RISKS / RISK_REGISTER / risks)' $risksFamilyFiles
+Add-FamilyRow 'task lists (TODOS.md / TASKS / ACTIONS / BACKLOG)' $todosFamilyFiles
+Add-FamilyRow 'sources (SOURCES / SOURCE_INDEX / references)' $sourcesFamilyFiles
+Add-FamilyRow 'coverage (COVERAGE / EVIDENCE / review evidence)' $coverageFamilyFiles
 Add-ReportLine
 Add-ReportLine '## Inventory'
 Add-ReportLine
@@ -294,6 +420,17 @@ Add-ReportLine "- Protocol: ``$(if ($protocol) { $protocol } else { 'not declare
 Add-ReportLine "- Profile: ``$(if ($profile) { $profile } else { 'not declared' })``"
 Add-ReportLine "- Mode: ``$(if ($declaredMode) { $declaredMode } else { 'not declared' })``"
 Add-ReportLine "- Main artifact: ``$(if ($mainArtifact) { $mainArtifact } else { 'not declared' })``"
+Add-ReportLine
+Add-ReportLine '## Mode signals'
+Add-ReportLine
+Add-ReportLine '| Signal | Result |'
+Add-ReportLine '|---|---|'
+Add-ReportLine "| Implementation/prototype code files | $($implementationCodeFiles.Count) |"
+Add-ReportLine "| Software build manifests | $($softwareSignals.Count) |"
+Add-ReportLine "| Markdown files (any directory) | $($markdownFiles.Count) |"
+Add-ReportLine "| Binary asset candidates | $($binaryCandidates.Count) |"
+Add-ReportLine "| Recommended mode | ``$recommendedMode`` |"
+Add-ReportLine '| Mode note | code exists is not code is Main; a declared Main decides |'
 Add-ReportLine
 Add-ReportLine '## Migration review signals'
 Add-ReportLine
@@ -331,13 +468,13 @@ switch ($detected) {
         Add-ReportLine '4. Add coverage and project-local validation scripts on a branch.'
         Add-ReportLine '5. Switch AGENTS.md only after validation passes.'
     }
-    'other-state-system' {
-        Add-ReportLine 'Treat the existing state system as authoritative until an explicit cutover is approved.'
+    'structured-candidate' {
+        Add-ReportLine 'Structure signals were found, but no single system is recognizable yet.'
         Add-ReportLine
-        Add-ReportLine '1. Inventory current project, requirements, state, roadmap, context, plan, and summary files.'
-        Add-ReportLine '2. Map only binding M/F/D authority and resolve repeated stage-local IDs.'
-        Add-ReportLine '3. Select the current deliverable and build one explicit workset.'
-        Add-ReportLine '4. Validate the proposed PPS state before stopping the legacy state system.'
+        Add-ReportLine '1. Review the structure candidates table with the user.'
+        Add-ReportLine '2. Identify which files currently control workflow and decisions.'
+        Add-ReportLine '3. Map only binding M/F/D authority; do not promote proposals or assumptions.'
+        Add-ReportLine '4. Validate the proposed PPS state before any cutover.'
     }
     'mixed' {
         Add-ReportLine 'Multiple state systems are present. Do not write until one authority is selected.'

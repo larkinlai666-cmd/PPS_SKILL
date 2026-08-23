@@ -1323,7 +1323,7 @@ if (( is_pps12 == 1 )); then
         *) add_error "Merge receipt $merge_id has invalid Relation '$merge_relation'." ;;
       esac
       case "$merge_status" in
-        pending|integrated|deferred|rejected) ;;
+        pending|integrated|partially_integrated|deferred|rejected) ;;
         *) add_error "Merge receipt $merge_id has invalid Status '$merge_status'." ;;
       esac
       # Status and Relation must tell the same story.
@@ -1342,7 +1342,26 @@ if (( is_pps12 == 1 )); then
           [[ "$merge_relation" == "rejected" ]] ||
             add_error "Merge receipt $merge_id Status 'rejected' requires Relation 'rejected', found '$merge_relation'."
           ;;
+        partially_integrated)
+          case "$merge_relation" in
+            absorbs|layers_on|supersedes) ;;
+            *) add_error "Merge receipt $merge_id Status 'partially_integrated' is incompatible with Relation '$merge_relation'; partial integration absorbs, layers, or supersedes the accepted subset." ;;
+          esac
+          ;;
       esac
+      # P1-03: each non-empty disposition set carries its own evidence,
+      # independent of the total Status. A rejection without a reason and a
+      # deferral without a reactivation condition are silent abandonments.
+      merge_reason="$(merge_field 'Reason')"
+      merge_reactivate="$(merge_field 'Reactivate When')"
+      if [[ -n "$merge_rejected" && "$merge_rejected" != "none" ]]; then
+        [[ -n "$merge_reason" && "$merge_reason" != "none" ]] ||
+          add_error "Merge receipt $merge_id lists a non-empty Rejected set without a 'Reason' field; the excluded outputs and the why must survive."
+      fi
+      if [[ -n "$merge_deferred" && "$merge_deferred" != "none" ]]; then
+        [[ -n "$merge_reactivate" && "$merge_reactivate" != "none" ]] ||
+          add_error "Merge receipt $merge_id lists a non-empty Deferred set without a 'Reactivate When' field; a deferral without a reactivation condition is a silent abandonment."
+      fi
       [[ "$merge_target" =~ ^PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$ ]] ||
         add_error "Merge receipt $merge_id Target Package must be a PKG-* ID, found '$merge_target'."
       # The Target Package must be a real package: the current one or one
@@ -1359,6 +1378,24 @@ if (( is_pps12 == 1 )); then
         if [[ "$merge_relation" != "consumes_only" ]] &&
           { [[ -z "$merge_accepted" || "$merge_accepted" == "none" ]]; }; then
           add_error "Merge receipt $merge_id is 'integrated' with an empty Accepted set; an integration that accepted nothing is not an integration."
+        fi
+        # P1-03: 'integrated' must not mask still-open dispositions. A task
+        # that absorbed some paths and excluded others has not fully merged;
+        # split the dispositions into separate receipts or say so with
+        # Status 'partially_integrated'.
+        if { [[ -n "$merge_rejected" && "$merge_rejected" != "none" ]] ||
+          [[ -n "$merge_deferred" && "$merge_deferred" != "none" ]]; }; then
+          add_error "Merge receipt $merge_id is 'integrated' but still lists Rejected or Deferred paths; split mixed dispositions into separate receipts or use Status 'partially_integrated'."
+        fi
+      elif [[ "$merge_status" == "partially_integrated" ]]; then
+        # A partial integration must have absorbed something and left a
+        # remainder explicit. The remainder's evidence is enforced above.
+        if [[ -z "$merge_accepted" || "$merge_accepted" == "none" ]]; then
+          add_error "Merge receipt $merge_id is 'partially_integrated' with an empty Accepted set; a partial integration that accepted nothing is not an integration."
+        fi
+        if { [[ -z "$merge_rejected" || "$merge_rejected" == "none" ]] &&
+          [[ -z "$merge_deferred" || "$merge_deferred" == "none" ]]; }; then
+          add_error "Merge receipt $merge_id is 'partially_integrated' but lists neither Rejected nor Deferred paths; a full integration uses Status 'integrated'."
         fi
       elif [[ "$merge_status" == "deferred" ]]; then
         # A deferral must record what was deferred and when to wake it up,
@@ -1382,7 +1419,7 @@ if (( is_pps12 == 1 )); then
         fi
       fi
       case "$merge_status" in
-        integrated|deferred|rejected)
+        integrated|partially_integrated|deferred|rejected)
           # Every terminal disposition needs authorization and checked
           # evidence, not only integrations.
           if [[ -z "$merge_approval" || "$merge_approval" == "none" ]]; then
@@ -1407,6 +1444,25 @@ if (( is_pps12 == 1 )); then
             # about a task that the registry still lists as active means the
             # two truth sources disagree.
             case "$merge_status" in
+              partially_integrated)
+                src_status="$(awk -v wanted="### $src_task" '
+                  index($0, wanted) == 1 { inside=1; next }
+                  inside && /^###[[:space:]]/ { exit }
+                  inside && index($0, "- Status:") == 1 {
+                    sub("^- Status:[[:space:]]*", "")
+                    print
+                    exit
+                  }
+                ' "$task_index")"
+                # A partially integrated task still has open dispositions and
+                # must stay active/handoff_ready in the registry; marking it
+                # integrated, deferred, rejected, or archived compresses the
+                # remaining path lifecycles into one word.
+                case "$src_status" in
+                  active|handoff_ready) ;;
+                  *) add_error "Merge receipt $merge_id is 'partially_integrated' but Task $src_task is recorded as '$src_status'; a task with still-pending disposition sets stays active until the remainder is resolved." ;;
+                esac
+                ;;
               integrated|deferred|rejected)
                 src_status="$(awk -v wanted="### $src_task" '
                   index($0, wanted) == 1 { inside=1; next }

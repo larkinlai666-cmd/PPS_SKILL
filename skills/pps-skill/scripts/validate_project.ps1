@@ -1300,7 +1300,7 @@ if ($isPps12) {
             if ($fields['Relation'] -notin @('absorbs', 'layers_on', 'consumes_only', 'deferred', 'supersedes', 'rejected', 'rollback_to')) {
                 Add-ValidationError "Merge receipt $mergeId has invalid Relation '$($fields['Relation'])'."
             }
-            if ($fields['Status'] -notin @('pending', 'integrated', 'deferred', 'rejected')) {
+            if ($fields['Status'] -notin @('pending', 'integrated', 'partially_integrated', 'deferred', 'rejected')) {
                 Add-ValidationError "Merge receipt $mergeId has invalid Status '$($fields['Status'])'."
             }
             # Status and Relation must tell the same story.
@@ -1319,6 +1319,29 @@ if ($isPps12) {
                     if ($fields['Relation'] -ne 'rejected') {
                         Add-ValidationError "Merge receipt $mergeId Status 'rejected' requires Relation 'rejected', found '$($fields['Relation'])'."
                     }
+                }
+                'partially_integrated' {
+                    if ($fields['Relation'] -notin @('absorbs', 'layers_on', 'supersedes')) {
+                        Add-ValidationError "Merge receipt $mergeId Status 'partially_integrated' is incompatible with Relation '$($fields['Relation'])'; partial integration absorbs, layers, or supersedes the accepted subset."
+                    }
+                }
+            }
+            # P1-03: each non-empty disposition set carries its own evidence,
+            # independent of the total Status. A rejection without a reason
+            # and a deferral without a reactivation condition are silent
+            # abandonments.
+            $reasonMatch = [regex]::Match($body, '(?m)^-\s+Reason:\s*(.*?)\s*$')
+            $reasonValue = if ($reasonMatch.Success) { $reasonMatch.Groups[1].Value.Trim() } else { '' }
+            $reactivateMatch = [regex]::Match($body, '(?m)^-\s+Reactivate When:\s*(.*?)\s*$')
+            $reactivateValue = if ($reactivateMatch.Success) { $reactivateMatch.Groups[1].Value.Trim() } else { '' }
+            if (-not [string]::IsNullOrWhiteSpace($fields['Rejected']) -and $fields['Rejected'] -ne 'none') {
+                if ([string]::IsNullOrWhiteSpace($reasonValue) -or $reasonValue -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId lists a non-empty Rejected set without a 'Reason' field; the excluded outputs and the why must survive."
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($fields['Deferred']) -and $fields['Deferred'] -ne 'none') {
+                if ([string]::IsNullOrWhiteSpace($reactivateValue) -or $reactivateValue -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId lists a non-empty Deferred set without a 'Reactivate When' field; a deferral without a reactivation condition is a silent abandonment."
                 }
             }
             if ($fields['Target Package'] -notmatch '^PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$') {
@@ -1344,6 +1367,22 @@ if ($isPps12) {
                     ([string]::IsNullOrWhiteSpace($fields['Accepted']) -or $fields['Accepted'] -eq 'none')) {
                     Add-ValidationError "Merge receipt $mergeId is 'integrated' with an empty Accepted set; an integration that accepted nothing is not an integration."
                 }
+                # P1-03: 'integrated' must not mask still-open dispositions.
+                if ((-not [string]::IsNullOrWhiteSpace($fields['Rejected']) -and $fields['Rejected'] -ne 'none') -or
+                    (-not [string]::IsNullOrWhiteSpace($fields['Deferred']) -and $fields['Deferred'] -ne 'none')) {
+                    Add-ValidationError "Merge receipt $mergeId is 'integrated' but still lists Rejected or Deferred paths; split mixed dispositions into separate receipts or use Status 'partially_integrated'."
+                }
+            } elseif ($fields['Status'] -eq 'partially_integrated') {
+                # A partial integration must have absorbed something and left
+                # a remainder explicit. The remainder's evidence is enforced
+                # above.
+                if ([string]::IsNullOrWhiteSpace($fields['Accepted']) -or $fields['Accepted'] -eq 'none') {
+                    Add-ValidationError "Merge receipt $mergeId is 'partially_integrated' with an empty Accepted set; a partial integration that accepted nothing is not an integration."
+                }
+                if (( [string]::IsNullOrWhiteSpace($fields['Rejected']) -or $fields['Rejected'] -eq 'none') -and
+                    ([string]::IsNullOrWhiteSpace($fields['Deferred']) -or $fields['Deferred'] -eq 'none')) {
+                    Add-ValidationError "Merge receipt $mergeId is 'partially_integrated' but lists neither Rejected nor Deferred paths; a full integration uses Status 'integrated'."
+                }
             } elseif ($fields['Status'] -eq 'deferred') {
                 # A deferral must record what was deferred and when to wake it
                 # up, or the work intent is unrecoverable after archiving.
@@ -1367,7 +1406,7 @@ if ($isPps12) {
                     Add-ValidationError "Merge receipt $mergeId is 'rejected' without a 'Reason' field; the excluded outputs and the why must survive."
                 }
             }
-            if ($fields['Status'] -in @('integrated', 'deferred', 'rejected')) {
+            if ($fields['Status'] -in @('integrated', 'partially_integrated', 'deferred', 'rejected')) {
                 # Every terminal disposition needs authorization and checked
                 # evidence, not only integrations.
                 if ([string]::IsNullOrWhiteSpace($fields['Approval']) -or $fields['Approval'] -eq 'none') {
@@ -1416,6 +1455,21 @@ if ($isPps12) {
                             }
                             if ($srcStatus -ne $fields['Status'] -and $srcStatus -ne 'archived') {
                                 Add-ValidationError "Merge receipt $mergeId says Task $srcTask is '$($fields['Status'])' but TASK_INDEX.md records status '$srcStatus'; the registry and the receipt must agree."
+                            }
+                        }
+                        if ($fields['Status'] -eq 'partially_integrated') {
+                            $srcBlock = [regex]::Match(
+                                $taskIndexText,
+                                '(?ms)^###\s+' + [regex]::Escape($srcTask) + '\s*?
+(?<body>.*?)(?=^###\s+|\z)')
+                            $srcStatus = ''
+                            if ($srcBlock.Success) {
+                                $srcStatusMatch = [regex]::Match(
+                                    $srcBlock.Groups['body'].Value, '(?m)^-\s+Status:\s*(.*?)\s*$')
+                                if ($srcStatusMatch.Success) { $srcStatus = $srcStatusMatch.Groups[1].Value }
+                            }
+                            if ($srcStatus -notin @('active', 'handoff_ready')) {
+                                Add-ValidationError "Merge receipt $mergeId is 'partially_integrated' but Task $srcTask is recorded as '$srcStatus'; a task with still-pending disposition sets stays active until the remainder is resolved."
                             }
                         }
                     }

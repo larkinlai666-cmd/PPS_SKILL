@@ -1,7 +1,7 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-23 (updated for the 0.5.1 field-consistency round)
-- Scope: skill 0.5.1, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
+- Review date: 2026-08-23 (updated for the 0.5.2 real-migration round)
+- Scope: skill 0.5.2, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
 
@@ -63,6 +63,27 @@ makes the execution layer field-truth on both platforms.
 | F-050-08 SKILL invariant contradicted the gate | **Closed**: SKILL.md now states the gate executes the project's own manifest and readiness never executes out-of-repo commands; the gate failure list names missing/failing/timing-out/escaping manifest rows |
 | F-050-09 review table lagged the code | **Closed**: D-CORE-011 row and the F-047-03 title now match the code |
 | F-050-10 substring word lists | **Residual by agreement**: `fail` still matches `failure-report`. Word-boundary work stays out of scope per the 049 stop-order; recorded here as residual, not a new round |
+
+### 0.5.2 real-migration round (PPS-AUDIT-20260823-V3, P0-01 / P1-01..03 / P2-01)
+
+A third review chain replayed REAL PPS/1.1 projects (initialized by the
+actual 1.1 skill release) against the 0.5.1 migrator and the multitask
+receipt rules, plus a legacy auditor replay on a complex existing project.
+Verdict: the core design is a large improvement, but the full
+"new + resume + migrate" delivery was only conditionally passing.
+
+| ID | Status in 0.5.2 |
+|---|---|
+| P0-01 real 1.1 migration did not complete its claim | **Closed**: `migrate_project` is a core protocol upgrade (scripts, Red Lines, coverage evidence, proposal dates, active-block decision, EVENTS.md, manifest, .gitignore) that validates on both engines and gates on the current platform, rolling back byte-identically on failure; multitask is a separate opt-in and a single-task project never gains TASK_INDEX.md; the test matrix migrates four real-1.1 fixtures and asserts the final 1.2 state (valid + gated + ready + rollback byte identity) |
+| P1-01 legacy auditor misclassified non-standard structure | **Closed**: candidates + evidence + confidence model; state/decisions/rules/risks/task-list/sources/coverage families; documents count outside docs/; code exists is separate from code is Main; empty targets report `unknown`, never `unstructured` |
+| P1-02 migration tests proved reversibility, not semantics | **Closed**: the suites assert the migrated project validates, gates, and reaches readiness, and that rollback restores file set and hashes; the failing-migration fixture proves auto-rollback |
+| P1-03 mixed dispositions masked by integrated | **Closed**: per-set Reason/Reactivate When on any receipt; `integrated` may not carry open dispositions; `partially_integrated` is the explicit partial state; task stays active until the remainder resolves; both platforms carry negative and positive fixtures |
+| P2-01 self-description drift | **Closed**: template README says PPS/1.2, ROADMAP marks the upgrader shipped, the CONTEXT template fits the 60-line target, and the distribution validator reconciles template protocols, roadmap, and capsule size |
+
+Still out of scope by agreement: same-workspace true multi-writer
+concurrency (the multitask layer is a serial-integration ledger), semantic
+business verification (the project's own Verify duty), and multi-owner team
+features.
 
 ### 0.4.9 self-collision round (F-048-01..03)
 

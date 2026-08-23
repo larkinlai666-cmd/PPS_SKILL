@@ -51,7 +51,7 @@
 
 - [ ] Define a stable export contract for software execution systems
 - [ ] Add machine-readable validation output
-- [ ] Add an explicit in-project PPS/1.1-to-1.2 upgrade command after more field experience
+- [x] Ship the in-project PPS/1.1-to-1.2 upgrade command (`migrate_project` dry-run / apply --confirm / rollback; the real 1.1 migration matrix landed in 0.5.1)
 - [ ] Test installation and use across additional AI agent environments
 - [ ] Add optional bounded symbol anchors without creating an index service
 

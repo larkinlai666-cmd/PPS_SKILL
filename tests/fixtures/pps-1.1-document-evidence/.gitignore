@@ -1,0 +1,16 @@
+# Local and generated files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+~$*
+.idea/
+.vscode/
+exports/
+tmp/
+local-assets/
+
+# Large binary assets stay external unless the project explicitly adopts Git LFS
+*.mp4
+*.mov
+*.zip

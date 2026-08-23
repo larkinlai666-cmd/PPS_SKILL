@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$root" ]]; then
+  echo "PPS pre-commit: not inside a Git repository." >&2
+  exit 1
+fi
+
+snapshot="$(mktemp -d "${TMPDIR:-/tmp}/pps-pre-commit.XXXXXX")"
+cleanup() {
+  case "$snapshot" in
+    "${TMPDIR:-/tmp}"/pps-pre-commit.*) rm -rf "$snapshot" ;;
+    *) echo "PPS pre-commit: refusing unexpected cleanup target: $snapshot" >&2 ;;
+  esac
+}
+trap cleanup EXIT
+
+checkout_staged_path() {
+  local relative="$1"
+  if [[ -e "$snapshot/$relative" || -L "$snapshot/$relative" ]]; then
+    return
+  fi
+  if git -C "$root" cat-file -e ":$relative" 2>/dev/null; then
+    git -C "$root" checkout-index --prefix="$snapshot/" -- "$relative"
+  fi
+}
+
+checkout_staged_anchor() {
+  local relative="$1"
+  local object_type
+  [[ -n "$relative" && "$relative" != "." ]] || return
+  if [[ -e "$snapshot/$relative" || -L "$snapshot/$relative" ]]; then
+    return
+  fi
+  object_type="$(git -C "$root" cat-file -t ":$relative" 2>/dev/null || true)"
+  if [[ "$object_type" == "tree" ]]; then
+    mkdir -p "$snapshot/$relative"
+  elif [[ -n "$object_type" ]]; then
+    checkout_staged_path "$relative"
+  fi
+}
+
+for relative in \
+  README.md AGENTS.md PROJECT_STATE.md DECISIONS.md CONTEXT.md \
+  PROJECT_MAP.md ENVIRONMENT.md ASSETS.md SOURCE_INDEX.md docs/CURRENT_REVIEW_EVIDENCE.md \
+  scripts/asset_check.ps1 scripts/asset_check.sh \
+  scripts/status_check.ps1 scripts/status_check.sh \
+  scripts/validate_project.ps1 scripts/validate_project.sh \
+  scripts/environment_doctor.ps1 scripts/environment_doctor.sh \
+  scripts/resume_packet.ps1 scripts/resume_packet.sh; do
+  checkout_staged_path "$relative"
+done
+
+if [[ -f "$snapshot/PROJECT_STATE.md" ]]; then
+  hot_state="$(
+    awk '
+      $0 ~ "^##[[:space:]]+Hot State[[:space:]]*$" {inside=1; next}
+      inside && /^##[[:space:]]/ {exit}
+      inside {print}
+    ' "$snapshot/PROJECT_STATE.md"
+  )"
+  for name in Main Map Environment Capsule Coverage; do
+    relative="$(printf '%s\n' "$hot_state" |
+      sed -n "s/^-[[:space:]]*${name}:[[:space:]]*//p" |
+      head -n 1)"
+    if [[ -n "$relative" && "$relative" != /* &&
+      "$relative" != *\\* &&
+      ! "$relative" =~ ^[A-Za-z]:[\\/]|(^|/)\.\.(/|$) ]]; then
+      checkout_staged_anchor "$relative"
+    fi
+  done
+fi
+
+if [[ -f "$snapshot/CONTEXT.md" ]]; then
+  workset="$(
+    awk '
+      $0 ~ "^##[[:space:]]+Workset Manifest[[:space:]]*$" {inside=1; next}
+      inside && /^##[[:space:]]/ {exit}
+      inside {print}
+    ' "$snapshot/CONTEXT.md"
+  )"
+  read_value="$(printf '%s\n' "$workset" |
+    sed -n 's/^-[[:space:]]*Read:[[:space:]]*//p' | head -n 1)"
+  if [[ -n "$read_value" && "$read_value" != "none" ]]; then
+    while IFS= read -r relative; do
+      relative="$(printf '%s' "$relative" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      if [[ -n "$relative" && "$relative" != /* &&
+        "$relative" != *\\* &&
+        ! "$relative" =~ ^[A-Za-z]:[\\/]|(^|/)\.\.(/|$) ]]; then
+        checkout_staged_anchor "$relative"
+      fi
+    done < <(printf '%s\n' "$read_value" | tr ',' '\n')
+  fi
+  if [[ -f "$snapshot/PROJECT_MAP.md" ]]; then
+    while IFS= read -r relative; do
+      if [[ -n "$relative" && "$relative" != /* &&
+        "$relative" != *\\* &&
+        ! "$relative" =~ ^[A-Za-z]:[\\/]|(^|/)\.\.(/|$) ]]; then
+        checkout_staged_anchor "$relative"
+      fi
+    done < <(awk -F'|' '
+      function trim(value) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        return value
+      }
+      /^\|[[:space:]]*C-/ { print trim($3) }
+    ' "$snapshot/PROJECT_MAP.md")
+  fi
+fi
+
+validator="$snapshot/scripts/validate_project.sh"
+if [[ ! -f "$validator" ]]; then
+  echo "PPS pre-commit: staged validator missing at scripts/validate_project.sh." >&2
+  exit 1
+fi
+
+if ! bash "$validator" "$snapshot" --quiet; then
+  echo "PPS pre-commit: staged project validation failed; commit blocked." >&2
+  exit 1
+fi
+
+staged="$(git -C "$root" diff --cached --name-only)"
+content_changed=0
+state_changed=0
+if printf '%s\n' "$staged" |
+    grep -Eq '^(docs/|assets/|prototypes/|README\.md$|AGENTS\.md$|DECISIONS\.md$|CONTEXT\.md$|PROJECT_MAP\.md$|ENVIRONMENT\.md$|ASSETS\.md$|SOURCE_INDEX\.md$)'; then
+  content_changed=1
+fi
+if printf '%s\n' "$staged" | grep -Fxq 'PROJECT_STATE.md'; then
+  state_changed=1
+fi
+
+if (( content_changed == 1 && state_changed == 0 )); then
+  echo "PPS pre-commit warning: content changed without PROJECT_STATE.md." >&2
+  echo "Update the current package, next action, and Updated field when this commit closes work." >&2
+fi
+
+exit 0

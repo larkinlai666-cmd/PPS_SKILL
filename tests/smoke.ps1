@@ -1260,6 +1260,47 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         $ppsHistoryResult.Text -notmatch 'Detected system: `pps`') {
         throw "A valid PPS project with retained planning history was misclassified."
     }
+    if ($ppsHistoryResult.Text -notmatch 'Confidence: `high`') {
+        throw "The PPS detection did not report high confidence."
+    }
+
+    # P1-01: custom-named structure is a structured candidate with evidence,
+    # never "unstructured".
+    $customStructure = Join-Path $tempRoot "custom-structure-audit"
+    foreach ($customDir in @('rules', 'decisions', 'risks', 'notes')) {
+        New-Item -ItemType Directory -Path (Join-Path $customStructure $customDir) -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText((Join-Path $customStructure 'rules/RULES.md'), "# Rules`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $customStructure 'decisions/DECISION_LOG.md'), "# Decisions`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $customStructure 'risks/RISKS.md'), "# Risks`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $customStructure 'notes/SPEC.md'), "# Product spec`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $customStructure 'app.py'), "print(1)`n", $utf8NoBom)
+    $customStructureResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
+            -Root $customStructure 2>&1
+    }
+    if ($customStructureResult.Code -ne 0 -or
+        $customStructureResult.Text -notmatch 'Confidence:' -or
+        $customStructureResult.Text -match 'Detected system: `unstructured`' -or
+        $customStructureResult.Text -notmatch 'rules \(CLAUDE / RULES / rules\)' -or
+        $customStructureResult.Text -notmatch 'Recommended mode: `hybrid`') {
+        throw "A custom-structured project was not reported as a structured candidate. Output: $($customStructureResult.Text)"
+    }
+
+    # An empty directory is unknown, with the uncertainty said out loud.
+    $emptyDir = Join-Path $tempRoot "empty-dir-audit"
+    New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+    $emptyDirResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
+            -Root $emptyDir 2>&1
+    }
+    if ($emptyDirResult.Code -ne 0 -or
+        $emptyDirResult.Text -notmatch 'Detected system: `unknown`' -or
+        $emptyDirResult.Text -notmatch 'Confidence: `low`') {
+        throw "An empty directory was not reported as unknown. Output: $($emptyDirResult.Text)"
+    }
 
     $missingEvents = Join-Path $tempRoot "missing-events"
     Copy-Item -LiteralPath $standard -Destination $missingEvents -Recurse
@@ -2107,49 +2148,164 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw ("An executed row did not wire the red line. gate output: " + $mxWiredResult.Text)
     }
 
-    # 050-06: migration apply + rollback mirror the Bash fixture.
-    $mxMig = Join-Path $tempRoot "mx-migrate"
-    Copy-Item -LiteralPath $software -Destination $mxMig -Recurse
-    foreach ($mxStrip in @('TASK_INDEX.md', 'MERGES.md', '.pps/verify-manifest.txt')) {
-        $mxStripPath = Join-Path $mxMig $mxStrip
-        if (Test-Path -LiteralPath $mxStripPath) { Remove-Item -LiteralPath $mxStripPath -Force }
+    # P0-01 / P1-02: the real 1.1 migration matrix. Every fixture was
+    # initialized by the actual PPS/1.1 skill release (v0.3.0), so the
+    # migrator faces the files a real old project has. The assertion is the
+    # FINAL 1.2 state (valid + gated + ready), not "files were created".
+    foreach ($migFixture in @(
+        'pps-1.1-document-standard',
+        'pps-1.1-software-standard',
+        'pps-1.1-hybrid-standard',
+        'pps-1.1-document-evidence'
+    )) {
+        $mxMig = Join-Path $tempRoot ("mig-" + $migFixture)
+        Copy-Item -LiteralPath (Join-Path $repoRoot ("tests/fixtures/" + $migFixture)) `
+            -Destination $mxMig -Recurse
+        & git -C $mxMig add -A 2>&1 | Out-Null
+        & git -C $mxMig -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 | Out-Null
+        $mxPreapply = @{}
+        foreach ($pf in @(Get-ChildItem -LiteralPath $mxMig -File -Recurse | Where-Object { -not $_.FullName -like '*/.git/*' })) {
+            $rel = $pf.FullName.Substring($mxMig.Length).TrimStart('/').TrimStart('\')
+            $mxPreapply[$rel] = (Get-FileHash -LiteralPath $pf.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill 'scripts/migrate_project.ps1') `
+            -Root $mxMig -Mode apply -Confirm 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw ("Migration of $migFixture failed on PowerShell. See the migrator output above.")
+        }
+        # Core upgrade must NOT force the multitask layer onto a single-task
+        # project.
+        if ((Test-Path -LiteralPath (Join-Path $mxMig 'TASK_INDEX.md')) -or
+            (Test-Path -LiteralPath (Join-Path $mxMig 'MERGES.md'))) {
+            throw ("${migFixture}: the core migration forced the multitask layer.")
+        }
+        $mxStateText = [System.IO.File]::ReadAllText(
+            (Join-Path $mxMig 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+        if ($mxStateText -notmatch '(?m)^- Protocol: PPS/1\.2\s*$') {
+            throw "${migFixture}: the protocol was not flipped to PPS/1.2."
+        }
+        $mxAgentsText = [System.IO.File]::ReadAllText(
+            (Join-Path $mxMig 'AGENTS.md'), [System.Text.Encoding]::UTF8)
+        if ($mxAgentsText -notmatch '(?m)^##\s+Red Lines\s*$') {
+            throw "${migFixture}: AGENTS.md did not gain a Red Lines section."
+        }
+        $mxDecisionsText = [System.IO.File]::ReadAllText(
+            (Join-Path $mxMig 'DECISIONS.md'), [System.Text.Encoding]::UTF8)
+        if ($mxDecisionsText -notmatch '### D-MIGRATE-001 \[active\]' -or
+            $mxDecisionsText -notmatch '`D-MIGRATE-001`') {
+            throw "${migFixture}: the migration decision did not enter the active block."
+        }
+        $mxContextText = [System.IO.File]::ReadAllText(
+            (Join-Path $mxMig 'CONTEXT.md'), [System.Text.Encoding]::UTF8)
+        if ($mxContextText -notmatch 'Decisions: D-MIGRATE-001' -or
+            $mxContextText -notmatch '\(opened 20\d\d-\d\d-\d\d\)') {
+            throw "${migFixture}: workset decisions or proposal dates were not upgraded."
+        }
+        $mxEventsText = [System.IO.File]::ReadAllText(
+            (Join-Path $mxMig 'EVENTS.md'), [System.Text.Encoding]::UTF8)
+        if ($mxEventsText -notmatch 'migration_authorized D-MIGRATE-001') {
+            throw "${migFixture}: the migration event was not recorded."
+        }
+        foreach ($requiredScript in @('verify_gate', 'project_verify', 'append_event')) {
+            foreach ($suffix in @('.ps1', '.sh')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $mxMig ("scripts/" + $requiredScript + $suffix)))) {
+                    throw "${migFixture}: scripts/$requiredScript$suffix was not installed."
+                }
+            }
+        }
+        # The final 1.2 state must validate, gate, and reach readiness.
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxMig 'scripts/validate_project.ps1') `
+            -Root $mxMig -Quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "${migFixture}: migrated project fails validation." }
+        if (-not (Test-Path -LiteralPath (Join-Path $mxMig '.pps/verify-stamp'))) {
+            throw "${migFixture}: the gate did not stamp the migrated project."
+        }
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxMig 'scripts/readiness_check.ps1') `
+            -Root $mxMig -Verified 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "${migFixture}: migrated project fails readiness." }
+        # Rollback restores the pre-apply file set AND byte identity.
+        $mxMigBackups = Get-ChildItem -LiteralPath (Join-Path $mxMig '.pps') -Directory -Filter 'migration-backup-*'
+        $mxMigBackup = $mxMigBackups | Select-Object -First 1
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill 'scripts/migrate_project.ps1') `
+            -Root $mxMig -Mode rollback -RollbackDir $mxMigBackup.FullName 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "${migFixture}: rollback failed." }
+        $mxPostFiles = @(Get-ChildItem -LiteralPath $mxMig -File -Recurse | Where-Object {
+            -not $_.FullName -like '*/.git/*' -and -not $_.FullName -like '*/.pps/*'
+        })
+        if ($mxPostFiles.Count -ne $mxPreapply.Count) {
+            throw "${migFixture}: rollback file set differs ($($mxPostFiles.Count) vs $($mxPreapply.Count))."
+        }
+        foreach ($pf in $mxPostFiles) {
+            $rel = $pf.FullName.Substring($mxMig.Length).TrimStart('/').TrimStart('\')
+            if (-not $mxPreapply.ContainsKey($rel)) {
+                throw "${migFixture}: rollback left new file $rel."
+            }
+            if ((Get-FileHash -LiteralPath $pf.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ne $mxPreapply[$rel]) {
+                throw "${migFixture}: rollback changed bytes of $rel."
+            }
+        }
+        $mxStateAfter = [System.IO.File]::ReadAllText(
+            (Join-Path $mxMig 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+        if ($mxStateAfter -notmatch '(?m)^- Protocol: PPS/1\.1\s*$') {
+            throw "${migFixture}: rollback did not restore the 1.1 protocol."
+        }
     }
-    $mxStateFile = Join-Path $mxMig 'PROJECT_STATE.md'
-    [System.IO.File]::WriteAllText(
-        $mxStateFile,
-        [System.IO.File]::ReadAllText($mxStateFile, [System.Text.Encoding]::UTF8).Replace(
-            '- Protocol: PPS/1.2', '- Protocol: PPS/1.1'),
-        $utf8NoBom)
-    $mxDecisions = Join-Path $mxMig 'DECISIONS.md'
-    [System.IO.File]::WriteAllText(
-        $mxDecisions,
-        [System.IO.File]::ReadAllText($mxDecisions, [System.Text.Encoding]::UTF8) +
-        "`n### D-MIGRATE-001 [active]`n- Date: 2026-08-01`n- Decision: approve`n- Subject: legacy`n- Summary: already used.`n",
-        $utf8NoBom)
+
+    # The multitask layer stays an explicit opt-in.
+    $mxMt = Join-Path $tempRoot "mig-multitask"
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/pps-1.1-document-standard') `
+        -Destination $mxMt -Recurse
+    & git -C $mxMt init -q 2>&1 | Out-Null
+    & git -C $mxMt add -A 2>&1 | Out-Null
+    & git -C $mxMt -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 | Out-Null
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill 'scripts/migrate_project.ps1') `
-        -Root $mxMig -Mode apply -Confirm 2>&1 | Out-Null
-    if (-not (Test-Path -LiteralPath (Join-Path $mxMig 'TASK_INDEX.md'))) {
-        throw 'The PowerShell migrator did not apply.'
+        -Root $mxMt -Mode apply -Confirm -WithMultitask 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'The -WithMultitask migration failed.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $mxMt 'TASK_INDEX.md')) -or
+        -not (Test-Path -LiteralPath (Join-Path $mxMt 'MERGES.md'))) {
+        throw '-WithMultitask did not create the multitask registry.'
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $mxMig '.pps/verify-manifest.txt'))) {
-        throw 'The PowerShell migrator did not apply the check manifest.'
+    $mxMtState = [System.IO.File]::ReadAllText(
+        (Join-Path $mxMt 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+    if ($mxMtState -notmatch '(?m)^- Writer: T-001\s*$') {
+        throw '-WithMultitask did not write the Writer lease.'
     }
-    $mxDecisionsApplied = [System.IO.File]::ReadAllText($mxDecisions, [System.Text.Encoding]::UTF8)
-    if (-not $mxDecisionsApplied.Contains('### D-MIGRATE-002 ')) {
-        throw 'The migrator collided with the existing D-MIGRATE-001 decision id.'
+
+    # A migration that would not validate rolls back automatically.
+    $mxFail = Join-Path $tempRoot "mig-fails"
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/pps-1.1-document-standard') `
+        -Destination $mxFail -Recurse
+    & git -C $mxFail init -q 2>&1 | Out-Null
+    & git -C $mxFail add -A 2>&1 | Out-Null
+    & git -C $mxFail -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 | Out-Null
+    $mxFailStatePath = Join-Path $mxFail 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $mxFailStatePath,
+        [regex]::Replace(
+            [System.IO.File]::ReadAllText($mxFailStatePath, [System.Text.Encoding]::UTF8),
+            '(?m)^- Coverage:.*?
+', ''),
+        $utf8NoBom)
+    $mxFailResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $skill 'scripts/migrate_project.ps1') `
+            -Root $mxFail -Mode apply -Confirm 2>&1
     }
-    $mxMigBackups = Get-ChildItem -LiteralPath (Join-Path $mxMig '.pps') -Directory -Filter 'migration-backup-*'
-    $mxMigBackup = $mxMigBackups | Select-Object -First 1
-    & $engine -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $skill 'scripts/migrate_project.ps1') `
-        -Root $mxMig -Mode rollback -RollbackDir $mxMigBackup.FullName 2>&1 | Out-Null
-    if ((Test-Path -LiteralPath (Join-Path $mxMig 'TASK_INDEX.md')) -or (Test-Path -LiteralPath (Join-Path $mxMig 'MERGES.md')) -or (Test-Path -LiteralPath (Join-Path $mxMig '.pps/verify-manifest.txt'))) {
-        throw 'The PowerShell rollback left files the apply created.'
+    if ($mxFailResult.Code -eq 0) {
+        throw 'Migration of an unrecoverable 1.1 state incorrectly succeeded.'
     }
-    $mxStateAfter = [System.IO.File]::ReadAllText($mxStateFile, [System.Text.Encoding]::UTF8)
-    if ($mxStateAfter -notmatch '- Protocol: PPS/1.1') {
-        throw 'The rollback touched the Protocol field.'
+    $mxFailState = [System.IO.File]::ReadAllText(
+        (Join-Path $mxFail 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+    if ($mxFailState -notmatch '(?m)^- Protocol: PPS/1\.1\s*$') {
+        throw 'A failed migration did not roll back the protocol.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $mxFail 'EVENTS.md')) {
+        throw 'A failed migration left EVENTS.md behind.'
     }
 
     # 050-02: a broken python3 on PATH must not kill the gate; PPS_PYTHON and
@@ -2244,6 +2400,84 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     Assert-InvalidProject $emptyRejected `
         "without a 'Reason' field" `
         "Rejected receipt without reason"
+
+    # P1-03: an 'integrated' receipt must not mask open dispositions, and
+    # every non-empty Rejected/Deferred set carries its own evidence.
+    $receiptMixed = Join-Path $tempRoot "receipt-mixed-masked"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptMixed -Recurse
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptMixed 'local-task-output/T-002/drop.md'), "real drop`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptMixed 'local-task-output/T-002/later.md'), "real later`n", $utf8NoBom)
+    $receiptMixedText = @(
+        '# Merges', '', '## Merge Receipts', '',
+        '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: absorbs', '- Accepted: local-task-output/T-002/real.md',
+        '- Rejected: local-task-output/T-002/drop.md',
+        '- Deferred: local-task-output/T-002/later.md',
+        '- Base Checkpoint: lineage_incomplete', '- Result Checkpoint: lineage_incomplete',
+        '- Lineage Note: migration per D-001', '- Approval: D-001',
+        '- Verification: validate_project pass', '- Status: integrated'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptMixed "MERGES.md"), $receiptMixedText + "`n", $utf8NoBom)
+    Assert-InvalidProject $receiptMixed `
+        "still lists Rejected or Deferred paths" `
+        "Integrated receipt masking mixed dispositions"
+    Assert-InvalidProject $receiptMixed `
+        "non-empty Rejected set without a 'Reason' field" `
+        "Mixed receipt missing rejection reason"
+    Assert-InvalidProject $receiptMixed `
+        "non-empty Deferred set without a 'Reactivate When' field" `
+        "Mixed receipt missing reactivation condition"
+
+    # The explicit partial state passes with full per-set evidence and a task
+    # that stays active until the remainder is resolved.
+    $receiptPartial = Join-Path $tempRoot "receipt-partial-full"
+    Copy-Item -LiteralPath $receiptBase -Destination $receiptPartial -Recurse
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptPartial 'local-task-output/T-002/drop.md'), "real drop`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptPartial 'local-task-output/T-002/later.md'), "real later`n", $utf8NoBom)
+    $partialTaskIndex = Join-Path $receiptPartial "TASK_INDEX.md"
+    [System.IO.File]::WriteAllText(
+        $partialTaskIndex,
+        [System.IO.File]::ReadAllText($partialTaskIndex, [System.Text.Encoding]::UTF8).Replace(
+            '- Status: integrated', '- Status: active'),
+        $utf8NoBom)
+    $receiptPartialText = @(
+        '# Merges', '', '## Merge Receipts', '',
+        '### MERGE-001', '- Target Package: PKG-001', '- Source Tasks: T-002',
+        '- Relation: absorbs', '- Accepted: local-task-output/T-002/real.md',
+        '- Rejected: local-task-output/T-002/drop.md',
+        '- Deferred: local-task-output/T-002/later.md',
+        '- Base Checkpoint: lineage_incomplete', '- Result Checkpoint: lineage_incomplete',
+        '- Lineage Note: migration per D-001', '- Approval: D-001',
+        '- Verification: validate_project pass',
+        '- Reason: duplicates the accepted artifact.',
+        '- Reactivate When: after the next package closes.',
+        '- Status: partially_integrated'
+    ) -join "`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $receiptPartial "MERGES.md"), $receiptPartialText + "`n", $utf8NoBom)
+    $partialValid = Run-Validator $receiptPartial
+    if ($partialValid.Code -ne 0) {
+        throw ("A fully evidenced partially_integrated receipt was rejected. Output: " + $partialValid.Text)
+    }
+
+    # A partially integrated receipt cannot sit under a task the registry
+    # calls integrated.
+    $receiptPartialDone = Join-Path $tempRoot "receipt-partial-task-done"
+    Copy-Item -LiteralPath $receiptPartial -Destination $receiptPartialDone -Recurse
+    $partialDoneTaskIndex = Join-Path $receiptPartialDone "TASK_INDEX.md"
+    [System.IO.File]::WriteAllText(
+        $partialDoneTaskIndex,
+        [System.IO.File]::ReadAllText($partialDoneTaskIndex, [System.Text.Encoding]::UTF8).Replace(
+            '- Status: active', '- Status: integrated'),
+        $utf8NoBom)
+    Assert-InvalidProject $receiptPartialDone `
+        "stays active until the remainder is resolved" `
+        "Partially integrated task marked integrated in the registry"
 
     $phantomRefs = Join-Path $tempRoot "phantom-refs"
     Copy-Item -LiteralPath $multitaskCase -Destination $phantomRefs -Recurse

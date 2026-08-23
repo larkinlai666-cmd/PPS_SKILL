@@ -47,14 +47,7 @@
 
 ## Runtime Surfaces
 
-<!--
-Optional (PPS/1.2). Declare surfaces where the product actually runs outside
-this repository: an installed copy, a user-profile config directory, a deployed
-service. Git synchronization cannot prove a deployed system loaded the new
-bytes; a probe can. Record the environment VARIABLE NAME, never an absolute
-path (absolute paths in Git are machine-specific lies). The probe must be
-referenced by scripts/project_verify.* or it never runs. Delete this section if
-the product lives entirely inside the repository.
+<!-- Optional (PPS/1.2). Declare where the product runs outside this repository: environment VARIABLE NAME only, never an absolute path, each probe referenced by scripts/project_verify.* or it never runs. Delete this section if the product lives entirely inside the repository.
 
 | ID | Repo path | Runtime path env | Probe |
 | R-001 | live-workbench/ | WEZTERM_CONFIG_DIR | scripts/runtime_probe.sh |

@@ -771,6 +771,33 @@ printf '# Archived state\n' >"$pps_with_history/legacy-state/STATE.md"
 bash "$skill/scripts/audit_legacy_project.sh" --root "$pps_with_history" \
   >"$temp_root/pps-history-report.md"
 grep -q 'Detected system: `pps`' "$temp_root/pps-history-report.md"
+grep -q 'Confidence: `high`' "$temp_root/pps-history-report.md"
+
+# P1-01: a project with custom-named structure (rules/, decisions/, risks/,
+# notes elsewhere) is a structured candidate with evidence, never
+# "unstructured".
+custom_structure="$temp_root/custom-structure-audit"
+mkdir -p "$custom_structure/rules" "$custom_structure/decisions" \
+  "$custom_structure/risks" "$custom_structure/notes"
+printf '# Rules\n' >"$custom_structure/rules/RULES.md"
+printf '# Decisions\n' >"$custom_structure/decisions/DECISION_LOG.md"
+printf '# Risks\n' >"$custom_structure/risks/RISKS.md"
+printf '# Product spec\n' >"$custom_structure/notes/SPEC.md"
+printf 'print(1)\n' >"$custom_structure/app.py"
+bash "$skill/scripts/audit_legacy_project.sh" --root "$custom_structure" \
+  >"$temp_root/custom-structure-report.md"
+grep -q 'Confidence:' "$temp_root/custom-structure-report.md"
+! grep -q 'Detected system: `unstructured`' "$temp_root/custom-structure-report.md"
+grep -q 'rules (CLAUDE / RULES / rules)' "$temp_root/custom-structure-report.md"
+grep -q 'Recommended mode: `hybrid`' "$temp_root/custom-structure-report.md"
+
+# An empty directory is unknown, with the uncertainty said out loud.
+empty_dir="$temp_root/empty-dir-audit"
+mkdir -p "$empty_dir"
+bash "$skill/scripts/audit_legacy_project.sh" --root "$empty_dir" \
+  >"$temp_root/empty-dir-report.md"
+grep -q 'Detected system: `unknown`' "$temp_root/empty-dir-report.md"
+grep -q 'Confidence: `low`' "$temp_root/empty-dir-report.md"
 
 cp -R "$temp_root/standard-case" "$temp_root/missing-events"
 rm "$temp_root/missing-events/EVENTS.md"
@@ -1479,42 +1506,88 @@ set -e
 [[ "$mx_echo_code" != "0" ]]
 grep -q 'red line not wired to an executed check' "$temp_root/mx-echo.out"
 
-# 050-06: migration apply + rollback. Rollback must delete every file apply
-# created (no half-activated multitask layer), keep the manifest under .pps/,
-# and avoid a decision id that already exists.
-mx_mig="$temp_root/mx-migrate"
-cp -R "$temp_root/software-case" "$mx_mig"
-rm -f "$mx_mig/TASK_INDEX.md" "$mx_mig/MERGES.md" "$mx_mig/.pps/verify-manifest.txt"
-$PY3 - "$mx_mig" <<'PYEOF'
-import sys
-root = sys.argv[1]
-p = root + '/PROJECT_STATE.md'
-t = open(p, encoding='utf-8').read()
-open(p, 'w', encoding='utf-8').write(t.replace('- Protocol: PPS/1.2', '- Protocol: PPS/1.1'))
-PYEOF
-printf '
-### D-MIGRATE-001 [active]
-- Date: 2026-08-01
-- Decision: approve
-- Subject: legacy
-- Summary: already used.
-' \
-  >>"$mx_mig/DECISIONS.md"
-bash "$skill/scripts/migrate_project.sh" "$mx_mig" --apply --confirm >/dev/null 2>&1
-[[ -f "$mx_mig/TASK_INDEX.md" ]]
-[[ -f "$mx_mig/MERGES.md" ]]
-[[ -f "$mx_mig/.pps/verify-manifest.txt" ]]
-grep -q '### D-MIGRATE-002 ' "$mx_mig/DECISIONS.md"
-grep -q "D-MIGRATE-002" "$mx_mig/EVENTS.md"
-mx_mig_backup="$(ls -d "$mx_mig/.pps"/migration-backup-* | head -1)"
-bash "$skill/scripts/migrate_project.sh" "$mx_mig" --rollback "$mx_mig_backup" >/dev/null 2>&1
-[[ ! -f "$mx_mig/TASK_INDEX.md" ]]
-[[ ! -f "$mx_mig/MERGES.md" ]]
-[[ ! -f "$mx_mig/.pps/verify-manifest.txt" ]]
-if ! grep -q '### D-MIGRATE-002 ' "$mx_mig/DECISIONS.md"; then :; else
-  echo "rollback left the migration decision behind" >&2; exit 1
+# P0-01 / P1-02: the real 1.1 migration matrix. Every fixture was initialized
+# by the actual PPS/1.1 skill release (v0.3.0), so the migrator faces the
+# files a real old project has: no gate scripts, no EVENTS.md, bare Present
+# coverage, undated proposals, no Red Lines section. The assertion is the
+# FINAL 1.2 state (valid + gated + ready), not "files were created".
+for mig_fixture in \
+  pps-1.1-document-standard \
+  pps-1.1-software-standard \
+  pps-1.1-hybrid-standard \
+  pps-1.1-document-evidence; do
+  mx_mig="$temp_root/mig-$mig_fixture"
+  cp -R "$repo_root/tests/fixtures/$mig_fixture" "$mx_mig"
+  ( cd "$mx_mig" && git init -q &&
+    git add -A &&
+    git -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base >/dev/null )
+  find "$mx_mig" -type f ! -path '*/.git/*' -exec sh -c 'printf "%s %s\n" "$(shasum -a 256 "$1" | awk "{print \$1}")" "${1#'"$mx_mig"'/}"' _ {} \; \
+    | LC_ALL=C sort >"$mx_mig.preapply"
+  bash "$skill/scripts/migrate_project.sh" "$mx_mig" --apply --confirm \
+    >"$temp_root/mig-$mig_fixture.log" 2>&1
+  # Core upgrade must NOT force the multitask layer onto a single-task project.
+  [[ ! -f "$mx_mig/TASK_INDEX.md" ]]
+  [[ ! -f "$mx_mig/MERGES.md" ]]
+  grep -q -- '- Protocol: PPS/1.2' "$mx_mig/PROJECT_STATE.md"
+  head -8 "$mx_mig/AGENTS.md" | grep -q '^## Red Lines$'
+  grep -q "### D-MIGRATE-001 \[active\]" "$mx_mig/DECISIONS.md"
+  grep -q '`D-MIGRATE-001`' "$mx_mig/DECISIONS.md"
+  grep -q 'Decisions: D-MIGRATE-001' "$mx_mig/CONTEXT.md"
+  grep -q 'migration_authorized D-MIGRATE-001' "$mx_mig/EVENTS.md"
+  ! grep -Eq '^\|.*\| Present \|$' "$mx_mig/CONTEXT.md" "$mx_mig/docs/CURRENT_REVIEW_EVIDENCE.md" 2>/dev/null
+  grep -q 'opened 20' "$mx_mig/CONTEXT.md"
+  for required_script in verify_gate project_verify append_event; do
+    [[ -f "$mx_mig/scripts/$required_script.sh" ]]
+    [[ -f "$mx_mig/scripts/$required_script.ps1" ]]
+  done
+  [[ -f "$mx_mig/scripts/pps_evidence.py" ]]
+  # The final 1.2 state must validate, gate, and reach readiness.
+  bash "$mx_mig/scripts/validate_project.sh" "$mx_mig" >/dev/null 2>&1
+  [[ -f "$mx_mig/.pps/verify-stamp" ]]
+  bash "$mx_mig/scripts/readiness_check.sh" --verified "$mx_mig" >/dev/null 2>&1
+  # Rollback restores the pre-apply file set AND byte identity.
+  mx_mig_backup="$(ls -d "$mx_mig/.pps"/migration-backup-* | head -1)"
+  bash "$skill/scripts/migrate_project.sh" "$mx_mig" --rollback "$mx_mig_backup" \
+    >/dev/null 2>&1
+  find "$mx_mig" -type f ! -path '*/.git/*' ! -path '*/.pps/*' -exec sh -c 'printf "%s %s\n" "$(shasum -a 256 "$1" | awk "{print \$1}")" "${1#'"$mx_mig"'/}"' _ {} \; \
+    | LC_ALL=C sort >"$mx_mig.postrollback"
+  diff "$mx_mig.preapply" "$mx_mig.postrollback" >/dev/null
+  grep -q -- '- Protocol: PPS/1.1' "$mx_mig/PROJECT_STATE.md"
+done
+
+# The multitask layer stays an explicit opt-in: --with-multitask creates the
+# registry, the receipt file, and the Writer line; validation still passes.
+mx_mt="$temp_root/mig-multitask"
+cp -R "$repo_root/tests/fixtures/pps-1.1-document-standard" "$mx_mt"
+( cd "$mx_mt" && git init -q && git add -A &&
+  git -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base >/dev/null )
+bash "$skill/scripts/migrate_project.sh" "$mx_mt" --apply --confirm --with-multitask \
+  >"$temp_root/mig-multitask.log" 2>&1
+[[ -f "$mx_mt/TASK_INDEX.md" ]]
+[[ -f "$mx_mt/MERGES.md" ]]
+grep -q '^- Writer: T-001' "$mx_mt/PROJECT_STATE.md"
+bash "$mx_mt/scripts/validate_project.sh" "$mx_mt" >/dev/null 2>&1
+[[ -f "$mx_mt/.pps/verify-stamp" ]]
+
+# A migration that would not validate rolls back automatically instead of
+# leaving a half-migrated project (the bare-Present row survives the standard
+# upgrades and trips the 1/3-manual rule).
+mx_fail="$temp_root/mig-fails"
+cp -R "$repo_root/tests/fixtures/pps-1.1-document-standard" "$mx_fail"
+( cd "$mx_fail" && git init -q && git add -A &&
+  git -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base >/dev/null )
+# A state the migrator cannot repair (no Coverage declaration) must fail
+# validation, trigger the automatic rollback, and never leave a half-1.2
+# project behind.
+sed -i.bak '/^- Coverage:/d' "$mx_fail/PROJECT_STATE.md"
+rm -f "$mx_fail/PROJECT_STATE.md.bak"
+if bash "$skill/scripts/migrate_project.sh" "$mx_fail" --apply --confirm \
+  >"$temp_root/mig-fails.log" 2>&1; then
+  echo "Migration of an unrecoverable 1.1 state incorrectly succeeded." >&2
+  exit 1
 fi
-grep -q -- '- Protocol: PPS/1.1' "$mx_mig/PROJECT_STATE.md"
+grep -q -- '- Protocol: PPS/1.1' "$mx_fail/PROJECT_STATE.md"
+[[ ! -f "$mx_fail/EVENTS.md" ]]
 
 # 050-02: with a broken python3 on PATH the gate falls back to python and
 # still stamps (field machines hit the Store stub exactly this way).
@@ -1568,6 +1641,47 @@ expect_invalid "$temp_root/empty-rejected" \
 expect_invalid "$temp_root/empty-rejected" \
   "without a 'Reason' field" \
   "Rejected receipt without reason"
+
+# P1-03: an 'integrated' receipt must not mask open dispositions, and every
+# non-empty Rejected/Deferred set carries its own Reason/Reactivate When.
+cp -R "$receipt_base" "$temp_root/receipt-mixed-masked"
+write_receipt "$temp_root/receipt-mixed-masked" D-001 "validate_project pass" local-task-output/T-002/real.md PKG-001
+printf 'real drop\n' >"$temp_root/receipt-mixed-masked/local-task-output/T-002/drop.md"
+printf 'real later\n' >"$temp_root/receipt-mixed-masked/local-task-output/T-002/later.md"
+perl -0pi -e 's/(- Accepted: local-task-output\/T-002\/real.md\n)- Rejected: none\n- Deferred: none\n/${1}- Rejected: local-task-output\/T-002\/drop.md\n- Deferred: local-task-output\/T-002\/later.md\n/' \
+  "$temp_root/receipt-mixed-masked/MERGES.md"
+expect_invalid "$temp_root/receipt-mixed-masked" \
+  "still lists Rejected or Deferred paths" \
+  "Integrated receipt masking mixed dispositions"
+expect_invalid "$temp_root/receipt-mixed-masked" \
+  "non-empty Rejected set without a 'Reason' field" \
+  "Mixed receipt missing rejection reason"
+expect_invalid "$temp_root/receipt-mixed-masked" \
+  "non-empty Deferred set without a 'Reactivate When' field" \
+  "Mixed receipt missing reactivation condition"
+
+# The explicit partial state passes with full per-set evidence and a task
+# that stays active until the remainder is resolved.
+cp -R "$receipt_base" "$temp_root/receipt-partial-full"
+perl -0pi -e 's/(### T-002\n- Title: Worker\n- Role: worker\n- Status: )integrated/${1}active/' \
+  "$temp_root/receipt-partial-full/TASK_INDEX.md"
+printf 'real drop\n' >"$temp_root/receipt-partial-full/local-task-output/T-002/drop.md"
+printf 'real later\n' >"$temp_root/receipt-partial-full/local-task-output/T-002/later.md"
+{
+  printf '# Merges\n\n## Merge Receipts\n\n'
+  printf '### MERGE-001\n- Target Package: PKG-001\n- Source Tasks: T-002\n- Relation: absorbs\n- Accepted: local-task-output/T-002/real.md\n- Rejected: local-task-output/T-002/drop.md\n- Deferred: local-task-output/T-002/later.md\n- Base Checkpoint: lineage_incomplete\n- Result Checkpoint: lineage_incomplete\n- Lineage Note: migration per D-001\n- Approval: D-001\n- Verification: validate_project pass\n- Reason: duplicates the accepted artifact.\n- Reactivate When: after the next package closes.\n- Status: partially_integrated\n'
+} >"$temp_root/receipt-partial-full/MERGES.md"
+bash "$temp_root/receipt-partial-full/scripts/validate_project.sh" \
+  "$temp_root/receipt-partial-full" --quiet
+
+# A partially integrated receipt cannot sit under a task the registry calls
+# integrated: the task's own status must stay active.
+cp -R "$temp_root/receipt-partial-full" "$temp_root/receipt-partial-task-done"
+perl -0pi -e 's/(### T-002\n- Title: Worker\n- Role: worker\n- Status: )active/${1}integrated/' \
+  "$temp_root/receipt-partial-task-done/TASK_INDEX.md"
+expect_invalid "$temp_root/receipt-partial-task-done" \
+  "stays active until the remainder is resolved" \
+  "Partially integrated task marked integrated in the registry"
 
 cp -R "$multitask_case" "$temp_root/phantom-refs"
 sed -i.bak 's|^- Methods: none$|- Methods: M-404|; s|^- Components: C-ROOT$|- Components: C-404|' \
