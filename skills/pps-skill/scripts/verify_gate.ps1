@@ -478,9 +478,15 @@ foreach ($lineRaw in [System.IO.File]::ReadAllLines($manifestPath, [System.Text.
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
         $itemProc = [System.Diagnostics.Process]::Start($psi)
         $itemProc.StandardInput.Close()
         if ($itemProc.WaitForExit([int]($itemTimeout * 1000))) {
+            $itemStdOut = $itemProc.StandardOutput.ReadToEnd()
+            $itemStdErr = $itemProc.StandardError.ReadToEnd()
+            if ($itemStdOut) { Write-Host $itemStdOut }
+            if ($itemStdErr) { Write-Host "stderr: $itemStdErr" }
             $itemCode = -1
             if (Test-Path -LiteralPath $exitFile) {
                 $reported = [System.IO.File]::ReadAllText($exitFile).Trim()
