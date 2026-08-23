@@ -186,6 +186,42 @@ if ($insideRepo) {
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($snapshotFile, (($lines -join "`n") + "`n"), $utf8NoBom)
 
+# Objective anchor (anti goal-drift): hash the goal-bearing sections now so
+# the verify gate can prove later that the objective was not silently
+# rewritten mid-session. A goal change without a recorded 'objective-revised'
+# event is drift, not progress.
+function Get-TextSha256([string]$Text) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+function Get-AnchorSection([string]$Title, [string]$Text) {
+    $anchorMatch = [regex]::Match($Text, "(?ms)^##\s+$([regex]::Escape($Title))\s*\r?\n(?<body>.*?)(?=^##\s+|\z)")
+    if ($anchorMatch.Success) { return $anchorMatch.Groups['body'].Value }
+    return ''
+}
+$anchorStateText = [System.IO.File]::ReadAllText(
+    (Join-Path $rootFull 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+$anchorContextText = [System.IO.File]::ReadAllText(
+    (Join-Path $rootFull 'CONTEXT.md'), [System.Text.Encoding]::UTF8)
+$anchorRawText = (Get-AnchorSection 'Objective' $anchorStateText) + "`n" +
+    (Get-AnchorSection 'Current Package' $anchorContextText)
+$anchorNormText = (($anchorRawText -split "`r?`n") |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ -ne '' }) -join "`n"
+$anchorLines = @(
+    "objective_sha256: $(Get-TextSha256 $anchorNormText)",
+    "anchored_at: $nowIso"
+)
+[System.IO.File]::WriteAllText(
+    (Join-Path $snapshotDir 'objective-anchor'),
+    ($anchorLines -join "`n") + "`n",
+    [System.Text.UTF8Encoding]::new($false))
+
 Write-Output '== PPS session begin =='
 Write-Output 'Snapshot: .pps/session-snapshot'
 Write-Output "Started: $nowIso on $deviceName"

@@ -45,6 +45,8 @@ Read [project-modes.md](references/project-modes.md) for mode and large-reposito
 - Git sync and asset materialization are separate. Every `core` and current `supporting` asset must have one `A-*` row and pass handoff verification; cloud rows use non-secret `rclone:REMOTE:path` locators and prove durable-object presence/size; references may remain marker-only.
 - Structural coverage never proves semantic correctness; deployed never proves loaded; unit-green never proves the wired system works. Behavioral end-to-end assertions are legitimate Verify members.
 - The verify gate writes a device-local stamp; readiness requires both the caller's attestation and a stamp matching the current package. The gate executes the project's own `.pps/verify-manifest.txt` and binds the run record hash into the stamp; readiness never executes out-of-repo commands.
+- Every session anchors the objective: `session_begin` hashes the objective-bearing sections into `.pps/objective-anchor`. A mid-session objective change fails the gate unless `EVENTS.md` records an `objective-revised` event. The gate re-surfaces the objective, red lines, and active decisions on every run.
+- Every non-bootstrap PPS/1.2 package declares `Acceptance` items (`A1, A2, ...`) in `CONTEXT.md`, each naming the machine check `(verify: ...)` that proves it; the gate fails any item whose check did not run successfully.
 - Engineering red lines live in the first section of `AGENTS.md` and are read before any edit. Their content is project-specific; the protocol only fixes the position.
 - Malformed decision-shaped text is an error. Do not silently treat it as absent.
 - Never bulk-load a repository because it is large. Start from the resume packet and use targeted search.
@@ -98,8 +100,13 @@ When the user approves, rejects, or modifies:
 4. remove absorbed feedback from the capsule;
 5. update the project map only if an architecture boundary changed;
 6. update coverage with evidence and the next action;
-7. run `scripts/verify_gate.*` (structural validation, gate substance, red-line wiring, handover lock, then the declared project checks; it writes the verify stamp);
+7. run `scripts/verify_gate.*` (objective anchor review, structural validation, gate substance, red-line wiring, acceptance wiring, handover lock, then the declared project checks; it writes the verify stamp);
 8. run full asset handoff/risk checks, then `readiness_check.* --verified`/`-Verified`; readiness rejects a missing or stale stamp.
+
+Changing the objective mid-package is a decision, not an edit: record it with
+`scripts/append_event.* --title "objective-revised ..."` before the gate runs,
+or the gate fails the anchor comparison. If the package is past bootstrap,
+also update the `Acceptance` items so "done" still means something checkable.
 
 The gate is the enforcement point, not a formality: it fails when the session
 snapshot is missing, when a predecessor's uncommitted work was overwritten,
@@ -127,7 +134,7 @@ Run the project-local validator before claiming closure. A clean prose summary i
 - `scripts/asset_check.ps1` and `.sh`: distinguish Git sync from required asset materialization; verify size/hash and tracked-binary risk.
 - `scripts/verify_gate.ps1` and `.sh`: one entry for structural validation plus declared project checks; writes the device-local verify stamp.
 - `scripts/append_event.ps1` and `.sh`: append a format-stable event line for the current package.
-- `scripts/session_begin.ps1` and `.sh`: run this **before writing anything** in a session. It records `.pps/session-snapshot` (the dirty paths and their content hashes at session start), so a wholesale overwrite of a predecessor's uncommitted work becomes detectable. A second session over an unexpired snapshot needs `--takeover` / `-Takeover`, which must then be recorded as an event.
+- `scripts/session_begin.ps1` and `.sh`: run this **before writing anything** in a session. It records `.pps/session-snapshot` (the dirty paths and their content hashes at session start), so a wholesale overwrite of a predecessor's uncommitted work becomes detectable, and writes `.pps/objective-anchor` (the hash of the objective-bearing sections), so a silently rewritten goal fails the gate. A second session over an unexpired snapshot needs `--takeover` / `-Takeover`, which must then be recorded as an event.
 - `scripts/boundary_check.ps1` and `.sh`: classify every worktree change as claimed by a Write set / task output root, or flag it as an `unclaimed_write`. It also fails with `protected_overwrite` when a path that carried uncommitted work at session start has changed; discard that work deliberately with `--discard-handover PATH` / `-DiscardHandover PATH` and record the discard.
 - `scripts/readiness_check.ps1` and `.sh`: combine structural, asset, verify-stamp, and caller-attested project verification without auto-executing untrusted commands.
 - `scripts/validate_skill.ps1` and `.sh`: verify an installed skill bundle without repository tooling.

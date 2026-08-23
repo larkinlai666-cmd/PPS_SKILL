@@ -2709,6 +2709,13 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     # --- Necessary-path fixtures (D-CORE-012..020) -------------------------
     $gateNoSnapshot = Join-Path $tempRoot "gate-no-snapshot-case"
     Copy-Item -LiteralPath $software -Destination $gateNoSnapshot -Recurse
+    # The objective anchor comes from the same session_begin run; deleting
+    # only the snapshot isolates the relay check from the anchor check.
+    $noSnapshotSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gateNoSnapshot 'scripts/session_begin.ps1') `
+            -Root $gateNoSnapshot 2>&1
+    }
     foreach ($leftover in @('.pps/session-snapshot', '.pps/verify-stamp')) {
         $leftoverPath = Join-Path $gateNoSnapshot $leftover
         if (Test-Path -LiteralPath $leftoverPath) { Remove-Item -LiteralPath $leftoverPath }
@@ -3196,6 +3203,11 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         (Join-Path $hollowGateCase "scripts/project_verify.ps1"), "exit 0`n", $utf8NoBom)
     $hollowStamp = Join-Path $hollowGateCase '.pps/verify-stamp'
     if (Test-Path -LiteralPath $hollowStamp) { Remove-Item -LiteralPath $hollowStamp }
+    Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $hollowGateCase 'scripts/session_begin.ps1') `
+            -Root $hollowGateCase 2>&1
+    } | Out-Null
     $hollowResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $hollowGateCase 'scripts/verify_gate.ps1') `
@@ -3234,6 +3246,11 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         (Join-Path $structOnlyCase "scripts/project_verify.ps1"), $structEntry + "`n", $utf8NoBom)
     $structStamp = Join-Path $structOnlyCase '.pps/verify-stamp'
     if (Test-Path -LiteralPath $structStamp) { Remove-Item -LiteralPath $structStamp }
+    Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $structOnlyCase 'scripts/session_begin.ps1') `
+            -Root $structOnlyCase 2>&1
+    } | Out-Null
     $structResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $structOnlyCase 'scripts/verify_gate.ps1') `
@@ -3676,6 +3693,204 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $placementValid = Run-Validator $eventPlacementCase
     if ($placementValid.Code -ne 0) {
         throw "Event placement project failed validation: $($placementValid.Text)"
+    }
+
+    # ==== 051 anti-drift fixtures: objective anchor + acceptance wiring ====
+    # The objective anchor turns "the goal moved while nobody recorded it"
+    # into a gate failure; acceptance items turn "done" into executed checks.
+
+    # 051-01: session_begin anchors the objective; the gate stamps it.
+    $anchorCase = Join-Path $tempRoot 'anchor-case'
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill 'scripts/init_project.ps1') `
+        -ProjectName anchor-case -Profile standard -ParentDir $tempRoot -NoGit
+    if ($LASTEXITCODE -ne 0) { throw 'anchor-case initialization failed.' }
+    $anchorSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $anchorCase 'scripts/session_begin.ps1') -Root $anchorCase
+    }
+    if ($anchorSession.Code -ne 0) { throw "anchor-case session_begin failed: $($anchorSession.Text)" }
+    $anchorFile = Join-Path $anchorCase '.pps/objective-anchor'
+    if (-not (Test-Path -LiteralPath $anchorFile -PathType Leaf)) {
+        throw 'session_begin did not write .pps/objective-anchor.'
+    }
+    $anchorFileText = [System.IO.File]::ReadAllText($anchorFile, [System.Text.Encoding]::UTF8)
+    if ($anchorFileText -notmatch '(?m)^objective_sha256: [0-9a-f]{64}\s*$') {
+        throw 'objective-anchor has no 64-hex sha256.'
+    }
+    $anchorGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $anchorCase 'scripts/verify_gate.ps1') -Root $anchorCase
+    }
+    if ($anchorGate.Code -ne 0) { throw "anchor-case gate failed: $($anchorGate.Text)" }
+    $anchorStamp = [System.IO.File]::ReadAllText(
+        (Join-Path $anchorCase '.pps/verify-stamp'), [System.Text.Encoding]::UTF8)
+    if ($anchorStamp -notmatch '(?m)^objective_sha256: [0-9a-f]{64}\s*$') {
+        throw 'verify stamp did not record objective_sha256.'
+    }
+
+    # 051-02: a silently rewritten objective fails the gate (no event recorded).
+    $driftCase = Join-Path $tempRoot 'drift-case'
+    Copy-Item -LiteralPath $standard -Destination $driftCase -Recurse
+    $driftSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $driftCase 'scripts/session_begin.ps1') -Root $driftCase
+    }
+    if ($driftSession.Code -ne 0) { throw "drift-case session_begin failed: $($driftSession.Text)" }
+    $driftState = [System.IO.File]::ReadAllText(
+        (Join-Path $driftCase 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+    $driftState = [regex]::Replace(
+        $driftState,
+        '(?m)^(##\s+Objective\s*\r?\n)',
+        '$1' + "DRIFT: quietly expanded scope beyond the anchor.`r`n`r`n",
+        1)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $driftCase 'PROJECT_STATE.md'), $driftState, $utf8NoBom)
+    $driftGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $driftCase 'scripts/verify_gate.ps1') -Root $driftCase
+    }
+    if ($driftGate.Code -eq 0) {
+        throw 'A silently rewritten objective passed the gate without an event.'
+    }
+    if ($driftGate.Text -notmatch 'objective anchor mismatch') {
+        throw "Drift gate failed without the anchor diagnostic: $($driftGate.Text)"
+    }
+
+    # 051-03: a recorded objective-revised event legitimizes the change and
+    # refreshes the anchor to the revised objective.
+    $revisedCase = Join-Path $tempRoot 'revised-case'
+    Copy-Item -LiteralPath $standard -Destination $revisedCase -Recurse
+    $revisedSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $revisedCase 'scripts/session_begin.ps1') -Root $revisedCase
+    }
+    if ($revisedSession.Code -ne 0) { throw "revised-case session_begin failed: $($revisedSession.Text)" }
+    $revisedState = [System.IO.File]::ReadAllText(
+        (Join-Path $revisedCase 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+    $revisedState = [regex]::Replace(
+        $revisedState,
+        '(?m)^(##\s+Objective\s*\r?\n)',
+        '$1' + "Revised objective, recorded in the chronicle.`r`n`r`n",
+        1)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $revisedCase 'PROJECT_STATE.md'), $revisedState, $utf8NoBom)
+    $revisedEvent = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $revisedCase 'scripts/append_event.ps1') `
+            -Root $revisedCase `
+            -Title 'objective-revised: the scope was deliberately expanded' `
+            -Files 'PROJECT_STATE.md' `
+            -Verify 'manual' `
+            -Pending 'review the revised objective'
+    }
+    if ($revisedEvent.Code -ne 0) { throw "revised-case append_event failed: $($revisedEvent.Text)" }
+    $revisedGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $revisedCase 'scripts/verify_gate.ps1') -Root $revisedCase
+    }
+    if ($revisedGate.Code -ne 0) { throw "revised-case gate failed: $($revisedGate.Text)" }
+    $revisedAnchor = [System.IO.File]::ReadAllText(
+        (Join-Path $revisedCase '.pps/objective-anchor'), [System.Text.Encoding]::UTF8)
+    $revisedStamp = [System.IO.File]::ReadAllText(
+        (Join-Path $revisedCase '.pps/verify-stamp'), [System.Text.Encoding]::UTF8)
+    $anchorHashMatch = [regex]::Match($revisedAnchor, '(?m)^objective_sha256:\s*(\S+)\s*$')
+    $stampHashMatch = [regex]::Match($revisedStamp, '(?m)^objective_sha256:\s*(\S+)\s*$')
+    if (-not $anchorHashMatch.Success -or -not $stampHashMatch.Success -or
+        $anchorHashMatch.Groups[1].Value -ne $stampHashMatch.Groups[1].Value) {
+        throw 'The refreshed anchor and the stamp disagree on the objective hash.'
+    }
+
+    # 051-04: a non-bootstrap package without Acceptance fails validation.
+    $noAcceptanceCase = Join-Path $tempRoot 'no-acceptance-case'
+    Copy-Item -LiteralPath $standard -Destination $noAcceptanceCase -Recurse
+    $noAcceptanceState = [System.IO.File]::ReadAllText(
+        (Join-Path $noAcceptanceCase 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+    $noAcceptanceState = [regex]::Replace(
+        $noAcceptanceState,
+        '(?m)^-\s+Stage: 0 / bootstrap\s*$',
+        '- Stage: 1 / package',
+        1)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $noAcceptanceCase 'PROJECT_STATE.md'), $noAcceptanceState, $utf8NoBom)
+    $noAcceptanceContext = [System.IO.File]::ReadAllText(
+        (Join-Path $noAcceptanceCase 'CONTEXT.md'), [System.Text.Encoding]::UTF8)
+    $noAcceptanceContext = [regex]::Replace(
+        $noAcceptanceContext,
+        '(?m)^- Acceptance:\s*\r?\n(\s+- A1:.*\r?\n)',
+        '',
+        1)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $noAcceptanceCase 'CONTEXT.md'), $noAcceptanceContext, $utf8NoBom)
+    $noAcceptanceValid = Run-Validator $noAcceptanceCase
+    if ($noAcceptanceValid.Code -eq 0) {
+        throw 'A non-bootstrap package without Acceptance passed validation.'
+    }
+    if ($noAcceptanceValid.Text -notmatch "requires an 'Acceptance' field") {
+        throw "Acceptance absence failed without the diagnostic: $($noAcceptanceValid.Text)"
+    }
+
+    # 051-05: an acceptance item naming a check that never ran fails the gate.
+    $unwiredCase = Join-Path $tempRoot 'unwired-case'
+    Copy-Item -LiteralPath $standard -Destination $unwiredCase -Recurse
+    $unwiredState = [System.IO.File]::ReadAllText(
+        (Join-Path $unwiredCase 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+    $unwiredState = [regex]::Replace(
+        $unwiredState,
+        '(?m)^-\s+Stage: 0 / bootstrap\s*$',
+        '- Stage: 1 / package',
+        1)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $unwiredCase 'PROJECT_STATE.md'), $unwiredState, $utf8NoBom)
+    $unwiredContext = [System.IO.File]::ReadAllText(
+        (Join-Path $unwiredCase 'CONTEXT.md'), [System.Text.Encoding]::UTF8)
+    $unwiredContext = $unwiredContext.Replace('(verify: validate_project)', '(verify: ghost-check-404)')
+    [System.IO.File]::WriteAllText(
+        (Join-Path $unwiredCase 'CONTEXT.md'), $unwiredContext, $utf8NoBom)
+    $unwiredSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $unwiredCase 'scripts/session_begin.ps1') -Root $unwiredCase
+    }
+    if ($unwiredSession.Code -ne 0) { throw "unwired-case session_begin failed: $($unwiredSession.Text)" }
+    $unwiredGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $unwiredCase 'scripts/verify_gate.ps1') -Root $unwiredCase
+    }
+    if ($unwiredGate.Code -eq 0) {
+        throw 'An acceptance item wired to a check that never ran passed the gate.'
+    }
+    if ($unwiredGate.Text -notmatch 'acceptance not wired to an executed check') {
+        throw "Unwired acceptance failed without the diagnostic: $($unwiredGate.Text)"
+    }
+
+    # 051-06: an acceptance item wired to a real manifest check id passes.
+    $wiredCase = Join-Path $tempRoot 'wired-case'
+    Copy-Item -LiteralPath $standard -Destination $wiredCase -Recurse
+    $wiredState = [System.IO.File]::ReadAllText(
+        (Join-Path $wiredCase 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+    $wiredState = [regex]::Replace(
+        $wiredState,
+        '(?m)^-\s+Stage: 0 / bootstrap\s*$',
+        '- Stage: 1 / package',
+        1)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $wiredCase 'PROJECT_STATE.md'), $wiredState, $utf8NoBom)
+    $wiredContext = [System.IO.File]::ReadAllText(
+        (Join-Path $wiredCase 'CONTEXT.md'), [System.Text.Encoding]::UTF8)
+    $wiredContext = $wiredContext.Replace('(verify: validate_project)', '(verify: M-001)')
+    [System.IO.File]::WriteAllText(
+        (Join-Path $wiredCase 'CONTEXT.md'), $wiredContext, $utf8NoBom)
+    $wiredSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $wiredCase 'scripts/session_begin.ps1') -Root $wiredCase
+    }
+    if ($wiredSession.Code -ne 0) { throw "wired-case session_begin failed: $($wiredSession.Text)" }
+    $wiredGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $wiredCase 'scripts/verify_gate.ps1') -Root $wiredCase
+    }
+    if ($wiredGate.Code -ne 0) {
+        throw "wired-case gate failed: $($wiredGate.Text)"
     }
 
     Write-Host "PPS PowerShell smoke tests: OK"

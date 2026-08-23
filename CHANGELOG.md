@@ -4,6 +4,53 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-23
+
+Anti-drift reinforcement while keeping the protocol's core stance: no
+runtime dependencies, no generated content, fail-loud machine checks, and
+full 1.1/1.2 backward compatibility. The goal-bearing sections are now
+anchored at session start, the gate re-surfaces the objective on every run,
+and "done" is declared as checkable acceptance items.
+
+### Added
+
+- **Objective anchor**: `session_begin.*` writes `.pps/objective-anchor` (the
+  SHA-256 of `PROJECT_STATE.md` Objective + `CONTEXT.md` Current Package,
+  blank lines dropped). The verify gate compares the current sections against
+  the anchor and fails a silent rewrite unless `EVENTS.md` records an
+  `objective-revised`/`goal-revised` event (which refreshes the anchor).
+  software/hybrid fail hard on a missing anchor; document warns. The stamp
+  records `objective_sha256`.
+- **Anchor review ritual**: every gate run re-surfaces the anchored
+  objective, the AGENTS.md red lines, and the active decision IDs before
+  anything is stamped — a forced re-read at the only unskippable checkpoint,
+  PPS's protocol-level answer to context rot (no fresh-context subagents,
+  no token cost).
+- **Acceptance field**: `CONTEXT.md` Current Package declares `A1, A2, ...`
+  items, each naming what "done" means and a machine check `(verify: ...)`.
+  The validator requires the field on non-bootstrap PPS/1.2 packages
+  (bootstrap exempt; template ships one A1). The gate fails any item whose
+  token — PPS gate name, manifest check id, executed path, or `manual` kept
+  in Hot State Next — did not run successfully on this platform.
+- **Migrator parity**: both migrators inject a gate-bound A1 item into
+  migrated 1.1 capsules, so real 1.1 projects complete migration without
+  inheriting the anti-drift hole.
+- **Test coverage**: 051 fixtures on both platforms — anchor write + stamp
+  record, silent objective rewrite fails the gate, recorded
+  `objective-revised` event passes and refreshes the anchor, non-bootstrap
+  package without Acceptance fails validation, unwired acceptance fails the
+  gate, manifest-wired acceptance passes.
+
+### Changed
+
+- Templates, [protocol.md](skills/pps-skill/references/protocol.md),
+  [SKILL.md](skills/pps-skill/SKILL.md), and
+  [retrieval-and-gates.md](skills/pps-skill/references/retrieval-and-gates.md)
+  document the anchor, the review ritual, and the acceptance grammar.
+- [design-rationale.md](skills/pps-skill/references/design-rationale.md)
+  records the distillation: external context-rot / goal-drift insights are
+  redefined as PPS protocol invariants, not integrated runtime mechanisms.
+
 ## [0.5.2] - 2026-08-23
 
 Deep adversarial review round three (PPS-AUDIT-20260823-V3). The reviewer

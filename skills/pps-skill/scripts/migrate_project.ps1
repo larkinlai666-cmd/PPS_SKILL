@@ -383,6 +383,17 @@ function Invoke-Apply {
             '(?m)^-\s+Decisions:\s*none\s*$',
             '- Decisions: ' + $decisionId,
             1)
+        # The 1.2 validator requires Current Package to declare what "done"
+        # means. A migrated 1.1 capsule has a Goal but no acceptance items;
+        # inject one bound to the gate itself so the migrated project
+        # validates honestly instead of inheriting an anti-drift hole.
+        if ($contextText -notmatch '(?m)^-\s+Acceptance:\s*$') {
+            $contextText = [regex]::Replace(
+                $contextText,
+                '(?m)^(-\s+Goal:.*)$',
+                '$1' + "`n- Acceptance:`n  - A1: Migrated package passes structural validation and the verify gate (verify: validate_project).",
+                1)
+        }
         Write-Utf8 $contextPath $contextText
     }
     # Manual evidence must stay openly pending in Hot State Next.

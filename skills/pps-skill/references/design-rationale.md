@@ -39,6 +39,8 @@ This distinction matters:
 
 PPS performance and reliability gains must therefore be demonstrated by its local retrieval model, bounded workset, validators, and tests. They cannot be justified by retaining an external workflow reference.
 
+The objective anchor and acceptance fields are one such distillation. External workflows fight context rot with fresh-context subagents and fight goal drift with generated specs — both runtime-shaped mechanisms PPS cannot host. PPS redefines the same insights as protocol invariants: `session_begin` hashes the goal-bearing sections into `.pps/objective-anchor`, the gate compares against it and refuses an unrecorded rewrite, the gate re-surfaces objective, red lines, and active decisions on every run (a forced re-read at the only unskippable checkpoint), and `Acceptance` binds each item of "done" to a check the gate proves ran. The principle is adopted; the machinery is PPS's own.
+
 ## Validation principles
 
 - machine-readable state boundaries;

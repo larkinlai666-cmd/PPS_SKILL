@@ -55,6 +55,14 @@
 - [ ] Test installation and use across additional AI agent environments
 - [ ] Add optional bounded symbol anchors without creating an index service
 
+## 0.6 — Anti-drift reinforcement
+
+- [x] Objective anchor: `session_begin` hashes the objective-bearing sections into `.pps/objective-anchor`; the verify gate fails a silent rewrite unless `EVENTS.md` records an `objective-revised`/`goal-revised` event, which refreshes the anchor
+- [x] Anchor review ritual: every gate run re-surfaces the objective, red lines, and active decisions before stamping
+- [x] Acceptance items in `CONTEXT.md`: non-bootstrap PPS/1.2 packages declare `A1, A2, ...` "done" criteria, each bound to a machine check the gate proves ran
+- [x] Migrator parity: migrated 1.1 capsules gain a gate-bound A1 item
+- [x] 051 anti-drift fixtures on both platforms (anchor write, silent-rewrite failure, recorded-revision pass, acceptance absence, unwired and wired acceptance)
+
 ## Long-term principles
 
 - Keep Markdown and Git as the default substrate.

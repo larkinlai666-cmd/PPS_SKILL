@@ -1819,6 +1819,10 @@ grep -q 'unclaimed_write: DECISIONS.md' "$temp_root/boundary-canonical.out"
 # --- Necessary-path fixtures (D-CORE-012..020) -----------------------------
 gate_no_snapshot_case="$temp_root/gate-no-snapshot-case"
 cp -R "$temp_root/software-case" "$gate_no_snapshot_case"
+# The objective anchor comes from the same session_begin run; deleting only
+# the snapshot isolates the relay check from the anchor check.
+bash "$gate_no_snapshot_case/scripts/session_begin.sh" "$gate_no_snapshot_case" \
+  >/dev/null 2>&1 || true
 rm -f "$gate_no_snapshot_case/.pps/session-snapshot" "$gate_no_snapshot_case/.pps/verify-stamp"
 set +e
 bash "$gate_no_snapshot_case/scripts/verify_gate.sh" "$gate_no_snapshot_case" \
@@ -2179,6 +2183,7 @@ cp -R "$temp_root/software-case" "$hollow_gate_case"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$hollow_gate_case/scripts/project_verify.sh"
 chmod +x "$hollow_gate_case/scripts/project_verify.sh"
 rm -f "$hollow_gate_case/.pps/verify-stamp"
+bash "$hollow_gate_case/scripts/session_begin.sh" "$hollow_gate_case" >/dev/null 2>&1 || true
 set +e
 bash "$hollow_gate_case/scripts/verify_gate.sh" "$hollow_gate_case" \
   >"$temp_root/hollow-gate.out" 2>&1
@@ -2200,6 +2205,7 @@ cp -R "$temp_root/software-case" "$struct_only_case"
 } >"$struct_only_case/scripts/project_verify.sh"
 chmod +x "$struct_only_case/scripts/project_verify.sh"
 rm -f "$struct_only_case/.pps/verify-stamp"
+bash "$struct_only_case/scripts/session_begin.sh" "$struct_only_case" >/dev/null 2>&1 || true
 set +e
 bash "$struct_only_case/scripts/verify_gate.sh" "$struct_only_case" \
   >"$temp_root/struct-only.out" 2>&1
@@ -2532,5 +2538,126 @@ awk '
 }
 bash "$event_placement_case/scripts/validate_project.sh" \
   "$event_placement_case" --quiet
+
+# ==== 051 anti-drift fixtures: objective anchor + acceptance wiring =========
+# The objective anchor turns "the goal moved while nobody recorded it" into a
+# gate failure, and acceptance items turn "done" into executed checks.
+
+# 051-01: session_begin anchors the objective; the gate stamps it.
+anchor_case="$temp_root/anchor-case"
+bash "$skill/scripts/init_project.sh" anchor-case \
+  --profile standard --parent "$temp_root" --no-git >/dev/null
+bash "$anchor_case/scripts/session_begin.sh" "$anchor_case" >/dev/null
+[[ -f "$anchor_case/.pps/objective-anchor" ]] || {
+  echo "session_begin did not write .pps/objective-anchor." >&2
+  exit 1
+}
+grep -q '^objective_sha256: [0-9a-f]\{64\}$' "$anchor_case/.pps/objective-anchor" || {
+  echo "objective-anchor has no 64-hex sha256." >&2
+  exit 1
+}
+bash "$anchor_case/scripts/verify_gate.sh" "$anchor_case" >/dev/null
+grep -q '^objective_sha256: [0-9a-f]\{64\}$' "$anchor_case/.pps/verify-stamp" || {
+  echo "verify stamp did not record objective_sha256." >&2
+  exit 1
+}
+
+# 051-02: a silently rewritten objective fails the gate (no event recorded).
+drift_case="$temp_root/drift-case"
+cp -R "$temp_root/standard-case" "$drift_case"
+bash "$drift_case/scripts/session_begin.sh" "$drift_case" >/dev/null
+awk '
+  $0 == "## Objective" { inside=1; print; print ""; print "DRIFT: quietly expanded scope beyond the anchor."; next }
+  inside && /^## / { inside=0 }
+  { print }
+' "$drift_case/PROJECT_STATE.md" > "$drift_case/PROJECT_STATE.md.new"
+mv "$drift_case/PROJECT_STATE.md.new" "$drift_case/PROJECT_STATE.md"
+set +e
+bash "$drift_case/scripts/verify_gate.sh" "$drift_case" \
+  >"$temp_root/drift-case.out" 2>&1
+drift_code=$?
+set -e
+[[ "$drift_code" != "0" ]]
+grep -q 'objective anchor mismatch' "$temp_root/drift-case.out"
+
+# 051-03: a recorded objective-revised event legitimizes the change and
+# refreshes the anchor to the revised objective.
+revised_case="$temp_root/revised-case"
+cp -R "$temp_root/standard-case" "$revised_case"
+bash "$revised_case/scripts/session_begin.sh" "$revised_case" >/dev/null
+awk '
+  $0 == "## Objective" { inside=1; print; print ""; print "Revised objective, recorded in the chronicle."; next }
+  inside && /^## / { inside=0 }
+  { print }
+' "$revised_case/PROJECT_STATE.md" > "$revised_case/PROJECT_STATE.md.new"
+mv "$revised_case/PROJECT_STATE.md.new" "$revised_case/PROJECT_STATE.md"
+bash "$revised_case/scripts/append_event.sh" "$revised_case" \
+  --title "objective-revised: the scope was deliberately expanded" \
+  --files "PROJECT_STATE.md" \
+  --verify "manual" \
+  --pending "review the revised objective" >/dev/null
+bash "$revised_case/scripts/verify_gate.sh" "$revised_case" >/dev/null
+$PY3 - "$revised_case" <<'PYEOF'
+import hashlib, sys
+root = sys.argv[1]
+def section(path, title):
+    inside = False
+    out = []
+    for line in open(path, encoding='utf-8'):
+        stripped = line.strip()
+        if stripped == '## ' + title:
+            inside = True
+            continue
+        if inside and line.startswith('## '):
+            break
+        if inside:
+            out.append(line)
+    return ''.join(out)
+text = section(root + '/PROJECT_STATE.md', 'Objective') + section(root + '/CONTEXT.md', 'Current Package')
+norm = ''.join(l for l in text.splitlines(True) if l.strip())
+# The shell side hashes the command-substitution value, which strips all
+# trailing newlines; mirror that here.
+norm = norm.rstrip('\n')
+h = hashlib.sha256(norm.encode('utf-8')).hexdigest()
+anchor = open(root + '/.pps/objective-anchor').read()
+assert ('objective_sha256: ' + h) in anchor, 'anchor was not refreshed to the revised objective'
+PYEOF
+
+# 051-04: a non-bootstrap package without Acceptance fails validation.
+no_acceptance_case="$temp_root/no-acceptance-case"
+cp -R "$temp_root/standard-case" "$no_acceptance_case"
+sed -i.bak 's/^- Stage: 0 \/ bootstrap$/- Stage: 1 \/ package/' \
+  "$no_acceptance_case/PROJECT_STATE.md"
+perl -0pi -e 's/\n- Acceptance:\n  - A1:.*\n//' \
+  "$no_acceptance_case/CONTEXT.md"
+expect_invalid "$no_acceptance_case" \
+  "requires an 'Acceptance' field in Current Package" \
+  "Non-bootstrap package without Acceptance"
+
+# 051-05: an acceptance item naming a check that never ran fails the gate.
+unwired_case="$temp_root/unwired-case"
+cp -R "$temp_root/standard-case" "$unwired_case"
+sed -i.bak 's/^- Stage: 0 \/ bootstrap$/- Stage: 1 \/ package/' \
+  "$unwired_case/PROJECT_STATE.md"
+sed -i.bak 's/(verify: validate_project)/(verify: ghost-check-404)/' \
+  "$unwired_case/CONTEXT.md"
+bash "$unwired_case/scripts/session_begin.sh" "$unwired_case" >/dev/null
+set +e
+bash "$unwired_case/scripts/verify_gate.sh" "$unwired_case" \
+  >"$temp_root/unwired-case.out" 2>&1
+unwired_code=$?
+set -e
+[[ "$unwired_code" != "0" ]]
+grep -q 'acceptance not wired to an executed check' "$temp_root/unwired-case.out"
+
+# 051-06: an acceptance item wired to a real manifest check id passes.
+wired_case="$temp_root/wired-case"
+cp -R "$temp_root/standard-case" "$wired_case"
+sed -i.bak 's/^- Stage: 0 \/ bootstrap$/- Stage: 1 \/ package/' \
+  "$wired_case/PROJECT_STATE.md"
+sed -i.bak 's/(verify: validate_project)/(verify: M-001)/' \
+  "$wired_case/CONTEXT.md"
+bash "$wired_case/scripts/session_begin.sh" "$wired_case" >/dev/null
+bash "$wired_case/scripts/verify_gate.sh" "$wired_case" >/dev/null
 
 echo "PPS Bash smoke tests: OK"

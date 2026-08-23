@@ -317,6 +317,25 @@ apply() {
       { print }
     ' "$context" > "$context.new"
     mv "$context.new" "$context"
+    # The 1.2 validator requires Current Package to declare what "done"
+    # means. A migrated 1.1 capsule has a Goal but no acceptance items;
+    # inject one bound to the gate itself so the migrated project validates
+    # honestly instead of inheriting an anti-drift hole.
+    if ! grep -Eq '^-[[:space:]]*Acceptance:' "$context"; then
+      awk '
+        $0 ~ /^##[[:space:]]+Current Package[[:space:]]*$/ { inside = 1; print; next }
+        inside && /^##[[:space:]]/ { inside = 0 }
+        inside && index($0, "- Goal:") == 1 && !added {
+          print
+          print "- Acceptance:"
+          print "  - A1: Migrated package passes structural validation and the verify gate (verify: validate_project)."
+          added = 1
+          next
+        }
+        { print }
+      ' "$context" > "$context.new"
+      mv "$context.new" "$context"
+    fi
   fi
   # Manual coverage evidence must stay openly pending: restate the upgraded
   # IDs in Hot State Next so the honest manual path validates.

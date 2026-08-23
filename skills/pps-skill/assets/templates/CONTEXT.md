@@ -18,6 +18,8 @@
 
 - ID: PKG-001
 - Goal: Convert the bootstrap placeholder into the first concrete review package.
+- Acceptance:
+  - A1: Objective and acceptance criteria are explicit and machine-checkable (verify: validate_project).
 - Output anchor: `{{MAIN_ARTIFACT}}`
 - Allowed change: Objective, scope, and initial artifact structure.
 - Forbidden change: Active authority without an explicit status update.

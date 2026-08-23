@@ -561,6 +561,64 @@ $manifestCoverage = Get-SectionField $worksetText $contextText 'Workset Manifest
 $currentPackageText = Get-Section $contextText 'Current Package'
 $contextPackage = Get-SectionField $currentPackageText $contextText 'Current Package' 'ID'
 
+# Objective acceptance (PPS/1.2 anti goal-drift): the Current Package must
+# declare what "done" means in checkable terms. A Goal with no acceptance
+# items is drift with extra steps: the agent redefines "done" as it goes.
+# Bootstrap packages are exempt because the objective is not confirmed yet.
+$acceptanceFieldMatches = [regex]::Matches($currentPackageText, '(?m)^-\s+Acceptance:\s*$')
+$isBootstrapStage = (-not [string]::IsNullOrWhiteSpace($stage)) -and ($stage -like '*bootstrap*')
+if ($isPps12) {
+    if ($acceptanceFieldMatches.Count -eq 0) {
+        if (-not $isBootstrapStage) {
+            Add-ValidationError "PPS/1.2 requires an 'Acceptance' field in Current Package; declare A-* acceptance items, each with a machine check '(verify: ...)', or return the package to bootstrap stage."
+        }
+    } elseif ($acceptanceFieldMatches.Count -eq 1) {
+        $acceptanceItems = @([regex]::Matches($currentPackageText, '(?m)^\s*-\s*(A[0-9]+):\s*(.*?)\s*$') | ForEach-Object {
+            $_.Groups[1].Value + ':' + $_.Groups[2].Value
+        })
+        $acceptanceCount = $acceptanceItems.Count
+        if (-not $isBootstrapStage) {
+            if ($acceptanceCount -lt 1) {
+                Add-ValidationError "Current Package Acceptance is empty; declare at least one A-* item naming what 'done' means and the check that proves it."
+            }
+        }
+        $expectedAcceptanceSeq = @()
+        for ($seqIndex = 1; $seqIndex -le $acceptanceCount; $seqIndex++) {
+            $expectedAcceptanceSeq += ('A' + $seqIndex)
+        }
+        $actualAcceptanceSeq = @($acceptanceItems | ForEach-Object { ($_ -split ':', 2)[0] })
+        if ($acceptanceCount -gt 0) {
+            $acceptanceSeqOk = ($expectedAcceptanceSeq.Count -eq $actualAcceptanceSeq.Count)
+            if ($acceptanceSeqOk) {
+                for ($seqIndex = 0; $seqIndex -lt $expectedAcceptanceSeq.Count; $seqIndex++) {
+                    if ($expectedAcceptanceSeq[$seqIndex] -ne $actualAcceptanceSeq[$seqIndex]) {
+                        $acceptanceSeqOk = $false
+                        break
+                    }
+                }
+            }
+            if (-not $acceptanceSeqOk) {
+                Add-ValidationError "Acceptance items must be numbered A1, A2, ... without gaps, found $($actualAcceptanceSeq -join ' ')."
+            }
+        }
+        foreach ($acceptanceItem in $acceptanceItems) {
+            $acceptanceItemParts = $acceptanceItem -split ':', 2
+            $acceptanceItemId = $acceptanceItemParts[0]
+            $acceptanceItemText = $acceptanceItemParts[1]
+            if ([string]::IsNullOrWhiteSpace($acceptanceItemText)) {
+                Add-ValidationError "Acceptance item $acceptanceItemId has no description; state what 'done' means for this item."
+            }
+            if (-not $isBootstrapStage) {
+                if ($acceptanceItemText -notmatch '\(verify:\s*[^)]+\)') {
+                    Add-ValidationError "Acceptance item $acceptanceItemId has no '(verify: ...)' reference; an acceptance that names no machine check cannot be proved by the gate."
+                }
+            }
+        }
+    } else {
+        Add-ValidationError "Expected at most one 'Acceptance' field in 'Current Package', found $($acceptanceFieldMatches.Count)."
+    }
+}
+
 $requiredIds = @()
 $requiredIds += Get-ManifestIds $methodsValue 'M' 'Methods'
 $requiredIds += Get-ManifestIds $factsValue 'F' 'Facts'

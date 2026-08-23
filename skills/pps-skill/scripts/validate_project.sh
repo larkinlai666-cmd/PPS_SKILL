@@ -723,6 +723,49 @@ require_section_field "$workset" "$context" "Workset Manifest" Coverage; manifes
 require_single_section "$context" "Current Package"; current_package="$result"
 require_section_field "$current_package" "$context" "Current Package" ID; context_package="$result"
 
+# Objective acceptance (PPS/1.2 anti goal-drift): the Current Package must
+# declare what "done" means in checkable terms. A Goal with no acceptance
+# items is drift with extra steps: the agent redefines "done" as it goes.
+# Bootstrap packages are exempt because the objective is not confirmed yet;
+# the template still ships one A1 item so the field shape is visible.
+acceptance_field_count="$(printf '%s\n' "$current_package" | grep -Ec '^-[[:space:]]*Acceptance:[[:space:]]*$' || true)"
+if (( is_pps12 == 1 )); then
+  if [[ "$acceptance_field_count" == "0" ]]; then
+    if [[ "$stage" != *"bootstrap"* ]]; then
+      add_error "PPS/1.2 requires an 'Acceptance' field in Current Package; declare A-* acceptance items, each with a machine check '(verify: ...)', or return the package to bootstrap stage."
+    fi
+  elif [[ "$acceptance_field_count" == "1" ]]; then
+    acceptance_items="$(printf '%s\n' "$current_package" |
+      sed -n 's/^[[:space:]]*-[[:space:]]*\(A[0-9][0-9]*\):[[:space:]]*\(.*\)$/\1:\2/p')"
+    acceptance_count="$(printf '%s\n' "$acceptance_items" | sed '/^$/d' | wc -l | tr -d ' ')"
+    if [[ "$stage" != *"bootstrap"* ]]; then
+      (( acceptance_count >= 1 )) ||
+        add_error "Current Package Acceptance is empty; declare at least one A-* item naming what 'done' means and the check that proves it."
+    fi
+    expected_acceptance_seq="$(awk -v n="$acceptance_count" 'BEGIN { for (i = 1; i <= n; i++) print "A" i }')"
+    actual_acceptance_seq="$(printf '%s\n' "$acceptance_items" | sed '/^$/d' | cut -d: -f1)"
+    if [[ -n "$acceptance_items" ]] &&
+      [[ "$actual_acceptance_seq" != "$expected_acceptance_seq" ]]; then
+      add_error "Acceptance items must be numbered A1, A2, ... without gaps, found $(printf '%s' "$actual_acceptance_seq" | tr '\n' ' ')."
+    fi
+    while IFS= read -r acceptance_item; do
+      [[ -n "$acceptance_item" ]] || continue
+      acceptance_item_id="${acceptance_item%%:*}"
+      acceptance_item_text="${acceptance_item#*:}"
+      if [[ -z "$(printf '%s' "$acceptance_item_text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')" ]]; then
+        add_error "Acceptance item $acceptance_item_id has no description; state what 'done' means for this item."
+      fi
+      if [[ "$stage" != *"bootstrap"* ]]; then
+        if ! printf '%s\n' "$acceptance_item_text" | grep -Eq '\(verify:[[:space:]]*[^)]+\)'; then
+          add_error "Acceptance item $acceptance_item_id has no '(verify: ...)' reference; an acceptance that names no machine check cannot be proved by the gate."
+        fi
+      fi
+    done <<< "$acceptance_items"
+  else
+    add_error "Expected at most one 'Acceptance' field in 'Current Package', found $acceptance_field_count."
+  fi
+fi
+
 manifest_ids "$methods_value" M Methods; methods="$result"
 manifest_ids "$facts_value" F Facts; facts="$result"
 manifest_ids "$decisions_value" D Decisions; decision_ids="$result"

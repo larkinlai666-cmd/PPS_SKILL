@@ -57,9 +57,124 @@ if ! python3_bin="$(resolve_python3)"; then
   exit 1
 fi
 
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+sha256_of_text() {
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+  else
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+  fi
+}
+
 # Any previous stamp is invalid the moment a new verification starts. A failed
 # run must never leave behind a stamp that readiness could accept.
 rm -f "$root/.pps/verify-stamp"
+
+# Anchor section extraction: the same shape as session_begin's anchor so the
+# two sides hash identical text. Objective + Current Package, blank lines
+# dropped. A rewrite here is what the anti-drift comparison detects.
+anchor_section() {
+  awk -v title="$1" '
+    $0 ~ "^##[[:space:]]+" title "[[:space:]]*$" {inside=1; next}
+    inside && /^##[[:space:]]/ {exit}
+    inside {print}
+  ' "$2"
+}
+anchor_text_value="$(
+  {
+    anchor_section "Objective" "$root/PROJECT_STATE.md"
+    anchor_section "Current Package" "$root/CONTEXT.md"
+  } | sed '/^[[:space:]]*$/d'
+)"
+anchor_current_hash="$(sha256_of_text "$anchor_text_value")"
+
+echo "-- Step 0/4: objective anchor review"
+# The anchor review is the anti-drift ritual: every gate run re-surfaces the
+# objective, the red lines, and the active decisions before anything is
+# stamped. Fresh-context subagents are GSD's cure for context rot; PPS is a
+# protocol, so its cure is a forced re-read at the only checkpoint that
+# cannot be skipped: the gate.
+echo "--- anchored objective ---"
+printf '%s\n' "$anchor_text_value" | sed -n '1,12p'
+if [[ -f "$root/AGENTS.md" ]]; then
+  echo "--- red lines ---"
+  anchor_section "Red Lines" "$root/AGENTS.md" | sed '/^[[:space:]]*$/d' | sed -n '1,12p'
+fi
+if [[ -f "$root/DECISIONS.md" ]]; then
+  echo "--- active decisions ---"
+  awk '
+    /<!-- PPS:ACTIVE:BEGIN -->/ {inside=1; next}
+    /<!-- PPS:ACTIVE:END -->/ {inside=0; next}
+    inside {print}
+  ' "$root/DECISIONS.md" | grep -Eo '[MFD]-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?' |
+    sort -u | sed -n '1,12p'
+fi
+
+# Goal-drift comparison: the objective-bearing sections must match the
+# session-start anchor. A change is legitimate only when the chronicle says
+# so, because "the goal moved while nobody recorded it" is exactly the drift
+# this anchor exists to catch.
+anchor_mode_value="$(
+  awk '
+    $0 ~ "^##[[:space:]]+Hot State[[:space:]]*$" { inside=1; next }
+    inside && /^##[[:space:]]/ { exit }
+    inside && index($0, "- Mode:") == 1 {
+      sub("^- Mode:[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$root/PROJECT_STATE.md"
+)"
+anchor_path="$root/.pps/objective-anchor"
+if [[ -f "$anchor_path" ]]; then
+  anchored_hash="$(sed -n 's/^objective_sha256:[[:space:]]*//p' "$anchor_path" | head -n 1)"
+  anchored_at="$(sed -n 's/^anchored_at:[[:space:]]*//p' "$anchor_path" | head -n 1)"
+  if [[ -n "$anchored_hash" && "$anchored_hash" != "$anchor_current_hash" ]]; then
+    revised_events=""
+    if [[ -f "$root/EVENTS.md" ]]; then
+      revised_events="$(awk -v from="${anchored_at:0:10}" '
+        $0 ~ "^##[[:space:]]+Events[[:space:]]*$" { inside=1; next }
+        inside && /^##[[:space:]]/ { exit }
+        inside && /^- / {
+          event_date = substr($0, 3, 10)
+          if (event_date >= from && $0 ~ /\[[^]]+\][[:space:]]+(objective-revised|goal-revised)[[:space:]]*([:|])/) print
+        }
+      ' "$root/EVENTS.md")"
+    fi
+    if [[ -n "$revised_events" ]]; then
+      {
+        printf 'objective_sha256: %s\n' "$anchor_current_hash"
+        printf 'anchored_at: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+      } > "$anchor_path"
+      echo "objective anchor: revised via a recorded objective-revised event; anchor refreshed"
+    else
+      echo "ERROR: the objective-bearing sections changed since session_begin but no 'objective-revised' event records the change." >&2
+      echo "Record the revision with scripts/append_event.sh --title 'objective-revised ...' or restore the anchored objective." >&2
+      echo "PPS verify gate: FAILED (objective anchor mismatch)" >&2
+      exit 1
+    fi
+  else
+    echo "objective anchor: unchanged since session begin"
+  fi
+else
+  case "$anchor_mode_value" in
+    software | hybrid)
+      echo "ERROR: .pps/objective-anchor is missing; run scripts/session_begin.sh before writing." >&2
+      echo "Without the anchor the gate cannot prove the objective was not rewritten mid-session." >&2
+      echo "PPS verify gate: FAILED (OBJECTIVE ANCHOR MISSING)" >&2
+      exit 1
+      ;;
+    *)
+      echo "objective anchor: missing; run scripts/session_begin.sh before writing (warning in $anchor_mode_value mode)."
+      ;;
+  esac
+fi
 
 echo "-- Step 1/4: structural validation"
 if ! bash "$root/scripts/validate_project.sh" "$root" --quiet; then
@@ -510,6 +625,75 @@ if (( run_failed == 1 )) || [[ "$write_run_out" != "ok" ]]; then
   exit 1
 fi
 echo "check manifest execution: all declared checks passed"
+
+echo "-- Step 2f/4: acceptance verification wiring"
+# Acceptance items declare what "done" means; the gate proves each one was
+# actually checked. A verify reference is satisfied by a PPS gate name, by a
+# manifest check id that ran successfully on this platform, by a path the run
+# record proves was executed, or by 'manual' while the item stays in Next.
+acceptance_items="$(awk '
+  $0 ~ "^##[[:space:]]+Current Package[[:space:]]*$" { inside=1; next }
+  inside && /^##[[:space:]]/ { exit }
+  inside && $0 ~ /^[[:space:]]*-[[:space:]]*A[0-9]+:/ { print }
+' "$root/CONTEXT.md")"
+if [[ -n "$acceptance_items" ]]; then
+  acceptance_unwired=0
+  while IFS= read -r acceptance_line; do
+    [[ -n "$acceptance_line" ]] || continue
+    acceptance_id="$(printf '%s\n' "$acceptance_line" |
+      sed -n 's/^[[:space:]]*-[[:space:]]*\(A[0-9][0-9]*\):.*/\1/p')"
+    acceptance_token="$(printf '%s\n' "$acceptance_line" |
+      sed -n 's/.*(verify:[[:space:]]*\([^)]*\)[[:space:]]*).*/\1/p')"
+    if [[ -z "$acceptance_token" ]]; then
+      echo "ERROR: acceptance item $acceptance_id has no '(verify: ...)' reference." >&2
+      acceptance_unwired=1
+      continue
+    fi
+    acceptance_token="$(printf '%s' "$acceptance_token" |
+      sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$acceptance_token" in
+      validate_project | verify_gate | readiness_check | boundary_check | asset_check)
+        continue
+        ;;
+      manual)
+        next_value="$(
+          awk '
+            $0 ~ "^##[[:space:]]+Hot State[[:space:]]*$" { inside=1; next }
+            inside && /^##[[:space:]]/ { exit }
+            inside && index($0, "- Next:") == 1 {
+              sub("^- Next:[[:space:]]*", "")
+              print
+              exit
+            }
+          ' "$root/PROJECT_STATE.md"
+        )"
+        if printf '%s' "$next_value" | grep -Fq "$acceptance_id"; then
+          continue
+        fi
+        echo "ERROR: acceptance item $acceptance_id uses 'manual' but is not restated in Hot State Next; a manual acceptance must stay openly pending." >&2
+        acceptance_unwired=1
+        continue
+        ;;
+    esac
+    if awk -F'\t' -v wanted="$acceptance_token" \
+      '$1 == wanted && $8 == "true" {found=1} END {exit !found}' "$run_tsv"; then
+      continue
+    fi
+    if [[ "$($python3_bin "$script_dir/pps_evidence.py" run-has-path "$root" "$acceptance_token" 2>/dev/null)" == "ok" ]]; then
+      continue
+    fi
+    echo "ERROR: acceptance item $acceptance_id names '(verify: $acceptance_token)' but no manifest check ran it successfully on this platform." >&2
+    acceptance_unwired=1
+  done <<< "$acceptance_items"
+  if (( acceptance_unwired == 1 )); then
+    echo "Add a check row for the named check to .pps/verify-manifest.txt and re-run the gate." >&2
+    echo "PPS verify gate: FAILED (acceptance not wired to an executed check)" >&2
+    exit 1
+  fi
+  echo "acceptance wiring: every acceptance item is backed by an executed check"
+else
+  echo "acceptance wiring: no acceptance items declared (bootstrap or pre-1.2 package)"
+fi
 echo "-- Step 2c/4: red line wiring"
 # Red lines may name the check that enforces them: "(verify: path)". When a
 # red line names one, the gate entry must actually reference that path, or the
@@ -588,21 +772,6 @@ if [[ -z "$package_id" ]]; then
   exit 1
 fi
 
-sha256_of() {
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
-  else
-    sha256sum "$1" | awk '{print $1}'
-  fi
-}
-sha256_of_text() {
-  if command -v shasum >/dev/null 2>&1; then
-    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
-  else
-    printf '%s' "$1" | sha256sum | awk '{print $1}'
-  fi
-}
-
 entry_sha="$(sha256_of "$entry")"
 capsule_sha="$(sha256_of "$root/CONTEXT.md")"
 
@@ -656,6 +825,7 @@ run_sha="absent"
   printf 'capsule_sha256: %s\n' "$capsule_sha"
   printf 'manifest_sha256: %s\n' "$manifest_sha"
   printf 'run_sha256: %s\n' "$run_sha"
+  printf 'objective_sha256: %s\n' "$anchor_current_hash"
   printf 'platform: bash\n'
   printf 'result: pass\n'
   printf 'worktree: %s\n' "$worktree_id"

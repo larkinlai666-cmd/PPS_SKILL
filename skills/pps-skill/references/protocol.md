@@ -157,6 +157,19 @@ Every workset `C-*` ID has exactly one row in `PROJECT_MAP.md` under `## Compone
 
 Grammar: `- YYYY-MM-DD: [PKG-*] title | files: ... | verify: ... | pending: ...`. The `files`, `verify`, and `pending` segments are required so that a later agent can reconstruct the scene; use `none` when empty. Append with `scripts/append_event.*` to prevent format drift. When the file exceeds 200 lines, archive older months to `docs/events-archive/YYYY-MM.md` and keep a pointer line. Older projects keeping Status Events inside `DECISIONS.md` remain valid; new events should move to `EVENTS.md` at the next natural checkpoint.
 
+A goal change is a first-class event: a title prefixed `objective-revised` or `goal-revised` is the only legitimate record of a mid-session objective rewrite (see the objective anchor below). Other prefixes keep their existing semantics.
+
+## Objective anchor and acceptance
+
+Context rot and goal drift corrupt long sessions even when every file stays structurally valid. PPS does not spawn fresh-context agents, so it anchors the goal and forces one re-read at the only checkpoint that cannot be skipped: the verify gate.
+
+- `scripts/session_begin.*` writes `.pps/objective-anchor` (git-ignored, device-local): the SHA-256 of the objective-bearing sections (`PROJECT_STATE.md` `## Objective` plus `CONTEXT.md` `## Current Package`), plus an `anchored_at` timestamp. Normalization: the two sections are extracted with headings excluded and concatenated, blank lines dropped, and the final joined text is hashed with trailing newlines stripped. Both sides of the anchor (session_begin and verify_gate) use the same extraction, so any third-party reimplementation must copy that exact normalization or the comparison never matches.
+- The verify gate re-surfaces the anchored objective, the `AGENTS.md` red lines, and the active decision IDs before anything else, then compares the current hash with the anchor. A mismatch fails the gate unless `EVENTS.md` records an `objective-revised`/`goal-revised` event dated on or after the anchor; the gate then refreshes the anchor. A change without a chronicle entry is drift, not progress. `software`/`hybrid` projects fail hard on a missing anchor; `document` projects warn.
+- The stamp records `objective_sha256` so a later audit can see which objective a passing gate proved.
+- `CONTEXT.md` `## Current Package` carries an `Acceptance` field listing `A-*` items. Each item states what "done" means and names a machine check: `(verify: <token>)`, where the token is a PPS gate name, a `.pps/verify-manifest.txt` check id, an executed in-repo check path, or `manual` (the item must then stay restated in Hot State `Next`). Bootstrap packages are exempt; every other PPS/1.2 package must declare at least one item, numbered `A1, A2, ...` without gaps, and the gate fails any item whose check did not run successfully on this platform.
+
+These mechanisms bound drift, not content quality: the anchor detects silent rewrites, and acceptance binds "done" to executed evidence, but neither judges whether the objective itself is good.
+
 ## Environment grammar
 
 `ENVIRONMENT.md` contains exactly one `## Toolchain Manifest` with `Required`, `Optional`, `Package manager`, and `Install policy`, and fails above 16384 bytes. New projects also declare `Dependency manifests` and `Environment verify`; older files remain compatible. Tool lists use the allowlisted names defined in [environment-bootstrap.md](environment-bootstrap.md), and `Required` always includes `git`. The validator checks declarations only; system changes require the explicit doctor apply gate. Before clone, the installed skill's core doctor preset requires both `git` and `gh` without needing a project manifest.

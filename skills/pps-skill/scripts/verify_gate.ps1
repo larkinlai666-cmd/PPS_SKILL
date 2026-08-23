@@ -24,6 +24,126 @@ if (Test-Path -LiteralPath $stampPath) {
     Remove-Item -LiteralPath $stampPath -Force
 }
 
+function Get-TextSha256([string]$Text) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+# Anchor section extraction: the same shape as session_begin's anchor so the
+# two sides hash identical text. Objective + Current Package, blank lines
+# dropped. A rewrite here is what the anti-drift comparison detects.
+function Get-AnchorSection([string]$Title, [string]$Text) {
+    $anchorMatch = [regex]::Match($Text, "(?ms)^##\s+$([regex]::Escape($Title))\s*\r?\n(?<body>.*?)(?=^##\s+|\z)")
+    if ($anchorMatch.Success) { return $anchorMatch.Groups['body'].Value }
+    return ''
+}
+$anchorStateText0 = [System.IO.File]::ReadAllText(
+    (Join-Path $rootFull 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
+$anchorContextText0 = [System.IO.File]::ReadAllText(
+    (Join-Path $rootFull 'CONTEXT.md'), [System.Text.Encoding]::UTF8)
+$anchorRawText = (Get-AnchorSection 'Objective' $anchorStateText0) + "`n" +
+    (Get-AnchorSection 'Current Package' $anchorContextText0)
+$anchorNormText = (($anchorRawText -split "`r?`n") |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ -ne '' }) -join "`n"
+$anchorCurrentHash = Get-TextSha256 $anchorNormText
+
+Write-Host "-- Step 0/4: objective anchor review"
+# The anchor review is the anti-drift ritual: every gate run re-surfaces the
+# objective, the red lines, and the active decisions before anything is
+# stamped. Fresh-context subagents are GSD's cure for context rot; PPS is a
+# protocol, so its cure is a forced re-read at the only checkpoint that
+# cannot be skipped: the gate.
+Write-Host '--- anchored objective ---'
+($anchorNormText -split "`n" | Select-Object -First 12) | ForEach-Object { Write-Host $_ }
+$agentsPathAnchor = Join-Path $rootFull 'AGENTS.md'
+if (Test-Path -LiteralPath $agentsPathAnchor -PathType Leaf) {
+    Write-Host '--- red lines ---'
+    $agentsTextAnchor = [System.IO.File]::ReadAllText($agentsPathAnchor, [System.Text.Encoding]::UTF8)
+    ((Get-AnchorSection 'Red Lines' $agentsTextAnchor) -split "`r?`n" |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -ne '' } |
+        Select-Object -First 12) | ForEach-Object { Write-Host $_ }
+}
+$decisionsPathAnchor = Join-Path $rootFull 'DECISIONS.md'
+if (Test-Path -LiteralPath $decisionsPathAnchor -PathType Leaf) {
+    Write-Host '--- active decisions ---'
+    $decisionsTextAnchor = [System.IO.File]::ReadAllText($decisionsPathAnchor, [System.Text.Encoding]::UTF8)
+    $activeAnchorMatch = [regex]::Match($decisionsTextAnchor, '(?ms)<!-- PPS:ACTIVE:BEGIN -->(?<body>.*?)<!-- PPS:ACTIVE:END -->')
+    if ($activeAnchorMatch.Success) {
+        [regex]::Matches($activeAnchorMatch.Groups['body'].Value, '[MFD]-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?') |
+            ForEach-Object { $_.Value } |
+            Select-Object -Unique -First 12 |
+            ForEach-Object { Write-Host $_ }
+    }
+}
+
+# Goal-drift comparison: the objective-bearing sections must match the
+# session-start anchor. A change is legitimate only when the chronicle says
+# so, because "the goal moved while nobody recorded it" is exactly the drift
+# this anchor exists to catch.
+$anchorModeMatch = [regex]::Match($anchorStateText0, '(?m)^-\s+Mode:\s*(.*?)\s*$')
+$anchorModeValue = if ($anchorModeMatch.Success) { $anchorModeMatch.Groups[1].Value } else { '' }
+$anchorFilePath = Join-Path $rootFull '.pps/objective-anchor'
+if (Test-Path -LiteralPath $anchorFilePath -PathType Leaf) {
+    $anchoredHash = ''
+    $anchoredAt = ''
+    foreach ($anchorLine in [System.IO.File]::ReadAllLines($anchorFilePath, [System.Text.Encoding]::UTF8)) {
+        if ($anchorLine -match '^objective_sha256:\s*(.+)$') { $anchoredHash = $Matches[1].Trim() }
+        elseif ($anchorLine -match '^anchored_at:\s*(.+)$') { $anchoredAt = $Matches[1].Trim() }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($anchoredHash) -and $anchoredHash -ne $anchorCurrentHash) {
+        $revisedEvents = @()
+        $eventsPathAnchor = Join-Path $rootFull 'EVENTS.md'
+        if (Test-Path -LiteralPath $eventsPathAnchor -PathType Leaf) {
+            $anchoredFrom = if ($anchoredAt.Length -ge 10) { $anchoredAt.Substring(0, 10) } else { '0000-00-00' }
+            $eventsTextAnchor = [System.IO.File]::ReadAllText($eventsPathAnchor, [System.Text.Encoding]::UTF8)
+            $eventsBodyAnchor = if ($eventsTextAnchor -match '(?ms)^##\s+Events\s*\r?\n(?<body>.*?)(?=^##\s+|\z)') {
+                $Matches['body']
+            } else { '' }
+            foreach ($eventLineAnchor in ($eventsBodyAnchor -split "`r?`n")) {
+                if ($eventLineAnchor -match '^- (\d{4}-\d{2}-\d{2}):.*$') {
+                    $eventDateAnchor = $Matches[1]
+                    if (($eventDateAnchor -ge $anchoredFrom) -and
+                        ($eventLineAnchor -match '\[[^]]+\]\s+(objective-revised|goal-revised)\s*([:|])')) {
+                        $revisedEvents += $eventLineAnchor
+                    }
+                }
+            }
+        }
+        if ($revisedEvents.Count -gt 0) {
+            $refreshedLines = @(
+                "objective_sha256: $anchorCurrentHash",
+                "anchored_at: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+            )
+            [System.IO.File]::WriteAllText(
+                $anchorFilePath,
+                ($refreshedLines -join "`n") + "`n",
+                [System.Text.UTF8Encoding]::new($false))
+            Write-Host 'objective anchor: revised via a recorded objective-revised event; anchor refreshed'
+        } else {
+            Write-Host "ERROR: the objective-bearing sections changed since session_begin but no 'objective-revised' event records the change."
+            Write-Host "Record the revision with scripts/append_event.ps1 -Title 'objective-revised ...' or restore the anchored objective."
+            Write-Host 'PPS verify gate: FAILED (objective anchor mismatch)'
+            exit 1
+        }
+    } else {
+        Write-Host 'objective anchor: unchanged since session begin'
+    }
+} else {
+    if ($anchorModeValue -in @('software', 'hybrid')) {
+        Write-Host 'ERROR: .pps/objective-anchor is missing; run scripts/session_begin.ps1 before writing.'
+        Write-Host 'Without the anchor the gate cannot prove the objective was not rewritten mid-session.'
+        Write-Host 'PPS verify gate: FAILED (OBJECTIVE ANCHOR MISSING)'
+        exit 1
+    }
+    Write-Host "objective anchor: missing; run scripts/session_begin.ps1 before writing (warning in $anchorModeValue mode)."
+}
+
 Write-Host "-- Step 1/4: structural validation"
 $engine = Get-Command pwsh -ErrorAction SilentlyContinue
 if ($null -eq $engine) {
@@ -556,6 +676,64 @@ if ($runFailed -or $writeRunText -ne 'ok') {
     exit 1
 }
 Write-Host 'check manifest execution: all declared checks passed'
+
+Write-Host "-- Step 2f/4: acceptance verification wiring"
+# Acceptance items declare what "done" means; the gate proves each one was
+# actually checked. A verify reference is satisfied by a PPS gate name, by a
+# manifest check id that ran successfully on this platform, by a path the run
+# record proves was executed, or by 'manual' while the item stays in Next.
+$acceptanceContextText = [System.IO.File]::ReadAllText(
+    (Join-Path $rootFull 'CONTEXT.md'), [System.Text.Encoding]::UTF8)
+$acceptancePackageText = Get-AnchorSection 'Current Package' $acceptanceContextText
+$acceptanceLines = @([regex]::Matches($acceptancePackageText, '(?m)^\s*-\s*A[0-9]+:.*$') |
+    ForEach-Object { $_.Value.Trim() })
+if ($acceptanceLines.Count -gt 0) {
+    $acceptanceUnwired = $false
+    foreach ($acceptanceLine in $acceptanceLines) {
+        $acceptanceIdMatch = [regex]::Match($acceptanceLine, '^\s*-\s*(A[0-9]+):')
+        if (-not $acceptanceIdMatch.Success) { continue }
+        $acceptanceId = $acceptanceIdMatch.Groups[1].Value
+        $tokenMatch = [regex]::Match($acceptanceLine, '\(verify:\s*([^)]*?)\s*\)')
+        if (-not $tokenMatch.Success) {
+            Write-Host "ERROR: acceptance item $acceptanceId has no '(verify: ...)' reference."
+            $acceptanceUnwired = $true
+            continue
+        }
+        $acceptanceToken = $tokenMatch.Groups[1].Value.Trim()
+        if ($acceptanceToken -in @('validate_project', 'verify_gate', 'readiness_check', 'boundary_check', 'asset_check')) {
+            continue
+        }
+        if ($acceptanceToken -eq 'manual') {
+            $nextMatchAnchor = [regex]::Match($anchorStateText0, '(?m)^-\s+Next:\s*(.*?)\s*$')
+            $nextValueAnchor = if ($nextMatchAnchor.Success) { $nextMatchAnchor.Groups[1].Value } else { '' }
+            if ($nextValueAnchor.Contains($acceptanceId)) { continue }
+            Write-Host "ERROR: acceptance item $acceptanceId uses 'manual' but is not restated in Hot State Next; a manual acceptance must stay openly pending."
+            $acceptanceUnwired = $true
+            continue
+        }
+        $ranOk = $false
+        foreach ($runRow in $runTsv) {
+            $runCells = $runRow -split "`t"
+            if ($runCells.Count -ge 8 -and $runCells[0] -eq $acceptanceToken -and $runCells[7] -eq 'true') {
+                $ranOk = $true
+                break
+            }
+        }
+        if ($ranOk) { continue }
+        $pathEvidence = Invoke-PPSEvidence @('run-has-path', $rootFull, $acceptanceToken)
+        if ($pathEvidence.Trim() -eq 'ok') { continue }
+        Write-Host "ERROR: acceptance item $acceptanceId names '(verify: $acceptanceToken)' but no manifest check ran it successfully on this platform."
+        $acceptanceUnwired = $true
+    }
+    if ($acceptanceUnwired) {
+        Write-Host 'Add a check row for the named check to .pps/verify-manifest.txt and re-run the gate.'
+        Write-Host 'PPS verify gate: FAILED (acceptance not wired to an executed check)'
+        exit 1
+    }
+    Write-Host 'acceptance wiring: every acceptance item is backed by an executed check'
+} else {
+    Write-Host 'acceptance wiring: no acceptance items declared (bootstrap or pre-1.2 package)'
+}
 Write-Host "-- Step 2c/4: red line wiring"
 # Red lines may name the check that enforces them: "(verify: path)". When a
 # red line names one, the gate entry must actually reference that path, or the
@@ -634,15 +812,6 @@ if ([string]::IsNullOrWhiteSpace($packageId)) {
 
 function Get-FileSha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
-}
-function Get-TextSha256([string]$Text) {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
-    } finally {
-        $sha.Dispose()
-    }
 }
 
 $entrySha = Get-FileSha256 $entryPath
@@ -738,6 +907,7 @@ $stampLines = @(
     "capsule_sha256: $capsuleSha",
     "manifest_sha256: $manifestSha",
     "run_sha256: $runSha",
+    "objective_sha256: $anchorCurrentHash",
     "platform: powershell",
     "result: pass",
     "worktree: $worktreeId",

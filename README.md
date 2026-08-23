@@ -4,16 +4,17 @@
 
 [![Validate](https://github.com/larkinlai666-cmd/PPS_SKILL/actions/workflows/validate.yml/badge.svg)](https://github.com/larkinlai666-cmd/PPS_SKILL/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](CHANGELOG.md)
 
 PPS 面向一个人使用不同设备或 AI Agent 串行推进的长期项目。它既能管理方案、报告和研究，也能管理轻量网页、小游戏、脚本、工具、原型及文档与代码并重的项目。
 
-PPS 不把整个项目塞回上下文。它通过稳定组件 ID、精确读写路径和有界恢复包，重点抑制四类高成本错误：
+PPS 不把整个项目塞回上下文。它通过稳定组件 ID、精确读写路径和有界恢复包，重点抑制五类高成本错误：
 
 1. 忘记仍然生效的事实或决定；
 2. 把已经否决或被取代的内容重新引入；
 3. 检索到了约束，却没有传播到真实成品；
-4. 为恢复进度而重读整个大型代码库。
+4. 为恢复进度而重读整个大型代码库；
+5. 长会话中目标悄悄漂移：`session_begin` 把目标段哈希锚定在 `.pps/objective-anchor`，verify gate 每次重读目标、红线与生效决策，目标被改写而无 `objective-revised` 事件时拒绝盖戳。
 
 本仓库的自动测试用一个 200,001 行源文件验证：恢复包保持在 240 行和 32768 字节以内，并且不会泄漏未声明的源内容。这证明的是恢复成本有界，不是声称 PPS 能自动理解任意大型代码库。
 

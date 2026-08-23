@@ -68,6 +68,36 @@ sha256_of_file() {
   fi
 }
 
+sha256_of_text() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'
+  else
+    echo "unhashable"
+  fi
+}
+
+# Anchor section extraction: identical shape on both sides of the anchor
+# (session_begin writes it, verify_gate compares against it). The hashed text
+# is the objective-bearing content only: PROJECT_STATE.md 'Objective' section
+# plus CONTEXT.md 'Current Package' section, blank lines dropped.
+anchor_section() {
+  awk -v title="$1" '
+    $0 ~ "^##[[:space:]]+" title "[[:space:]]*$" {inside=1; next}
+    inside && /^##[[:space:]]/ {exit}
+    inside {print}
+  ' "$2"
+}
+anchor_text() {
+  {
+    anchor_section "Objective" "$root/PROJECT_STATE.md"
+    anchor_section "Current Package" "$root/CONTEXT.md"
+  } | sed '/^[[:space:]]*$/d'
+}
+
 now_epoch="$(date -u +%s)"
 now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -161,6 +191,15 @@ device_name="$(hostname 2>/dev/null || echo unknown)"
 } > "$snapshot_file"
 
 dirty_count="$(sed -n '/^-- dirty --$/,$p' "$snapshot_file" | sed '1d' | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+
+# Objective anchor (anti goal-drift): hash the goal-bearing sections now so
+# the verify gate can prove later that the objective was not silently
+# rewritten mid-session. A goal change without a recorded 'objective-revised'
+# event is drift, not progress.
+{
+  printf 'objective_sha256: %s\n' "$(sha256_of_text "$(anchor_text)")"
+  printf 'anchored_at: %s\n' "$now_iso"
+} > "$snapshot_dir/objective-anchor"
 claimed_paths="$(sed -n '/^-- dirty --$/,$p' "$snapshot_file" | sed '1d' | sed '/^$/d' |
   awk -F'\t' '{ print $2 }')"
 
