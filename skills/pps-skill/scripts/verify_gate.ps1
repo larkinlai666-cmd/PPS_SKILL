@@ -458,20 +458,40 @@ foreach ($lineRaw in [System.IO.File]::ReadAllLines($manifestPath, [System.Text.
     if ($itemTimeout -gt 0) {
         # F-050-03: the timeout column is a real deadline, not a note. The
         # command runs as its own process; on expiry the whole tree is killed
-        # and the row fails. -EncodedCommand avoids all quoting mangling.
-        # Process.WaitForExit is reliable on both PS 5.1 and 7 (Wait-Process
-        # plus ExitCode proved flaky on 5.1).
-        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($checkCommand))
-        $itemProc = Start-Process -FilePath $engine.Source `
-            -ArgumentList @('-NoProfile', '-EncodedCommand', $encoded) `
-            -WorkingDirectory $itemCwd -PassThru -NoNewWindow
+        # and the row fails. -EncodedCommand avoids all quoting mangling, and
+        # the CHILD reports its own exit code into a file: Start-Process
+        # Process objects gave empty ExitCode on Windows CI, so the parent
+        # never trusts the handle for the number.
+        $exitFile = Join-Path $rootFull ('.pps/.last-exit-' + $checkId + '.txt')
+        if (Test-Path -LiteralPath $exitFile) { Remove-Item -LiteralPath $exitFile -Force }
+        $wrapped = $checkCommand + "; `$c = `$LASTEXITCODE; if (`$null -eq `$c) { `$c = 0 }; [System.IO.File]::WriteAllText(`$env:PPS_EXIT_FILE, [string]`$c)"
+        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wrapped))
+        $env:PPS_EXIT_FILE = $exitFile
+        # .NET ProcessStartInfo with a closed stdin: a Start-Process child
+        # inherits the parent's (often redirected) stdin and tries to parse it
+        # as CLIXML — "Data at the root level is invalid" on CI. Closing our
+        # write end hands the child a clean EOF instead.
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $engine.Source
+        $psi.Arguments = "-NoProfile -EncodedCommand $encoded"
+        $psi.WorkingDirectory = $itemCwd
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardInput = $true
+        $itemProc = [System.Diagnostics.Process]::Start($psi)
+        $itemProc.StandardInput.Close()
         if ($itemProc.WaitForExit([int]($itemTimeout * 1000))) {
-            $itemCode = $itemProc.ExitCode
+            $itemCode = -1
+            if (Test-Path -LiteralPath $exitFile) {
+                $reported = [System.IO.File]::ReadAllText($exitFile).Trim()
+                if ($reported -match '^-?\d+$') { $itemCode = [int]$reported }
+            }
         } else {
             $itemTimedOut = $true
             Stop-PPSProcessTree $itemProc.Id
             $itemCode = -1
         }
+        $env:PPS_EXIT_FILE = $null
     } else {
         $prevPref = $ErrorActionPreference
         try {
