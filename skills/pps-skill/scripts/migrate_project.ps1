@@ -460,14 +460,19 @@ function Invoke-Apply {
     Write-Utf8 $statePath $stateText
 
     # ---- 9. Validation gate ---------------------------------------------------
-    $bashGate = Join-Path $rootFull 'scripts/validate_project.sh'
-    if (Test-Path -LiteralPath $bashGate -PathType Leaf) {
-        & bash $bashGate $rootFull *> (Join-Path $backup 'validate-bash.log')
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host 'migrate_project: PPS/1.2 validation FAILED on the migrated state:'
-            Get-Content -LiteralPath (Join-Path $backup 'validate-bash.log') | Write-Host
-            Invoke-Rollback $backup
-            exit 1
+    # On Windows the PowerShell validator is the native engine; invoking the
+    # bash validator through Git Bash would mangle drive-letter paths. The
+    # cross-platform matrix still runs both engines where both exist.
+    if ($env:OS -ne 'Windows_NT') {
+        $bashGate = Join-Path $rootFull 'scripts/validate_project.sh'
+        if (Test-Path -LiteralPath $bashGate -PathType Leaf) {
+            & bash $bashGate $rootFull *> (Join-Path $backup 'validate-bash.log')
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host 'migrate_project: PPS/1.2 validation FAILED on the migrated state:'
+                Get-Content -LiteralPath (Join-Path $backup 'validate-bash.log') | Write-Host
+                Invoke-Rollback $backup
+                exit 1
+            }
         }
     }
     $psValidator = Join-Path $rootFull 'scripts/validate_project.ps1'
