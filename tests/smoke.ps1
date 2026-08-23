@@ -2161,8 +2161,9 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         $mxMig = Join-Path $tempRoot ("mig-" + $migFixture)
         Copy-Item -LiteralPath (Join-Path $repoRoot ("tests/fixtures/" + $migFixture)) `
             -Destination $mxMig -Recurse
-        & git -C $mxMig add -A 2>&1 | Out-Null
-        & git -C $mxMig -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 | Out-Null
+        $null = Invoke-NativeCapture { & git -C $mxMig init -q 2>&1 }
+        $null = Invoke-NativeCapture { & git -C $mxMig add -A 2>&1 }
+        $null = Invoke-NativeCapture { & git -C $mxMig -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 }
         $mxPreapply = @{}
         foreach ($pf in @(Get-ChildItem -LiteralPath $mxMig -File -Recurse | Where-Object { -not $_.FullName -like '*/.git/*' })) {
             $rel = $pf.FullName.Substring($mxMig.Length).TrimStart('/').TrimStart('\')
@@ -2259,9 +2260,9 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $mxMt = Join-Path $tempRoot "mig-multitask"
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/pps-1.1-document-standard') `
         -Destination $mxMt -Recurse
-    & git -C $mxMt init -q 2>&1 | Out-Null
-    & git -C $mxMt add -A 2>&1 | Out-Null
-    & git -C $mxMt -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 | Out-Null
+    $null = Invoke-NativeCapture { & git -C $mxMt init -q 2>&1 }
+    $null = Invoke-NativeCapture { & git -C $mxMt add -A 2>&1 }
+    $null = Invoke-NativeCapture { & git -C $mxMt -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 }
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill 'scripts/migrate_project.ps1') `
         -Root $mxMt -Mode apply -Confirm -WithMultitask 2>&1 | Out-Null
@@ -2280,15 +2281,16 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $mxFail = Join-Path $tempRoot "mig-fails"
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tests/fixtures/pps-1.1-document-standard') `
         -Destination $mxFail -Recurse
-    & git -C $mxFail init -q 2>&1 | Out-Null
-    & git -C $mxFail add -A 2>&1 | Out-Null
-    & git -C $mxFail -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 | Out-Null
+    $null = Invoke-NativeCapture { & git -C $mxFail init -q 2>&1 }
+    $null = Invoke-NativeCapture { & git -C $mxFail add -A 2>&1 }
+    $null = Invoke-NativeCapture { & git -C $mxFail -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 }
     $mxFailStatePath = Join-Path $mxFail 'PROJECT_STATE.md'
     [System.IO.File]::WriteAllText(
         $mxFailStatePath,
         [regex]::Replace(
             [System.IO.File]::ReadAllText($mxFailStatePath, [System.Text.Encoding]::UTF8),
-            '(?m)^- Coverage:.*?
+            '(?m)^- Coverage:.*
+?
 ', ''),
         $utf8NoBom)
     $mxFailResult = Invoke-NativeCapture {
