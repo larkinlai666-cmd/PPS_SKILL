@@ -426,7 +426,7 @@ try {
     Copy-Item -LiteralPath $standard -Destination $missingRequiredGit -Recurse
     $casePath = Join-Path $missingRequiredGit 'ENVIRONMENT.md'
     $text = [System.IO.File]::ReadAllText($casePath, [System.Text.Encoding]::UTF8)
-    $text = $text.Replace('- Required: git', '- Required: python')
+    $text = [regex]::Replace($text, '(?m)^- Required: .*$', '- Required: python')
     [System.IO.File]::WriteAllText($casePath, $text, $utf8NoBom)
     Assert-InvalidProject $missingRequiredGit `
         'Required tools must include git' `
@@ -1958,6 +1958,243 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     }
     if (Test-Path -LiteralPath $mxStamp) {
         throw 'The PowerShell gate left a stamp behind after a failing declared check.'
+    }
+
+    # ==== 050 field-consistency fixtures (PowerShell edition) ====
+
+    # 050-01: the default manifest must not hardcode an interpreter; the
+    # powershell row runs under the gate's own engine (pwsh or powershell).
+    $defaultManifest = Join-Path $software '.pps/verify-manifest.txt'
+    $defaultManifestText = [System.IO.File]::ReadAllText($defaultManifest, [System.Text.Encoding]::UTF8)
+    if (-not $defaultManifestText.Contains("M-001`tpowershell`t.`t60`t0`t& ./scripts/project_verify.ps1 -Root .")) {
+        throw 'The generated default manifest still hardcodes an interpreter.'
+    }
+
+    # 050-03: the timeout column is a real deadline on this platform too.
+    $mxTimeout = Join-Path $tempRoot "mx-timeout"
+    Copy-Item -LiteralPath $software -Destination $mxTimeout -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $mxTimeout 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mxTimeout 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $mxTimeoutStateFile = Join-Path $mxTimeout 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $mxTimeoutStateFile,
+        [System.IO.File]::ReadAllText($mxTimeoutStateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
+    $mxManifestPath = Join-Path $mxTimeout '.pps/verify-manifest.txt'
+    [System.IO.File]::WriteAllText(
+        $mxManifestPath,
+        [System.IO.File]::ReadAllText($mxManifestPath, [System.Text.Encoding]::UTF8) +
+        "M-050`tpowershell`t.`t1`t0`tStart-Sleep -Seconds 30`tslow test`n",
+        $utf8NoBom)
+    $mxStampPath = Join-Path $mxTimeout '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $mxStampPath) { Remove-Item -LiteralPath $mxStampPath }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $mxTimeout 'scripts/session_begin.ps1') `
+        -Root $mxTimeout 2>&1 | Out-Null
+    $mxTimeoutResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxTimeout 'scripts/verify_gate.ps1') `
+            -Root $mxTimeout 2>&1
+    }
+    if ($mxTimeoutResult.Code -eq 0 -or $mxTimeoutResult.Text -notmatch 'timed out after 1s') {
+        throw ("The PowerShell gate did not enforce the timeout column. gate output: " + $mxTimeoutResult.Text)
+    }
+    if (Test-Path -LiteralPath $mxStampPath) {
+        throw 'The PowerShell gate left a stamp behind after a timed-out check.'
+    }
+    $mxRunRecord = [System.IO.File]::ReadAllText(
+        (Join-Path $mxTimeout '.pps/verify-run.json'), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    $mxTimedItem = $mxRunRecord.items | Where-Object { $_.id -eq 'M-050' } | Select-Object -First 1
+    if ($null -eq $mxTimedItem -or $mxTimedItem.ok -or $mxTimedItem.exit_code -ne 'timeout') {
+        throw 'The timed-out row was not recorded as a timeout in the run record.'
+    }
+
+    # 050-04: a working directory escaping the project root fails the row.
+    $mxCwd = Join-Path $tempRoot "mx-cwd-escape"
+    Copy-Item -LiteralPath $software -Destination $mxCwd -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $mxCwd 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mxCwd 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $mxCwdStateFile = Join-Path $mxCwd 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $mxCwdStateFile,
+        [System.IO.File]::ReadAllText($mxCwdStateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
+    $mxManifestPath = Join-Path $mxCwd '.pps/verify-manifest.txt'
+    [System.IO.File]::WriteAllText(
+        $mxManifestPath,
+        [System.IO.File]::ReadAllText($mxManifestPath, [System.Text.Encoding]::UTF8) +
+        "M-050`tpowershell`t../`t60`t0`tGet-Location`tescape attempt`n",
+        $utf8NoBom)
+    $mxStampPath = Join-Path $mxCwd '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $mxStampPath) { Remove-Item -LiteralPath $mxStampPath }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $mxCwd 'scripts/session_begin.ps1') `
+        -Root $mxCwd 2>&1 | Out-Null
+    $mxCwdResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxCwd 'scripts/verify_gate.ps1') `
+            -Root $mxCwd 2>&1
+    }
+    if ($mxCwdResult.Code -eq 0 -or $mxCwdResult.Text -notmatch "cwd '../' escapes the project root") {
+        throw ("The PowerShell gate did not contain the working directory. gate output: " + $mxCwdResult.Text)
+    }
+
+    # 050-05: an unquoted Write-Host of the path must not wire the red line.
+    $mxEcho = Join-Path $tempRoot "mx-echo-mention"
+    Copy-Item -LiteralPath $software -Destination $mxEcho -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $mxEcho 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mxEcho 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $mxEchoStateFile = Join-Path $mxEcho 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $mxEchoStateFile,
+        [System.IO.File]::ReadAllText($mxEchoStateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
+    New-Item -ItemType Directory -Path (Join-Path $mxEcho 'tests') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mxEcho 'tests/parity-harness.ps1'), "exit 0`n", $utf8NoBom)
+    $mxAgents = Join-Path $mxEcho 'AGENTS.md'
+    $mxAgentsText = [System.IO.File]::ReadAllText($mxAgents, [System.Text.Encoding]::UTF8)
+    $mxRedStart = $mxAgentsText.IndexOf('## Red Lines')
+    $mxRedEnd = $mxAgentsText.IndexOf("`n## ", $mxRedStart + 5)
+    [System.IO.File]::WriteAllText(
+        $mxAgents,
+        $mxAgentsText.Substring(0, $mxRedEnd) + "`n- Never ship without parity. (verify: tests/parity-harness.ps1)`n" + $mxAgentsText.Substring($mxRedEnd),
+        $utf8NoBom)
+    $mxManifestPath = Join-Path $mxEcho '.pps/verify-manifest.txt'
+    [System.IO.File]::WriteAllText(
+        $mxManifestPath,
+        [System.IO.File]::ReadAllText($mxManifestPath, [System.Text.Encoding]::UTF8) +
+        "M-002`tpowershell`t.`t60`t0`tWrite-Host tests/parity-harness.ps1`tprint only, unquoted`n",
+        $utf8NoBom)
+    $mxStampPath = Join-Path $mxEcho '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $mxStampPath) { Remove-Item -LiteralPath $mxStampPath }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $mxEcho 'scripts/session_begin.ps1') `
+        -Root $mxEcho 2>&1 | Out-Null
+    $mxEchoResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxEcho 'scripts/verify_gate.ps1') `
+            -Root $mxEcho 2>&1
+    }
+    if ($mxEchoResult.Code -eq 0 -or $mxEchoResult.Text -notmatch 'red line not wired to an executed check') {
+        throw ("A Write-Host mention wired the red line. gate output: " + $mxEchoResult.Text)
+    }
+
+    # 050-05b: a real executed row satisfies the same red line.
+    $mxWired = Join-Path $tempRoot "mx-wired-ps"
+    Copy-Item -LiteralPath $mxEcho -Destination $mxWired -Recurse
+    $mxManifestPath = Join-Path $mxWired '.pps/verify-manifest.txt'
+    [System.IO.File]::WriteAllText(
+        $mxManifestPath,
+        [System.IO.File]::ReadAllText($mxManifestPath, [System.Text.Encoding]::UTF8).Replace(
+            "M-002`tpowershell`t.`t60`t0`tWrite-Host tests/parity-harness.ps1`tprint only, unquoted",
+            "M-002`tpowershell`t.`t60`t0`t& ./tests/parity-harness.ps1`treal check"),
+        $utf8NoBom)
+    $mxStampPath = Join-Path $mxWired '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $mxStampPath) { Remove-Item -LiteralPath $mxStampPath }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $mxWired 'scripts/session_begin.ps1') `
+        -Root $mxWired 2>&1 | Out-Null
+    $mxWiredResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxWired 'scripts/verify_gate.ps1') `
+            -Root $mxWired 2>&1
+    }
+    if ($mxWiredResult.Code -ne 0 -or $mxWiredResult.Text -notmatch 'red line wiring: all named checks are wired to executed manifest checks') {
+        throw ("An executed row did not wire the red line. gate output: " + $mxWiredResult.Text)
+    }
+
+    # 050-06: migration apply + rollback mirror the Bash fixture.
+    $mxMig = Join-Path $tempRoot "mx-migrate"
+    Copy-Item -LiteralPath $software -Destination $mxMig -Recurse
+    foreach ($mxStrip in @('TASK_INDEX.md', 'MERGES.md', '.pps/verify-manifest.txt')) {
+        $mxStripPath = Join-Path $mxMig $mxStrip
+        if (Test-Path -LiteralPath $mxStripPath) { Remove-Item -LiteralPath $mxStripPath -Force }
+    }
+    $mxStateFile = Join-Path $mxMig 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $mxStateFile,
+        [System.IO.File]::ReadAllText($mxStateFile, [System.Text.Encoding]::UTF8).Replace(
+            '- Protocol: PPS/1.2', '- Protocol: PPS/1.1'),
+        $utf8NoBom)
+    $mxDecisions = Join-Path $mxMig 'DECISIONS.md'
+    [System.IO.File]::WriteAllText(
+        $mxDecisions,
+        [System.IO.File]::ReadAllText($mxDecisions, [System.Text.Encoding]::UTF8) +
+        "`n### D-MIGRATE-001 [active]`n- Date: 2026-08-01`n- Decision: approve`n- Subject: legacy`n- Summary: already used.`n",
+        $utf8NoBom)
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill 'scripts/migrate_project.ps1') `
+        -Root $mxMig -Mode apply -Confirm 2>&1 | Out-Null
+    if (-not (Test-Path -LiteralPath (Join-Path $mxMig 'TASK_INDEX.md'))) {
+        throw 'The PowerShell migrator did not apply.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $mxMig '.pps/verify-manifest.txt'))) {
+        throw 'The PowerShell migrator did not apply the check manifest.'
+    }
+    $mxDecisionsApplied = [System.IO.File]::ReadAllText($mxDecisions, [System.Text.Encoding]::UTF8)
+    if (-not $mxDecisionsApplied.Contains('### D-MIGRATE-002 ')) {
+        throw 'The migrator collided with the existing D-MIGRATE-001 decision id.'
+    }
+    $mxMigBackups = Get-ChildItem -LiteralPath (Join-Path $mxMig '.pps') -Directory -Filter 'migration-backup-*'
+    $mxMigBackup = $mxMigBackups | Select-Object -First 1
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill 'scripts/migrate_project.ps1') `
+        -Root $mxMig -Mode rollback -RollbackDir $mxMigBackup.FullName 2>&1 | Out-Null
+    if ((Test-Path -LiteralPath (Join-Path $mxMig 'TASK_INDEX.md')) -or (Test-Path -LiteralPath (Join-Path $mxMig 'MERGES.md')) -or (Test-Path -LiteralPath (Join-Path $mxMig '.pps/verify-manifest.txt'))) {
+        throw 'The PowerShell rollback left files the apply created.'
+    }
+    $mxStateAfter = [System.IO.File]::ReadAllText($mxStateFile, [System.Text.Encoding]::UTF8)
+    if ($mxStateAfter -notmatch '- Protocol: PPS/1.1') {
+        throw 'The rollback touched the Protocol field.'
+    }
+
+    # 050-02: a broken python3 on PATH must not kill the gate; PPS_PYTHON and
+    # the python fallback both work.
+    $mxPy = Join-Path $tempRoot "mx-py-fallback"
+    Copy-Item -LiteralPath $software -Destination $mxPy -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $mxPy 'src') -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $mxPy 'src/main.sh'), "#!/usr/bin/env bash`necho ok`n", $utf8NoBom)
+    $mxPyStateFile = Join-Path $mxPy 'PROJECT_STATE.md'
+    [System.IO.File]::WriteAllText(
+        $mxPyStateFile,
+        [System.IO.File]::ReadAllText($mxPyStateFile, [System.Text.Encoding]::UTF8).Replace('- Main: .', '- Main: src/main.sh'),
+        $utf8NoBom)
+    $realPy = (Get-Command python3 -ErrorAction SilentlyContinue).Source
+    if ($null -eq $realPy) { $realPy = (Get-Command python -ErrorAction SilentlyContinue).Source }
+    if ($null -ne $realPy) {
+        $shimDir = Join-Path $tempRoot "ps-py-shim"
+        New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+        if ($null -ne (Get-Command chmod -ErrorAction SilentlyContinue)) {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $shimDir 'python3'), "#!/bin/sh`necho store stub`nexit 127`n",
+                (New-Object System.Text.UTF8Encoding($false)))
+            & chmod +x (Join-Path $shimDir 'python3') 2>$null | Out-Null
+            # A wrapper, not a copy: macOS CLT python3 shims dispatch on argv[0],
+            # so a python-named binary copy triggers xcode-select instead.
+            [System.IO.File]::WriteAllText(
+                (Join-Path $shimDir 'python'), "#!/bin/sh`nexec '$realPy' `"$@`"`n",
+                (New-Object System.Text.UTF8Encoding($false)))
+            & chmod +x (Join-Path $shimDir 'python') 2>$null | Out-Null
+            $env:PATH = $shimDir + [System.IO.Path]::PathSeparator + $env:PATH
+        }
+    }
+    $mxStampPath = Join-Path $mxPy '.pps/verify-stamp'
+    if (Test-Path -LiteralPath $mxStampPath) { Remove-Item -LiteralPath $mxStampPath }
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $mxPy 'scripts/session_begin.ps1') `
+        -Root $mxPy 2>&1 | Out-Null
+    $mxPyResult = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mxPy 'scripts/verify_gate.ps1') `
+            -Root $mxPy 2>&1
+    }
+    if ($mxPyResult.Code -ne 0 -or -not (Test-Path -LiteralPath $mxStampPath)) {
+        throw ("The PowerShell gate failed without a working python3. gate output: " + $mxPyResult.Text)
     }
 
     $emptyDeferred = Join-Path $tempRoot "empty-deferred"

@@ -157,7 +157,7 @@ is_allowed_tool() {
 
 tool_present() {
   case "$1" in
-    python) command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 ;;
+    python) command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || command -v py >/dev/null 2>&1 ;;
     powershell) command -v pwsh >/dev/null 2>&1 || command -v powershell >/dev/null 2>&1 ;;
     imagemagick) command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1 ;;
     libreoffice)

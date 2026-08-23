@@ -340,6 +340,57 @@ Write-Host "-- Step 2e/4: structured check manifest execution"
 # gate runs on THIS platform, with the exit code compared to the expected one.
 # Static text scanning of the entry is only a lint below; it never satisfies
 # red-line or coverage wiring on its own.
+
+# --- F-050-02: Python 3 interpreter discovery -------------------------------
+# The evidence engine is a hard runtime for this gate. Windows frequently has
+# python/py but not python3, and the Store python3.exe stub is not an
+# interpreter. Discovery order: PPS_PYTHON -> python3 -> python -> py -3.
+$script:PPSPython = $null
+function Resolve-PPSPython {
+    if ($null -ne $script:PPSPython) { return $script:PPSPython }
+    $candidates = New-Object System.Collections.ArrayList
+    if (-not [string]::IsNullOrWhiteSpace($env:PPS_PYTHON)) {
+        $null = $candidates.Add(@($env:PPS_PYTHON))
+    }
+    $null = $candidates.Add(@('python3'))
+    $null = $candidates.Add(@('python'))
+    $null = $candidates.Add(@('py', '-3'))
+    foreach ($cand in $candidates) {
+        if ($null -eq (Get-Command $cand[0] -ErrorAction SilentlyContinue)) { continue }
+        $candTail = if ($cand.Count -gt 1) { @($cand[1..($cand.Count - 1)]) } else { @() }
+        $null = & $cand[0] @($candTail) -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $script:PPSPython = $cand
+            return $cand
+        }
+    }
+    return $null
+}
+function Invoke-PPSEvidence([string[]]$EvidenceArgs) {
+    # PowerShell unrolls single-element arrays across return; @() restores
+    # the array shape so $py[0] is the interpreter, not its first character.
+    $py = @(Resolve-PPSPython)
+    if ($null -eq $py) {
+        Write-Host 'ERROR: the PPS evidence engine requires Python 3. Tried: python3, python, py -3. Install Python 3 or set PPS_PYTHON to the interpreter path.'
+        Write-Host 'PPS verify gate: FAILED (python 3 interpreter required)'
+        exit 1
+    }
+    $evidenceScript = Join-Path $PSScriptRoot 'pps_evidence.py'
+    $pyTail = if ($py.Count -gt 1) { @($py[1..($py.Count - 1)]) } else { @() }
+    $fullArgs = @($py[0]) + @($pyTail) + @($evidenceScript) + $EvidenceArgs
+    $out = & $fullArgs[0] @($fullArgs[1..($fullArgs.Count - 1)]) 2>&1 | ForEach-Object { "$_" }
+    return ($out -join "`n")
+}
+# --- F-050-03: kill the whole process tree on timeout -----------------------
+function Stop-PPSProcessTree([int]$TargetPid) {
+    if ($env:OS -eq 'Windows_NT') {
+        $null = & taskkill /PID $TargetPid /T /F 2>$null
+    } else {
+        $null = & pkill -TERM -P $TargetPid 2>$null
+        Stop-Process -Id $TargetPid -Force -ErrorAction SilentlyContinue
+        $null = & pkill -KILL -P $TargetPid 2>$null
+    }
+}
 $manifestPath = Join-Path $rootFull '.pps/verify-manifest.txt'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     Write-Host "ERROR: missing .pps/verify-manifest.txt; the gate must run a declared check list, not trust prose."
@@ -376,38 +427,80 @@ foreach ($lineRaw in [System.IO.File]::ReadAllLines($manifestPath, [System.Text.
     $itemStarted = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     $itemCwd = $rootFull
     if (-not [string]::IsNullOrWhiteSpace($checkCwd) -and $checkCwd -ne '.') {
-        $cwdCandidate = Join-Path $rootFull $checkCwd
-        if (-not (Test-Path -LiteralPath $cwdCandidate -PathType Container)) {
+        # F-050-04: the working directory must live inside the project root.
+        # Absolute paths and escapes (including via symlinks) fail the row.
+        if ($checkCwd -match '^[A-Za-z]:' -or $checkCwd.StartsWith('/') -or $checkCwd.StartsWith('\')) {
+            Write-Host "ERROR: manifest check $checkId cwd '$checkCwd' is absolute; a check working directory must live inside the project root."
+            $runFailed = $true
+            continue
+        }
+        $cwdFull = [System.IO.Path]::GetFullPath((Join-Path $rootFull $checkCwd))
+        $rootPrefix = $rootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+        if ($cwdFull -ne $rootPrefix -and -not $cwdFull.StartsWith($rootPrefix + [System.IO.Path]::DirectorySeparatorChar)) {
+            Write-Host "ERROR: manifest check $checkId cwd '$checkCwd' escapes the project root."
+            $runFailed = $true
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $cwdFull -PathType Container)) {
             Write-Host "ERROR: manifest check $checkId cwd '$checkCwd' does not exist."
             $runFailed = $true
             continue
         }
-        $itemCwd = $cwdCandidate
+        $itemCwd = $cwdFull
     }
     Write-Host "check $checkId : $checkCommand"
     $itemCode = -1
-    $prevPref = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'SilentlyContinue'
-        Push-Location $itemCwd
-        try {
-            & $engine.Source -NoProfile -Command $checkCommand 2>&1 | ForEach-Object { Write-Host $_ }
-            $itemCode = $LASTEXITCODE
-        } finally {
-            Pop-Location
-        }
-    } finally {
-        $ErrorActionPreference = $prevPref
-    }
+    $itemTimedOut = $false
     $itemExpected = 0
     if ($checkExpected -match '^\d+$') { $itemExpected = [int]$checkExpected }
-    $itemOk = ($itemCode -eq $itemExpected)
+    $itemTimeout = 0
+    if ($checkTimeout -match '^\d+$') { $itemTimeout = [int]$checkTimeout }
+    if ($itemTimeout -gt 0) {
+        # F-050-03: the timeout column is a real deadline, not a note. The
+        # command runs as its own process; on expiry the whole tree is killed
+        # and the row fails. -EncodedCommand avoids all quoting mangling.
+        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($checkCommand))
+        $itemProc = Start-Process -FilePath $engine.Source `
+            -ArgumentList @('-NoProfile', '-EncodedCommand', $encoded) `
+            -WorkingDirectory $itemCwd -PassThru -NoNewWindow
+        $null = Wait-Process -Id $itemProc.Id -Timeout $itemTimeout -ErrorAction SilentlyContinue
+        $itemProc.Refresh()
+        if ($itemProc.HasExited) {
+            $itemCode = $itemProc.ExitCode
+        } else {
+            $itemTimedOut = $true
+            Stop-PPSProcessTree $itemProc.Id
+            $itemCode = -1
+        }
+    } else {
+        $prevPref = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'SilentlyContinue'
+            Push-Location $itemCwd
+            try {
+                & $engine.Source -NoProfile -Command $checkCommand 2>&1 | ForEach-Object { Write-Host $_ }
+                $itemCode = $LASTEXITCODE
+            } finally {
+                Pop-Location
+            }
+        } finally {
+            $ErrorActionPreference = $prevPref
+        }
+    }
+    $itemOk = $false
+    if ($itemTimedOut) {
+        Write-Host "check $checkId : FAIL (timed out after ${itemTimeout}s)"
+    } else {
+        $itemOk = ($itemCode -eq $itemExpected)
+        $itemVerb = if ($itemOk) { 'pass' } else { 'FAIL' }
+        Write-Host "check $checkId : $itemVerb (exit $itemCode, expected $itemExpected)"
+    }
     if (-not $itemOk) { $runFailed = $true }
-    $itemVerb = if ($itemOk) { 'pass' } else { 'FAIL' }
-    Write-Host "check $checkId : $itemVerb (exit $itemCode, expected $itemExpected)"
     if (-not [string]::IsNullOrWhiteSpace($checkNote)) { Write-Host "  note: $checkNote" }
+    $itemExitText = if ($itemTimedOut) { 'timeout' } else { "$itemCode" }
+    $itemOkText = if ($itemOk) { 'true' } else { 'false' }
     $null = $runTsv.Add(
-        "$checkId`t$checkPlatform`t$checkCwd`t$checkTimeout`t$checkExpected`t$checkCommand`t$itemCode`t$itemOk`t$itemStarted`t$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))")
+        "$checkId`t$checkPlatform`t$checkCwd`t$checkTimeout`t$checkExpected`t$checkCommand`t$itemExitText`t$itemOkText`t$itemStarted`t$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))")
 }
 if ($runRelevant -eq 0) {
     Write-Host "ERROR: the check manifest declares no check for the powershell platform."
@@ -415,9 +508,7 @@ if ($runRelevant -eq 0) {
 }
 [System.IO.File]::WriteAllLines(
     $runTsvPath, [string[]]$runTsv, (New-Object System.Text.UTF8Encoding($false)))
-$evidenceScript = Join-Path $PSScriptRoot 'pps_evidence.py'
-$writeRun = & $engine.Source -NoProfile -Command "python3 '$evidenceScript' write-run '$rootFull' 'powershell' '$runTsvPath'" 2>&1 | ForEach-Object { "$_" }
-$writeRunText = ($writeRun -join "`n").Trim()
+$writeRunText = (Invoke-PPSEvidence @('write-run', $rootFull, 'powershell', $runTsvPath)).Trim()
 if ($writeRunText -ne 'ok' -and $writeRunText -ne 'fail') {
     Write-Host "ERROR: run record generation failed: $writeRunText"
     Write-Host "PPS verify gate: FAILED (run record generation)"
@@ -451,8 +542,7 @@ if ($redlineTargets.Count -gt 0) {
     # is only a lint here; it can never satisfy wiring on its own.
     $unwired = $false
     foreach ($target in $redlineTargets) {
-        $runEvidenceProbe = & python3 "$PSScriptRoot/pps_evidence.py" run-has-path $rootFull $target 2>&1 | ForEach-Object { "$_" }
-        $runEvidence = ($runEvidenceProbe -join "`n").Trim()
+        $runEvidence = (Invoke-PPSEvidence @('run-has-path', $rootFull, $target)).Trim()
         if ($runEvidence -eq 'ok') { continue }
         $shapeLint = if (Test-EntryInvokesPath $verifyEntry $target) {
             ' (the gate entry mentions it, but a mention is not an execution)'

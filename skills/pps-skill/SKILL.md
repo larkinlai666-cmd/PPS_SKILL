@@ -44,7 +44,7 @@ Read [project-modes.md](references/project-modes.md) for mode and large-reposito
 - Every manifest-listed `C-*` ID must have one map row. Read/Write entries are exact and bounded: no repository root or globs, and no more than thirty combined paths.
 - Git sync and asset materialization are separate. Every `core` and current `supporting` asset must have one `A-*` row and pass handoff verification; cloud rows use non-secret `rclone:REMOTE:path` locators and prove durable-object presence/size; references may remain marker-only.
 - Structural coverage never proves semantic correctness; deployed never proves loaded; unit-green never proves the wired system works. Behavioral end-to-end assertions are legitimate Verify members.
-- The verify gate writes a device-local stamp; readiness requires both the caller's attestation and a stamp matching the current package. Nothing auto-executes untrusted manifest commands.
+- The verify gate writes a device-local stamp; readiness requires both the caller's attestation and a stamp matching the current package. The gate executes the project's own `.pps/verify-manifest.txt` and binds the run record hash into the stamp; readiness never executes out-of-repo commands.
 - Engineering red lines live in the first section of `AGENTS.md` and are read before any edit. Their content is project-specific; the protocol only fixes the position.
 - Malformed decision-shaped text is an error. Do not silently treat it as absent.
 - Never bulk-load a repository because it is large. Start from the resume packet and use targeted search.
@@ -103,8 +103,10 @@ When the user approves, rejects, or modifies:
 
 The gate is the enforcement point, not a formality: it fails when the session
 snapshot is missing, when a predecessor's uncommitted work was overwritten,
-when `scripts/project_verify.*` is hollow, when a red line names a check the
-entry never calls, and — for software/hybrid packages — when the behavioral
+when `scripts/project_verify.*` is hollow, when a red line names a check no
+manifest row ran successfully on this platform, when the check manifest is
+missing or one of its declared checks fails, times out, or points outside
+the project root, and — for software/hybrid packages — when the behavioral
 check asserts nothing real.
 
 Run the project-local validator before claiming closure. A clean prose summary is not proof of propagation.

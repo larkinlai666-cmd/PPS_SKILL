@@ -87,7 +87,7 @@ function ConvertTo-Tools([string]$Raw, [string]$Kind) {
 }
 function Test-Tool([string]$Tool) {
     switch ($Tool) {
-        'python' { return $null -ne (Get-Command python3 -ErrorAction SilentlyContinue) -or $null -ne (Get-Command python -ErrorAction SilentlyContinue) }
+        'python' { return $null -ne (Get-Command python3 -ErrorAction SilentlyContinue) -or $null -ne (Get-Command python -ErrorAction SilentlyContinue) -or $null -ne (Get-Command py -ErrorAction SilentlyContinue) }
         'powershell' { return $null -ne (Get-Command pwsh -ErrorAction SilentlyContinue) -or $null -ne (Get-Command powershell -ErrorAction SilentlyContinue) }
         'imagemagick' { return $null -ne (Get-Command magick -ErrorAction SilentlyContinue) -or $null -ne (Get-Command convert -ErrorAction SilentlyContinue) }
         'libreoffice' {

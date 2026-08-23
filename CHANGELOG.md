@@ -4,6 +4,26 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-23
+
+Field-consistency round. A second review chain re-ran the frozen matrix on a
+real Windows PowerShell 5.1 machine (no `pwsh`, Store `python3.exe` stub) and
+found several 0.5.0 "Closed" claims that did not hold in the field. This
+round makes the execution layer field-truth instead of CI-truth.
+
+### Fixed
+
+- **F-050-01 default manifest hardcodes pwsh**: the default manifest's powershell row is now `& ./scripts/project_verify.ps1 -Root .`, executed by the gate's own engine (`pwsh` else `powershell`); a 5.1 box without pwsh runs the default list.
+- **F-050-02 python3 was a hard runtime declared Optional**: interpreter discovery (`PPS_PYTHON` -> `python3` -> `python` -> `py -3`) in gate and validator on both platforms; a missing interpreter fails with an explicit message, not CommandNotFound; ENVIRONMENT Required lists python; doctor probes py.
+- **F-050-03 timeout_s was a dead column**: it is now a real deadline. On expiry the process tree is killed, the row fails, the run record records `exit_code: timeout`, and no stamp is written.
+- **F-050-04 cwd escaped the repo**: absolute and escaping working directories (including via symlinks) fail the row before spawn, both platforms.
+- **F-050-05 print-only rows counted as calls**: `looks_like_call` only accepts the command position; `echo PATH` and `Write-Host PATH` never wire a red line. Both smoke suites carry the unquoted print-only row.
+- **F-050-06 migrator rollback/id**: rollback restores the pre-apply file set and deletes files apply created; the manifest stays under `.pps/`; the decision id avoids existing `D-*` ids; PS 5.1 appends without BOM; the PS event line matches the validator's event-line grammar.
+- **F-050-07 word lists duplicated**: `pps_evidence.py` reads the word lists from `state-machine.json`; hardcoded lists are only a schema-missing fallback.
+- **F-050-08 SKILL invariant contradicted the gate**: SKILL.md now states the gate executes the project's own manifest; the gate failure list names missing/failing/timing-out/escaping manifest rows.
+- **F-050-09 review table lag**: D-CORE-011 and the F-047-03 title now match the code.
+- **F-050-10 substring word lists**: recorded as residual per the 049 stop-order; no word-boundary round.
+
 ## [0.5.0] - 2026-08-22
 
 Execution-proof round. The 0.4.9 convergence audit found that the core state

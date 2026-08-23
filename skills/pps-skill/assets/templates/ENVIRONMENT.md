@@ -2,7 +2,7 @@
 
 ## Toolchain Manifest
 
-- Required: git
+- Required: git, python
 - Optional: {{OPTIONAL_TOOLS}}
 - Dependency manifests: none
 - Package manager: auto

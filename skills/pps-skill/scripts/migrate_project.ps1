@@ -26,7 +26,19 @@ if ([string]::IsNullOrWhiteSpace($packageId)) {
     Die "cannot resolve the current package from PROJECT_STATE.md"
 }
 $today = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
-$decisionId = 'D-MIGRATE-001'
+# F-050-06: never collide with a decision id the project already uses.
+$usedIds = @()
+$decisionsPath = Join-Path $rootFull 'DECISIONS.md'
+if (Test-Path -LiteralPath $decisionsPath -PathType Leaf) {
+    $usedIds = [regex]::Matches(
+        [System.IO.File]::ReadAllText($decisionsPath, [System.Text.Encoding]::UTF8),
+        '(?m)^###\s+(D-[A-Za-z0-9-]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+}
+$decisionId = $null
+for ($n = 1; $n -lt 1000; $n++) {
+    $candidate = 'D-MIGRATE-' + $n.ToString('000')
+    if ($candidate -notin $usedIds) { $decisionId = $candidate; break }
+}
 
 function Get-TaskIndexText {
     @"
@@ -63,10 +75,10 @@ function Get-DecisionText {
 "@
 }
 function Get-EventText {
-    "- $today : [$packageId] migration_authorized $decisionId | files: TASK_INDEX.md, MERGES.md | verify: validate_project pass | pending: none"
+    "- ${today}: [$packageId] migration_authorized $decisionId | files: TASK_INDEX.md, MERGES.md | verify: validate_project pass | pending: none"
 }
 function Get-ManifestText {
-    "# PPS check manifest - check_id`tplatform`tcwd`ttimeout_s`texpected_exit`tcommand`tnote`nM-001`tpowershell`t.`t60`t0`tpwsh -NoProfile -ExecutionPolicy Bypass -File scripts/project_verify.ps1 -Root .`tgate entry runs all project checks`nM-001`tbash`t.`t60`t0`tbash scripts/project_verify.sh .`tgate entry runs all project checks`n"
+    "# PPS check manifest - check_id`tplatform`tcwd`ttimeout_s`texpected_exit`tcommand`tnote`nM-001`tpowershell`t.`t60`t0`t& ./scripts/project_verify.ps1 -Root .`tgate entry runs all project checks`nM-001`tbash`t.`t60`t0`tbash scripts/project_verify.sh .`tgate entry runs all project checks`n"
 }
 function Write-Utf8([string]$Path, [string]$Text) {
     [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
@@ -123,7 +135,9 @@ switch ($Mode) {
         $decisionsText = [System.IO.File]::ReadAllText(
             (Join-Path $rootFull 'DECISIONS.md'), [System.Text.Encoding]::UTF8)
         if (-not $decisionsText.Contains("### $decisionId ")) {
-            Add-Content -LiteralPath (Join-Path $rootFull 'DECISIONS.md') -Value (Get-DecisionText) -Encoding UTF8
+            # F-050-06: PS 5.1 Add-Content -Encoding UTF8 writes a BOM.
+            # Append with the explicit no-BOM writer instead.
+            Write-Utf8 (Join-Path $rootFull 'DECISIONS.md') ($decisionsText + (Get-DecisionText))
         }
         if (-not (Test-Path -LiteralPath (Join-Path $rootFull 'EVENTS.md'))) {
             Write-Utf8 (Join-Path $rootFull 'EVENTS.md') "## Events`n`n"
@@ -131,7 +145,7 @@ switch ($Mode) {
         $eventsText = [System.IO.File]::ReadAllText(
             (Join-Path $rootFull 'EVENTS.md'), [System.Text.Encoding]::UTF8)
         if (-not $eventsText.Contains("[$packageId] migration_authorized")) {
-            Add-Content -LiteralPath (Join-Path $rootFull 'EVENTS.md') -Value (Get-EventText) -Encoding UTF8
+            Write-Utf8 (Join-Path $rootFull 'EVENTS.md') ($eventsText + (Get-EventText) + "`n")
         }
         if (-not (Test-Path -LiteralPath (Join-Path $rootFull '.pps/verify-manifest.txt'))) {
             New-Item -ItemType Directory -Path (Join-Path $rootFull '.pps') -Force | Out-Null
@@ -148,8 +162,20 @@ switch ($Mode) {
         foreach ($f in @('TASK_INDEX.md', 'MERGES.md', 'DECISIONS.md', 'EVENTS.md', 'PROJECT_STATE.md', 'verify-manifest.txt')) {
             $dst = if ($f -eq 'verify-manifest.txt') { Join-Path $rootFull '.pps/verify-manifest.txt' } else { Join-Path $rootFull $f }
             if (Test-Path -LiteralPath (Join-Path $RollbackDir $f) -PathType Leaf) {
+                if ($f -eq 'verify-manifest.txt') {
+                    New-Item -ItemType Directory -Path (Split-Path $dst) -Force | Out-Null
+                }
                 Copy-Item -LiteralPath (Join-Path $RollbackDir $f) -Destination $dst -Force
+            } elseif (Test-Path -LiteralPath $dst -PathType Leaf) {
+                # F-050-06: a file apply created has no backup; delete it so a
+                # rollback cannot leave a half-activated multitask layer.
+                Remove-Item -LiteralPath $dst -Force
             }
+        }
+        $ppsDir = Join-Path $rootFull '.pps'
+        if ((Test-Path -LiteralPath $ppsDir -PathType Container) -and
+            -not (Get-ChildItem -LiteralPath $ppsDir -Force | Select-Object -First 1)) {
+            Remove-Item -LiteralPath $ppsDir -Force
         }
         Write-Host "migration rolled back from $RollbackDir"
     }

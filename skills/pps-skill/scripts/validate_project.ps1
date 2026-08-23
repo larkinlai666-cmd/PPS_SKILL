@@ -18,6 +18,44 @@ function Add-ValidationWarning([string]$Message) {
     $script:warnings.Add($Message)
 }
 
+# F-050-02: Python 3 interpreter discovery, shared shape with verify_gate.
+# Order: PPS_PYTHON -> python3 -> python -> py -3.
+$script:PPSPython = $null
+function Resolve-PPSPython {
+    if ($null -ne $script:PPSPython) { return $script:PPSPython }
+    $candidates = New-Object System.Collections.ArrayList
+    if (-not [string]::IsNullOrWhiteSpace($env:PPS_PYTHON)) {
+        $null = $candidates.Add(@($env:PPS_PYTHON))
+    }
+    $null = $candidates.Add(@('python3'))
+    $null = $candidates.Add(@('python'))
+    $null = $candidates.Add(@('py', '-3'))
+    foreach ($cand in $candidates) {
+        if ($null -eq (Get-Command $cand[0] -ErrorAction SilentlyContinue)) { continue }
+        $candTail = if ($cand.Count -gt 1) { @($cand[1..($cand.Count - 1)]) } else { @() }
+        $null = & $cand[0] @($candTail) -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $script:PPSPython = $cand
+            return $cand
+        }
+    }
+    return $null
+}
+function Invoke-PPSEvidence([string[]]$EvidenceArgs) {
+    # PowerShell unrolls single-element arrays across return; @() restores
+    # the array shape so $py[0] is the interpreter, not its first character.
+    $py = @(Resolve-PPSPython)
+    if ($null -eq $py) {
+        Write-Host 'ERROR: the PPS evidence engine requires Python 3. Tried: python3, python, py -3. Install Python 3 or set PPS_PYTHON to the interpreter path.'
+        exit 1
+    }
+    $evidenceScript = Join-Path $PSScriptRoot 'pps_evidence.py'
+    $pyTail = if ($py.Count -gt 1) { @($py[1..($py.Count - 1)]) } else { @() }
+    $fullArgs = @($py[0]) + @($pyTail) + @($evidenceScript) + $EvidenceArgs
+    $out = & $fullArgs[0] @($fullArgs[1..($fullArgs.Count - 1)]) 2>&1 | ForEach-Object { "$_" }
+    return ($out -join "`n")
+}
+
 function Get-MatchingLineNumbers([string]$Text, [string]$Pattern) {
     $numbers = [System.Collections.Generic.List[int]]::new()
     $lines = @($Text -split "`r?`n")
@@ -1093,7 +1131,7 @@ if ($isPps12) {
                 # Package identity must come from a positive event line, not
                 # from prose that happens to mention the ID. A line that says
                 # 'do not create this package' must not create the package.
-                $taskPackageProbe = & python3 "$PSScriptRoot/pps_evidence.py" event-positive $rootFull $taskActivePackage 2>&1 | ForEach-Object { "$_" }
+                $taskPackageProbe = Invoke-PPSEvidence @('event-positive', $rootFull, $taskActivePackage)
                 $taskPackageKnown = (($taskPackageProbe -join "`n").Trim() -eq 'ok')
                 if (-not $taskPackageKnown) {
                     Add-ValidationError "Task $taskId Active Package '$taskActivePackage' is neither the current package '$package' nor recorded as a positive event line in EVENTS.md."
@@ -1113,7 +1151,7 @@ if ($isPps12) {
                 if ([string]::IsNullOrWhiteSpace($taskBaseCheckpoint) -or $taskBaseCheckpoint -eq 'none') {
                     Add-ValidationError "Task $taskId is 'handoff_ready' without a 'Base Checkpoint' field; the handoff must record where the work was frozen."
                 } elseif ($taskBaseCheckpoint -ne 'lineage_incomplete') {
-                    $taskBaseResolve = & python3 "$PSScriptRoot/pps_evidence.py" resolve-commit $rootFull $taskBaseCheckpoint 2>&1 | ForEach-Object { "$_" }
+                    $taskBaseResolve = Invoke-PPSEvidence @('resolve-commit', $rootFull, $taskBaseCheckpoint)
                     if ((($taskBaseResolve -join "`n").Trim()) -ne 'commit') {
                         Add-ValidationError "Task $taskId Base Checkpoint '$taskBaseCheckpoint' is not a resolvable commit."
                     }
@@ -1287,7 +1325,7 @@ if ($isPps12) {
             # evidence, and a line saying 'do not create this package' must
             # not create it.
             if ($fields['Target Package'] -match '^PKG-' -and $fields['Target Package'] -ne $package) {
-                $targetProbe = & python3 "$PSScriptRoot/pps_evidence.py" event-positive $rootFull $fields['Target Package'] 2>&1 | ForEach-Object { "$_" }
+                $targetProbe = Invoke-PPSEvidence @('event-positive', $rootFull, $fields['Target Package'])
                 $targetKnown = (($targetProbe -join "`n").Trim() -eq 'ok')
                 if (-not $targetKnown) {
                     Add-ValidationError "Merge receipt $mergeId Target Package '$($fields['Target Package'])' is neither the current package '$package' nor recorded as a positive event line in EVENTS.md."
@@ -1342,7 +1380,7 @@ if ($isPps12) {
                 # naming this merge). Free text — especially text containing
                 # fail/failed — proves nothing.
                 $verificationValue = $fields['Verification']
-                $verifProbe = & python3 "$PSScriptRoot/pps_evidence.py" verification-parse $rootFull $verificationValue $mergeId 2>&1 | ForEach-Object { "$_" }
+                $verifProbe = Invoke-PPSEvidence @('verification-parse', $rootFull, $verificationValue, $mergeId)
                 $verifVerdict = ($verifProbe -join "`n").Trim()
                 if (-not $verifVerdict.StartsWith('ok')) {
                     Add-ValidationError "Merge receipt $mergeId Verification '$verificationValue' is not evidence the merge succeeded ($verifVerdict). Use 'gate_result: <check id>', 'file_evidence: <existing in-repo file>', 'event: <mergeId>' (or 'event: <date>:<mergeId>'), or a named gate with a positive outcome."
@@ -1393,7 +1431,7 @@ if ($isPps12) {
                     $srcRoleBlock.Groups['body'].Value, '(?m)^-\s+Role:\s*(.*?)\s*$')
                 if (-not $srcRoleLine.Success) { continue }
                 $srcRole = $srcRoleLine.Groups[1].Value
-                $allowsProbe = & python3 "$PSScriptRoot/pps_evidence.py" role-allows $srcRole $fields['Relation'] 2>&1 | ForEach-Object { "$_" }
+                $allowsProbe = Invoke-PPSEvidence @('role-allows', $srcRole, $fields['Relation'])
                 if ((($allowsProbe -join "`n").Trim()) -ne 'true') {
                     Add-ValidationError "Merge receipt $mergeId Relation '$($fields['Relation'])' is not allowed for Source Task $srcTaskId whose Role is '$srcRole' (see references/state-machine.json)."
                 }
@@ -1480,7 +1518,7 @@ if ($isPps12) {
                         if (-not $keptReal -and
                             $fields['Base Checkpoint'] -ne 'lineage_incomplete' -and
                             -not [string]::IsNullOrWhiteSpace($fields['Base Checkpoint'])) {
-                            $inBaseProbe = & python3 "$PSScriptRoot/pps_evidence.py" in-commit $rootFull $fields['Base Checkpoint'] $pathEntry 2>&1 | ForEach-Object { "$_" }
+                            $inBaseProbe = Invoke-PPSEvidence @('in-commit', $rootFull, $fields['Base Checkpoint'], $pathEntry)
                             if ((($inBaseProbe -join "`n").Trim()) -eq 'present') { $keptReal = $true }
                         }
                         if (-not $keptReal) {
@@ -1497,7 +1535,7 @@ if ($isPps12) {
                             # The Result tree is the truth of what merged. A
                             # path that exists only in a dirty worktree is not
                             # merged — it is pending.
-                            $inCommitProbe = & python3 "$PSScriptRoot/pps_evidence.py" in-commit $rootFull $fields['Result Checkpoint'] $pathEntry 2>&1 | ForEach-Object { "$_" }
+                            $inCommitProbe = Invoke-PPSEvidence @('in-commit', $rootFull, $fields['Result Checkpoint'], $pathEntry)
                             if ((($inCommitProbe -join "`n").Trim()) -eq 'present') { $acceptedReal = $true }
                         } elseif (Test-Path -LiteralPath (Join-Path $rootFull $pathEntry)) {
                             # Only without a usable Result Checkpoint may the
@@ -1553,14 +1591,14 @@ if ($isPps12) {
                     $fields['Result Checkpoint'] -ne 'lineage_incomplete' -and
                     -not [string]::IsNullOrWhiteSpace($fields['Base Checkpoint']) -and
                     -not [string]::IsNullOrWhiteSpace($fields['Result Checkpoint'])) {
-                    $ancProbe = & python3 "$PSScriptRoot/pps_evidence.py" ancestor $rootFull $fields['Base Checkpoint'] $fields['Result Checkpoint'] 2>&1 | ForEach-Object { "$_" }
+                    $ancProbe = Invoke-PPSEvidence @('ancestor', $rootFull, $fields['Base Checkpoint'], $fields['Result Checkpoint'])
                     $ancVerdict = ($ancProbe -join "`n").Trim()
                     if ($ancVerdict -eq 'unresolvable') {
                         Add-ValidationError "Merge receipt $mergeId Base/Result Checkpoints are not resolvable commits; lineage cannot be proven."
                     } elseif ($ancVerdict -eq 'not-ancestor') {
                         Add-ValidationError "Merge receipt $mergeId Result Checkpoint is not a descendant of its Base Checkpoint; reversed or forked lineage is not an integration."
                     }
-                    $treeProbe = & python3 "$PSScriptRoot/pps_evidence.py" tree-diff $rootFull $fields['Base Checkpoint'] $fields['Result Checkpoint'] 2>&1 | ForEach-Object { "$_" }
+                    $treeProbe = Invoke-PPSEvidence @('tree-diff', $rootFull, $fields['Base Checkpoint'], $fields['Result Checkpoint'])
                     $treeVerdict = ($treeProbe -join "`n").Trim()
                     if ($treeVerdict -eq 'same') {
                         Add-ValidationError "Merge receipt $mergeId Base and Result Checkpoints carry the same tree; different commit ids with byte-identical content integrated nothing."
@@ -1803,7 +1841,7 @@ foreach ($id in $requiredIds) {
                     # green forever: the original "bare Present" defect with
                     # extra syntax. Execution is proven by the gate's run
                     # record, not by text shape in the entry.
-                    $covRunProbe = & python3 "$PSScriptRoot/pps_evidence.py" run-has-path $rootFull $refMatch.Value 2>&1 | ForEach-Object { "$_" }
+                    $covRunProbe = Invoke-PPSEvidence @('run-has-path', $rootFull, $refMatch.Value)
                     if ((($covRunProbe -join "`n").Trim()) -eq 'ok') {
                         $coverageOk = $true
                     } else {

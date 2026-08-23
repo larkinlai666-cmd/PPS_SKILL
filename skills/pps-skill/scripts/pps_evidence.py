@@ -22,21 +22,42 @@ if not os.path.isfile(SCHEMA_PATH):
     # Installed projects carry the schema next to the scripts.
     SCHEMA_PATH = os.path.join(_SCRIPT_DIR, "state-machine.json")
 
-NEGATIVE_WORDS = [
+
+def _word_list(key, default):
+    """Read a word list from the single source (state-machine.json); the
+    hardcoded defaults exist only for a missing schema, so editing the JSON
+    edits the rule and editing the rule means editing the JSON."""
+    try:
+        with open(SCHEMA_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        value = data.get(key)
+        if isinstance(value, list):
+            return [str(x) for x in value]
+    except Exception:
+        pass
+    return list(default)
+
+
+_DEFAULT_NEGATIVE = [
     "fail", "failed", "failing", "failure", "error", "errors", "aborted",
     "deny", "denied", "denies", "denying", "revoke", "revoked",
     "reject", "rejected", "rejects", "not authorized", "not authorize",
     "does not authorize", "do not create", "never create", "does not exist",
     "unavailable", "cannot", "forbid", "forbidden", "refuse", "refused",
 ]
-POSITIVE_OUTCOME_WORDS = ["pass", "passed", "passes", "ok", "success", "succeeded", "green"]
-POSITIVE_EVENT_TYPES = [
+_DEFAULT_POSITIVE_OUTCOME = ["pass", "passed", "passes", "ok", "success", "succeeded", "green"]
+_DEFAULT_EVENT_TYPES = [
     "merged", "integrated", "validated", "verified", "landed", "shipped",
     "closed", "completed", "approved", "package_created", "package_activated",
     "package_closed", "handoff_recorded", "migration_authorized",
     "integrate", "validate", "verify",
 ]
-GATE_NAMES = ["verify_gate", "readiness_check", "validate_project", "asset_check", "boundary_check"]
+_DEFAULT_GATE_NAMES = ["verify_gate", "readiness_check", "validate_project", "asset_check", "boundary_check"]
+
+NEGATIVE_WORDS = _word_list("negative_outcome_words", _DEFAULT_NEGATIVE)
+POSITIVE_OUTCOME_WORDS = _word_list("positive_outcome_words", _DEFAULT_POSITIVE_OUTCOME)
+POSITIVE_EVENT_TYPES = _word_list("positive_event_types", _DEFAULT_EVENT_TYPES)
+GATE_NAMES = _word_list("verification_gate_names", _DEFAULT_GATE_NAMES)
 MANIFEST_PATH = ".pps/verify-manifest.txt"
 RUN_RECORD_PATH = ".pps/verify-run.json"
 
@@ -161,37 +182,45 @@ def cmd_run_ok(root, check_id):
         print("%s\t%s" % (state, item.get("exit_code", "") if item else ""))
 
 
-CALL_PREFIX_RE = re.compile(
-    r"(^|[\s;&|(])"
-    r"(?:(?:bash|sh|zsh)(?:\s+[-\w]+)*\s+[\"']?"
-    r"|(?:pwsh|powershell)(?:\s+[-\w]+)*\s+(?:-File\s+)?[\"']?"
-    r"|(?:python3?|node|npm|npx|deno|ruby|perl)(?:\s+[-\w]+)*\s+[\"']?"
-    r"|(?:source|\.)\s+[\"']?"
-    r"|&?\s*[\"']?)"
-    r"$")
-EVAL_FLAG_RE = re.compile(r"(?<![\w])-(?:c|Command)\b")
-
-
+SEG_SEP_RE = re.compile(r"[;&|(\n]")
+SEG_CALL_RE = re.compile(
+    r"^(?:bash|sh|zsh)(?:\s+[-\w]+)*\s*[\"']?$"
+    r"|^(?:pwsh|powershell)(?:\s+[-\w]+)*\s*(?:-File\s*)?[\"']?$"
+    r"|^(?:python3?|node|npm|npx|deno|ruby|perl)(?:\s+[-\w]+)*\s*[\"']?$"
+    r"|^(?:source|\.)\s*[\"']?$")
+BARE_PATH_PREFIX_RE = re.compile(r"^[./\\]*$")
 INTERP_QUOTE_RE = re.compile(
     r"(?:bash|sh|zsh|pwsh|powershell|python3?|node|npm|npx|deno|ruby|perl)"
     r"(?:\s+[-\w]+)*\s+[\"']$"
     r"|(?:source|\.)\s+[\"']$"
     r"|&\s*[\"']$")
+EVAL_FLAG_RE = re.compile(r"(?<![\w])-(?:c|Command)\b")
 
 
 def looks_like_call(before, token):
-    """The token is called, not printed: the text before it ends in an
-    interpreter/operator call prefix and never in an eval flag like
-    `bash -c` or `powershell -Command` (which evaluates strings). A token
-    inside an unclosed quote is a string literal unless the quote directly
-    follows an interpreter (a quoted path argument)."""
+    """The token is called, not printed or mentioned.
+
+    A token counts as a call only when, since the last statement separator,
+    it sits in the command position: nothing before it, an interpreter with
+    flags (bash/pwsh -File/python...), the call operator, or a bare path
+    prefix. `echo PATH` and `Write-Host PATH` put the token in an argument
+    position and never count. Eval flags (`bash -c`, `-Command`) evaluate
+    strings and never count either.
+    """
     if EVAL_FLAG_RE.search(before):
         return False
     singles = before.count("'")
     doubles = before.count('"')
     if (singles % 2 == 1 or doubles % 2 == 1) and not INTERP_QUOTE_RE.search(before):
         return False
-    return bool(CALL_PREFIX_RE.search(before))
+    segment = SEG_SEP_RE.split(before)[-1].strip()
+    if not segment:
+        return True
+    if segment.endswith("="):
+        return False
+    if BARE_PATH_PREFIX_RE.match(segment):
+        return True
+    return bool(SEG_CALL_RE.match(segment))
 
 
 def cmd_run_has_path(root, path_token):

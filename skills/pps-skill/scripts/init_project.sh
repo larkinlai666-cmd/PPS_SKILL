@@ -242,7 +242,7 @@ cat > "$target/.pps/verify-manifest.txt" <<'MANIFEST_EOF'
 # platform: any | powershell | bash. The gate executes every row for its own
 # platform and compares the exit code with expected_exit. cwd is relative to
 # the project root. Commands must not contain TAB characters.
-M-001	powershell	.	60	0	pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/project_verify.ps1 -Root .	gate entry runs all project checks
+M-001	powershell	.	60	0	& ./scripts/project_verify.ps1 -Root .	gate entry runs all project checks
 M-001	bash	.	60	0	bash scripts/project_verify.sh .	gate entry runs all project checks
 MANIFEST_EOF
 

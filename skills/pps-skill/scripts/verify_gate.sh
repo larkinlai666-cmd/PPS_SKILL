@@ -27,6 +27,36 @@ fi
 
 echo "== PPS verify gate =="
 
+# F-050-02: Python 3 is a hard runtime for the evidence engine. Windows
+# frequently has python/py but not python3, and the Store python3.exe stub is
+# not an interpreter. Discovery order: PPS_PYTHON -> python3 -> python -> py -3.
+resolve_python3() {
+  local cand
+  if [[ -n "${PPS_PYTHON:-}" ]] &&
+    "$PPS_PYTHON" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+    printf '%s\n' "$PPS_PYTHON"
+    return 0
+  fi
+  for cand in python3 python; do
+    if command -v "$cand" >/dev/null 2>&1 &&
+      "$cand" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  if command -v py >/dev/null 2>&1 &&
+    py -3 -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+    printf '%s\n' "py -3"
+    return 0
+  fi
+  return 1
+}
+if ! python3_bin="$(resolve_python3)"; then
+  echo "ERROR: the PPS evidence engine requires Python 3. Tried: python3, python, py -3. Install Python 3 or set PPS_PYTHON to the interpreter path." >&2
+  echo "PPS verify gate: FAILED (python 3 interpreter required)" >&2
+  exit 1
+fi
+
 # Any previous stamp is invalid the moment a new verification starts. A failed
 # run must never leave behind a stamp that readiness could accept.
 rm -f "$root/.pps/verify-stamp"
@@ -401,20 +431,58 @@ while IFS=$'\t' read -r check_id check_platform check_cwd check_timeout check_ex
   run_relevant=$((run_relevant + 1))
   item_cwd="$root"
   if [[ -n "$check_cwd" && "$check_cwd" != "." ]]; then
-    if [[ ! -d "$root/$check_cwd" ]]; then
+    # F-050-04: the working directory must live inside the project root.
+    # Absolute paths and escapes (including via symlinks) fail the row.
+    case "$check_cwd" in
+      /*|*:*) echo "ERROR: manifest check $check_id cwd '$check_cwd' is absolute; a check working directory must live inside the project root." >&2; run_failed=1; continue ;;
+    esac
+    if ! cwd_abs="$(cd "$root/$check_cwd" 2>/dev/null && pwd -P)"; then
       echo "ERROR: manifest check $check_id cwd '$check_cwd' does not exist." >&2
       run_failed=1
       continue
     fi
-    item_cwd="$root/$check_cwd"
+    case "$cwd_abs/" in
+      "$root/"*) item_cwd="$cwd_abs" ;;
+      *) echo "ERROR: manifest check $check_id cwd '$check_cwd' escapes the project root." >&2; run_failed=1; continue ;;
+    esac
   fi
   echo "check $check_id : $check_command"
   item_started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  ( cd "$item_cwd" && bash -c "$check_command" )
-  item_code=$?
   item_expected=0
   [[ "$check_expected" =~ ^[0-9]+$ ]] && item_expected="$check_expected"
-  if [[ "$item_code" == "$item_expected" ]]; then
+  item_code=-1
+  item_timed_out=0
+  if [[ "$check_timeout" =~ ^[0-9]+$ ]] && (( check_timeout > 0 )); then
+    # F-050-03: the timeout column is a real deadline. On expiry the whole
+    # process tree is killed and the row fails.
+    ( cd "$item_cwd" && bash -c "$check_command" ) &
+    item_pid=$!
+    waited=0
+    while kill -0 "$item_pid" 2>/dev/null; do
+      sleep 1
+      waited=$((waited + 1))
+      if (( waited >= check_timeout )); then
+        item_timed_out=1
+        kill "$item_pid" 2>/dev/null
+        pkill -TERM -P "$item_pid" 2>/dev/null
+        sleep 1
+        kill -9 "$item_pid" 2>/dev/null
+        pkill -KILL -P "$item_pid" 2>/dev/null
+        break
+      fi
+    done
+    wait "$item_pid" 2>/dev/null
+    item_code=$?
+    (( item_timed_out == 1 )) && item_code="timeout"
+  else
+    ( cd "$item_cwd" && bash -c "$check_command" )
+    item_code=$?
+  fi
+  if (( item_timed_out == 1 )); then
+    item_ok="false"
+    run_failed=1
+    echo "check $check_id : FAIL (timed out after ${check_timeout}s)"
+  elif [[ "$item_code" == "$item_expected" ]]; then
     item_ok="true"
     echo "check $check_id : pass (exit $item_code, expected $item_expected)"
   else
@@ -431,7 +499,7 @@ if (( run_relevant == 0 )); then
   echo "ERROR: the check manifest declares no check for the bash platform." >&2
   run_failed=1
 fi
-write_run_out="$(python3 "$script_dir/pps_evidence.py" write-run "$root" 'bash' "$run_tsv" 2>&1)"
+write_run_out="$($python3_bin "$script_dir/pps_evidence.py" write-run "$root" 'bash' "$run_tsv" 2>&1)"
 if [[ "$write_run_out" != "ok" && "$write_run_out" != "fail" ]]; then
   echo "ERROR: run record generation failed: $write_run_out" >&2
   echo "PPS verify gate: FAILED (run record generation)" >&2
@@ -465,7 +533,7 @@ if [[ -n "$redline_targets" ]]; then
   redline_unwired=0
   while IFS= read -r redline_target; do
     [[ -n "$redline_target" ]] || continue
-    run_evidence="$(python3 "$script_dir/pps_evidence.py" run-has-path "$root" "$redline_target" 2>/dev/null)"
+    run_evidence="$($python3_bin "$script_dir/pps_evidence.py" run-has-path "$root" "$redline_target" 2>/dev/null)"
     if [[ "$run_evidence" == "ok" ]]; then
       continue
     fi

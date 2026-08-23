@@ -1,7 +1,7 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-22 (updated for the 0.5.0 execution-proof round)
-- Scope: skill 0.5.0, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
+- Review date: 2026-08-23 (updated for the 0.5.1 field-consistency round)
+- Scope: skill 0.5.1, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
 
@@ -19,7 +19,7 @@
 | D-CORE-008 zero-information events | DUTY-G | **Closed**: `verify: none` with `pending: none` fails unless the title is prefixed `note/chat/plan/abandoned`; `files:` entries must pass path safety |
 | D-CORE-009 single writer never checked in tooling | DUTY-F | **Closed**: an unexpired snapshot forces `--takeover`, which must then be recorded as an event; deliberately not a lock |
 | D-CORE-010 review text lagged the code | DUTY-I | **Closed**: `validate_skill` fails when `ADVERSARIAL_REVIEW.md` does not name the current VERSION in its opening lines |
-| D-CORE-011 half-activated multitask layer | DUTY-A/I | **Partially closed**: an empty `TASK_INDEX.md` now fails with an explicit "delete the file to stay single-task" diagnostic. The 1.1→1.2 upgrade command remains on the 0.5 roadmap; field 1.1 projects must not be force-migrated yet |
+| D-CORE-011 half-activated multitask layer | DUTY-A/I | **Closed in 0.5.x**: an empty `TASK_INDEX.md` now fails with an explicit "delete the file to stay single-task" diagnostic; `migrate_project` exists with dry-run / apply --confirm / rollback (rollback restores the pre-apply file set, see the 0.5.1 round) |
 
 ### 0.5.0 execution-proof round (REVIEW49-P0-001..004, P1-005..008)
 
@@ -44,6 +44,26 @@ Still deferred by agreement: Runtime Surfaces stays a warning; this repository
 still does not switch to 1.2; the acceptance matrix (§9 of the audit) is
 satisfied locally on both platforms and in CI.
 
+### 0.5.1 field-consistency round (PPS-AUDIT-20260823-050, F-050-01..10)
+
+A second review chain re-ran the frozen matrix on a real Windows PowerShell
+5.1 field machine. Verdict: conditional pass; the execution-proof axis is the
+right one, but several "Closed" claims did not hold in the field. This round
+makes the execution layer field-truth on both platforms.
+
+| ID | Status in 0.5.1 |
+|---|---|
+| F-050-01 default manifest hardcodes pwsh | **Closed**: the default manifest's powershell row is now `& ./scripts/project_verify.ps1 -Root .`, executed by the gate's own engine (`pwsh` else `powershell`); a 5.1 box with no pwsh runs the default list |
+| F-050-02 python3 hard runtime declared Optional | **Closed**: discovery order `PPS_PYTHON` -> `python3` -> `python` -> `py -3` in gate and validator, both platforms; a missing interpreter is an explicit failure, not a CommandNotFound; ENVIRONMENT Required lists python; doctor probes py too |
+| F-050-03 timeout_s never killed | **Closed**: the column is a real deadline now; on expiry the process tree is killed, the row fails, the run record gets `exit_code: timeout`, and no stamp is written; PS uses Start-Process + Wait-Process + taskkill/pkill, bash uses background + kill -0 polling |
+| F-050-04 cwd not contained | **Closed**: absolute and escaping working directories (including via symlink) fail the row before spawn, both platforms |
+| F-050-05 print-only rows counted as calls | **Closed**: `looks_like_call` now only accepts the command position (bare invocation, call operator, interpreter with flags); `echo PATH` and `Write-Host PATH` are argument positions and never wire a red line; both smoke suites carry the unquoted print-only row |
+| F-050-06 migrator rollback/id unsafe | **Closed**: rollback restores the pre-apply file set and deletes files apply created (no backup entry); the manifest stays under `.pps/`; the decision id avoids existing `D-*` ids; PS 5.1 appends without BOM; the PS event line writes `YYYY-MM-DD:` with no space (matching the validator's event-line grammar); rollback fixtures on both platforms |
+| F-050-07 two copies of the word lists | **Closed**: `pps_evidence.py` reads the word lists from `state-machine.json`; hardcoded lists are only a fallback for a missing schema |
+| F-050-08 SKILL invariant contradicted the gate | **Closed**: SKILL.md now states the gate executes the project's own manifest and readiness never executes out-of-repo commands; the gate failure list names missing/failing/timing-out/escaping manifest rows |
+| F-050-09 review table lagged the code | **Closed**: D-CORE-011 row and the F-047-03 title now match the code |
+| F-050-10 substring word lists | **Residual by agreement**: `fail` still matches `failure-report`. Word-boundary work stays out of scope per the 049 stop-order; recorded here as residual, not a new round |
+
 ### 0.4.9 self-collision round (F-048-01..03)
 
 The 0.4.8 audit accepted the four 047 closures and then found the new machines can still be fooled: the automatic discard title trips the chronicle's own closing-verb rule, the live-line Contains still treats a string mention as a call, dead-branch dropping missed `if (0)` / `while ($false)`, and the "one parser" is three copies. All three closed:
@@ -64,7 +84,7 @@ The 0.4.7 audit accepted the necessary-path weld and then moved the fight up one
 |---|---|
 | F-047-01 deleting boundary_check restored the no-lock path | **Closed**: software/hybrid gates fail on `Relay: BOUNDARY MISSING`, same as a missing snapshot |
 | F-047-02 wiring parsers diverged and accepted dead code | **Closed**: one shared parser — comment-stripped, dead branches dropped, function bodies reachable only via closure from top-level calls; used by red-line tails, coverage evidence, and runtime probes on both platforms |
-| F-047-03 Discard still relied on conscience | **Closed**: `--discard-handover` appends its own `relay discard released protected paths` event or fails (exit 4) |
+| F-047-03 Discard still relied on conscience | **Closed**: `--discard-handover` appends its own `relay discard of protected paths` event or fails (exit 4) |
 | F-047-04 floor probe was true on the repository root | **Closed**: `e2e_probe.*` fails on `Main: .` or a directory; the template probe call captures its output so the check cannot be vacuously green |
 
 Deferred by agreement, not forgotten: Runtime Surfaces stays a warning until a live I3 recurrence justifies an error, and the 1.1→1.2 upgrader stays out of scope.

@@ -5,6 +5,23 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 skill="$repo_root/skills/pps-skill"
 temp_root="$(mktemp -d "${TMPDIR:-/tmp}/pps-skill-smoke.XXXXXX")"
 
+# F-050-02: the suite must survive field machines whose python3 is a Store
+# stub. Resolve once and use it everywhere below.
+PY3=""
+for py_cand in "${PPS_PYTHON:-}" python3 python; do
+  [[ -n "$py_cand" ]] || continue
+  if command -v "$py_cand" >/dev/null 2>&1 &&
+    "$py_cand" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+    PY3="$py_cand"
+    break
+  fi
+done
+if [[ -z "$PY3" ]] && command -v py >/dev/null 2>&1 &&
+  py -3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
+  PY3="py -3"
+fi
+[[ -n "$PY3" ]] || { echo "smoke needs a Python 3 interpreter (tried python3, python, py -3)" >&2; exit 2; }
+
 cleanup() {
   case "$temp_root" in
     "${TMPDIR:-/tmp}"/pps-skill-smoke.*) rm -rf "$temp_root" ;;
@@ -241,7 +258,7 @@ expect_invalid "$temp_root/missing-dependency-manifest" \
   "Missing declared dependency manifest"
 
 cp -R "$temp_root/standard-case" "$temp_root/missing-required-git"
-sed -i.bak 's/^- Required: git$/- Required: python/' \
+sed -i.bak 's/^- Required: .*$/- Required: python/' \
   "$temp_root/missing-required-git/ENVIRONMENT.md"
 expect_invalid "$temp_root/missing-required-git" \
   "Required tools must include git" \
@@ -900,7 +917,7 @@ expect_invalid "$temp_root/receipt-escape-path" \
   "Receipt disposition path escape"
 
 cp -R "$multitask_case" "$temp_root/receipt-status-mismatch"
-python3 - "$temp_root/receipt-status-mismatch" <<'PYEOF'
+$PY3 - "$temp_root/receipt-status-mismatch" <<'PYEOF'
 import sys
 root = sys.argv[1]
 p = root + '/DECISIONS.md'
@@ -951,7 +968,7 @@ receipt_base="$temp_root/receipt-evidence-base"
 cp -R "$multitask_case" "$receipt_base"
 perl -0pi -e 's/(### T-002\n- Title: Worker\n- Role: worker\n- Status: )active/${1}integrated/' \
   "$receipt_base/TASK_INDEX.md"
-python3 - "$receipt_base" <<'PYEOF'
+$PY3 - "$receipt_base" <<'PYEOF'
 import sys
 root = sys.argv[1]
 p = root + '/DECISIONS.md'
@@ -1064,7 +1081,7 @@ expect_invalid "$temp_root/receipt-duplicate-status" \
   "Receipt declaring Status twice"
 
 cp -R "$receipt_base" "$temp_root/receipt-lineage-no-migration"
-python3 - "$temp_root/receipt-lineage-no-migration" <<'PYEOF'
+$PY3 - "$temp_root/receipt-lineage-no-migration" <<'PYEOF'
 import sys
 root = sys.argv[1]
 p = root + '/MERGES.md'
@@ -1100,7 +1117,7 @@ cp -R "$receipt_base" "$temp_root/archived-contradiction"
 perl -0pi -e 's/(- Status: )integrated/${1}archived/' \
   "$temp_root/archived-contradiction/TASK_INDEX.md"
 head_ref="$(git -C "$temp_root/archived-contradiction" rev-parse HEAD 2>/dev/null || echo lineage_incomplete)"
-python3 - "$temp_root/archived-contradiction" <<'PYEOF'
+$PY3 - "$temp_root/archived-contradiction" <<'PYEOF'
 import subprocess, sys
 root = sys.argv[1]
 try:
@@ -1189,7 +1206,7 @@ expect_invalid "$temp_root/mx-verification-unrelated-event" \
   "Verification borrowing an unrelated event date must be rejected"
 
 cp -R "$matrix_base" "$temp_root/mx-approval-negative"
-python3 - "$temp_root/mx-approval-negative" <<'PYEOF'
+$PY3 - "$temp_root/mx-approval-negative" <<'PYEOF'
 import sys
 root = sys.argv[1]
 p = root + '/DECISIONS.md'
@@ -1318,7 +1335,7 @@ set -e
 [[ "$mx_gate_exit9_code" != "0" ]]
 grep -q 'check manifest execution' "$temp_root/mx-gate-exit9.out"
 [[ ! -f "$mx_gate_exit9/.pps/verify-stamp" ]]
-python3 - "$mx_gate_exit9" <<'PYEOF'
+$PY3 - "$mx_gate_exit9" <<'PYEOF'
 import json, sys
 r = json.load(open(sys.argv[1] + '/.pps/verify-run.json'))
 assert r['result'] == 'fail', r
@@ -1334,7 +1351,7 @@ printf '#!/usr/bin/env bash\necho ok\n' >"$mx_gate_mention/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_gate_mention/PROJECT_STATE.md"
 mkdir -p "$mx_gate_mention/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$mx_gate_mention/tests/parity-harness.sh"
-python3 - "$mx_gate_mention" <<'PYEOF'
+$PY3 - "$mx_gate_mention" <<'PYEOF'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -1362,7 +1379,7 @@ printf '#!/usr/bin/env bash\necho ok\n' >"$mx_gate_wired/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_gate_wired/PROJECT_STATE.md"
 mkdir -p "$mx_gate_wired/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$mx_gate_wired/tests/parity-harness.sh"
-python3 - "$mx_gate_wired" <<'PYEOF'
+$PY3 - "$mx_gate_wired" <<'PYEOF'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -1378,6 +1395,151 @@ rm -f "$mx_gate_wired/.pps/verify-stamp"
 bash "$mx_gate_wired/scripts/session_begin.sh" "$mx_gate_wired" >/dev/null 2>&1 || true
 bash "$mx_gate_wired/scripts/verify_gate.sh" "$mx_gate_wired" >"$temp_root/mx-gate-wired.out" 2>&1
 grep -q 'red line wiring: all named checks are wired to executed manifest checks' "$temp_root/mx-gate-wired.out"
+
+# ==== 050 field-consistency fixtures ====
+
+# 050-01: the default manifest must not hardcode an interpreter the machine
+# may not have; the powershell row runs under the gate's own engine.
+grep -q '^M-001	powershell	\.	60	0	& ./scripts/project_verify.ps1 -Root .' \
+  "$temp_root/software-case/.pps/verify-manifest.txt"
+
+# 050-03: the timeout column is a real deadline: the row is killed, the run
+# record says timeout, and no stamp is written.
+mx_timeout="$temp_root/mx-timeout"
+cp -R "$temp_root/software-case" "$mx_timeout"
+mkdir -p "$mx_timeout/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$mx_timeout/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_timeout/PROJECT_STATE.md"
+printf 'M-050	any	.	1	0	sleep 30	slow test
+' >>"$mx_timeout/.pps/verify-manifest.txt"
+rm -f "$mx_timeout/.pps/verify-stamp"
+bash "$mx_timeout/scripts/session_begin.sh" "$mx_timeout" >/dev/null 2>&1 || true
+set +e
+bash "$mx_timeout/scripts/verify_gate.sh" "$mx_timeout" >"$temp_root/mx-timeout.out" 2>&1
+mx_timeout_code=$?
+set -e
+[[ "$mx_timeout_code" != "0" ]]
+grep -q 'timed out after 1s' "$temp_root/mx-timeout.out"
+[[ ! -f "$mx_timeout/.pps/verify-stamp" ]]
+$PY3 - "$mx_timeout" <<'PYEOF'
+import json, sys
+r = json.load(open(sys.argv[1] + '/.pps/verify-run.json'))
+for item in r['items']:
+    if item['id'] == 'M-050':
+        assert item['ok'] is False and item['exit_code'] == 'timeout', item
+PYEOF
+
+# 050-04: a working directory escaping the project root fails the row.
+mx_cwd="$temp_root/mx-cwd-escape"
+cp -R "$temp_root/software-case" "$mx_cwd"
+mkdir -p "$mx_cwd/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$mx_cwd/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_cwd/PROJECT_STATE.md"
+printf 'M-050	any	../	60	0	pwd	escape attempt
+' >>"$mx_cwd/.pps/verify-manifest.txt"
+rm -f "$mx_cwd/.pps/verify-stamp"
+bash "$mx_cwd/scripts/session_begin.sh" "$mx_cwd" >/dev/null 2>&1 || true
+set +e
+bash "$mx_cwd/scripts/verify_gate.sh" "$mx_cwd" >"$temp_root/mx-cwd.out" 2>&1
+mx_cwd_code=$?
+set -e
+[[ "$mx_cwd_code" != "0" ]]
+grep -q "cwd '../' escapes the project root" "$temp_root/mx-cwd.out"
+
+# 050-05: an unquoted echo of the path is not a call and must not wire the
+# red line (the 0.5.0 fixture only used bash -c, which the eval flag blocks).
+mx_echo="$temp_root/mx-echo-mention"
+cp -R "$temp_root/software-case" "$mx_echo"
+mkdir -p "$mx_echo/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$mx_echo/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_echo/PROJECT_STATE.md"
+mkdir -p "$mx_echo/tests"
+printf '#!/usr/bin/env bash
+exit 0
+' >"$mx_echo/tests/parity-harness.sh"
+$PY3 - "$mx_echo" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/AGENTS.md'
+t = open(p, encoding='utf-8').read()
+i = t.index('## Red Lines')
+j = t.index('\n## ', i + 5)
+t = t[:j] + '\n- Never ship without parity. (verify: tests/parity-harness.sh)\n' + t[j:]
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+printf 'M-002	bash	.	60	0	echo tests/parity-harness.sh	print only, unquoted
+' \
+  >>"$mx_echo/.pps/verify-manifest.txt"
+rm -f "$mx_echo/.pps/verify-stamp"
+bash "$mx_echo/scripts/session_begin.sh" "$mx_echo" >/dev/null 2>&1 || true
+set +e
+bash "$mx_echo/scripts/verify_gate.sh" "$mx_echo" >"$temp_root/mx-echo.out" 2>&1
+mx_echo_code=$?
+set -e
+[[ "$mx_echo_code" != "0" ]]
+grep -q 'red line not wired to an executed check' "$temp_root/mx-echo.out"
+
+# 050-06: migration apply + rollback. Rollback must delete every file apply
+# created (no half-activated multitask layer), keep the manifest under .pps/,
+# and avoid a decision id that already exists.
+mx_mig="$temp_root/mx-migrate"
+cp -R "$temp_root/software-case" "$mx_mig"
+rm -f "$mx_mig/TASK_INDEX.md" "$mx_mig/MERGES.md" "$mx_mig/.pps/verify-manifest.txt"
+$PY3 - "$mx_mig" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/PROJECT_STATE.md'
+t = open(p, encoding='utf-8').read()
+open(p, 'w', encoding='utf-8').write(t.replace('- Protocol: PPS/1.2', '- Protocol: PPS/1.1'))
+PYEOF
+printf '
+### D-MIGRATE-001 [active]
+- Date: 2026-08-01
+- Decision: approve
+- Subject: legacy
+- Summary: already used.
+' \
+  >>"$mx_mig/DECISIONS.md"
+bash "$skill/scripts/migrate_project.sh" "$mx_mig" --apply --confirm >/dev/null 2>&1
+[[ -f "$mx_mig/TASK_INDEX.md" ]]
+[[ -f "$mx_mig/MERGES.md" ]]
+[[ -f "$mx_mig/.pps/verify-manifest.txt" ]]
+grep -q '### D-MIGRATE-002 ' "$mx_mig/DECISIONS.md"
+grep -q "D-MIGRATE-002" "$mx_mig/EVENTS.md"
+mx_mig_backup="$(ls -d "$mx_mig/.pps"/migration-backup-* | head -1)"
+bash "$skill/scripts/migrate_project.sh" "$mx_mig" --rollback "$mx_mig_backup" >/dev/null 2>&1
+[[ ! -f "$mx_mig/TASK_INDEX.md" ]]
+[[ ! -f "$mx_mig/MERGES.md" ]]
+[[ ! -f "$mx_mig/.pps/verify-manifest.txt" ]]
+if ! grep -q '### D-MIGRATE-002 ' "$mx_mig/DECISIONS.md"; then :; else
+  echo "rollback left the migration decision behind" >&2; exit 1
+fi
+grep -q -- '- Protocol: PPS/1.1' "$mx_mig/PROJECT_STATE.md"
+
+# 050-02: with a broken python3 on PATH the gate falls back to python and
+# still stamps (field machines hit the Store stub exactly this way).
+mx_py="$temp_root/mx-py-fallback"
+cp -R "$temp_root/software-case" "$mx_py"
+mkdir -p "$mx_py/src"
+printf '#!/usr/bin/env bash\necho ok\n' >"$mx_py/src/main.sh"
+sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mx_py/PROJECT_STATE.md"
+py_shim="$temp_root/py-shim"
+mkdir -p "$py_shim"
+printf '#!/bin/sh
+echo "store stub"
+exit 127
+' >"$py_shim/python3"
+chmod +x "$py_shim/python3"
+real_py="$(command -v python3 || command -v python)"
+# A wrapper (not a symlink): macOS CLT python3 shims dispatch on argv[0], so a
+# python-named symlink can trigger the xcode-select stub instead of running.
+printf '#!/bin/sh\nexec %s "$@"\n' "$real_py" >"$py_shim/python"
+chmod +x "$py_shim/python"
+rm -f "$mx_py/.pps/verify-stamp"
+bash "$mx_py/scripts/session_begin.sh" "$mx_py" >/dev/null 2>&1 || true
+PATH="$py_shim:$PATH" bash "$mx_py/scripts/verify_gate.sh" "$mx_py" \
+  >"$temp_root/mx-py.out" 2>&1
+[[ -f "$mx_py/.pps/verify-stamp" ]]
 
 cp -R "$receipt_base" "$temp_root/empty-deferred"
 perl -0pi -e 's/(- Status: )integrated/${1}deferred/' \
@@ -1576,7 +1738,7 @@ bash "$skill/scripts/init_project.sh" stale-snapshot-case \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
 printf 'session A work\n' >"$stale_snapshot_case/docs/MAIN.md"
 bash "$stale_snapshot_case/scripts/session_begin.sh" "$stale_snapshot_case" >/dev/null
-python3 - "$stale_snapshot_case" <<'PYEOF2'
+$PY3 - "$stale_snapshot_case" <<'PYEOF2'
 import re, sys
 p = sys.argv[1] + '/.pps/session-snapshot'
 t = open(p, encoding='utf-8').read()
@@ -1594,7 +1756,7 @@ grep -Eq 'session snapshot (already exists|exists)' "$temp_root/stale-snapshot.o
 grep -q 'docs/MAIN.md' "$temp_root/stale-snapshot.out"
 grep -q 'Re-run with --takeover' "$temp_root/stale-snapshot.out"
 # Beyond the TTL the claim must still hold: age never releases it.
-python3 - "$stale_snapshot_case" <<'PYEOF2'
+$PY3 - "$stale_snapshot_case" <<'PYEOF2'
 import re, sys
 p = sys.argv[1] + '/.pps/session-snapshot'
 t = open(p, encoding='utf-8').read()
@@ -1622,7 +1784,7 @@ printf '#!/usr/bin/env bash\necho ok\n' >"$comment_wiring_case/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$comment_wiring_case/PROJECT_STATE.md"
 mkdir -p "$comment_wiring_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$comment_wiring_case/tests/parity-harness.sh"
-python3 - "$comment_wiring_case" <<'PYEOF2'
+$PY3 - "$comment_wiring_case" <<'PYEOF2'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -1653,7 +1815,7 @@ cp -R "$temp_root/software-case" "$always_true_case"
 mkdir -p "$always_true_case/src"
 printf '#!/usr/bin/env bash\necho ok\n' >"$always_true_case/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$always_true_case/PROJECT_STATE.md"
-python3 - "$always_true_case" <<'PYEOF2'
+$PY3 - "$always_true_case" <<'PYEOF2'
 import re, sys
 p = sys.argv[1] + '/scripts/project_verify.sh'
 t = open(p, encoding='utf-8').read()
@@ -1675,7 +1837,7 @@ coverage_unwired_case="$temp_root/coverage-unwired-case"
 cp -R "$temp_root/standard-case" "$coverage_unwired_case"
 mkdir -p "$coverage_unwired_case/prototypes"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$coverage_unwired_case/prototypes/hardening-smoke.sh"
-python3 - "$coverage_unwired_case" <<'PYEOF2'
+$PY3 - "$coverage_unwired_case" <<'PYEOF2'
 import re, sys
 p = sys.argv[1] + '/CONTEXT.md'
 t = open(p, encoding='utf-8').read()
@@ -1724,7 +1886,7 @@ printf '#!/usr/bin/env bash\necho ok\n' >"$dead_fn_wiring_case/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$dead_fn_wiring_case/PROJECT_STATE.md"
 mkdir -p "$dead_fn_wiring_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$dead_fn_wiring_case/tests/parity-harness.sh"
-python3 - "$dead_fn_wiring_case" <<'PYEOF2'
+$PY3 - "$dead_fn_wiring_case" <<'PYEOF2'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -1757,7 +1919,7 @@ printf '#!/usr/bin/env bash\necho ok\n' >"$dead_branch_wiring_case/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$dead_branch_wiring_case/PROJECT_STATE.md"
 mkdir -p "$dead_branch_wiring_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$dead_branch_wiring_case/tests/parity-harness.sh"
-python3 - "$dead_branch_wiring_case" <<'PYEOF2'
+$PY3 - "$dead_branch_wiring_case" <<'PYEOF2'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -1789,7 +1951,7 @@ printf '#!/usr/bin/env bash\necho ok\n' >"$mention_wiring_case/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$mention_wiring_case/PROJECT_STATE.md"
 mkdir -p "$mention_wiring_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$mention_wiring_case/tests/parity-harness.sh"
-python3 - "$mention_wiring_case" <<'PYEOF2'
+$PY3 - "$mention_wiring_case" <<'PYEOF2'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -1821,7 +1983,7 @@ printf '#!/usr/bin/env bash\necho ok\n' >"$while_false_case/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$while_false_case/PROJECT_STATE.md"
 mkdir -p "$while_false_case/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$while_false_case/tests/parity-harness.sh"
-python3 - "$while_false_case" <<'PYEOF2'
+$PY3 - "$while_false_case" <<'PYEOF2'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -1883,7 +2045,7 @@ floor_probe_file_case="$temp_root/floor-probe-file-case"
 cp -R "$temp_root/software-case" "$floor_probe_file_case"
 mkdir -p "$floor_probe_file_case/src"
 printf '#!/usr/bin/env bash\necho ok\n' >"$floor_probe_file_case/src/main.sh"
-python3 - "$floor_probe_file_case" <<'PYEOF2'
+$PY3 - "$floor_probe_file_case" <<'PYEOF2'
 import sys
 p = sys.argv[1] + '/PROJECT_STATE.md'
 t = open(p, encoding='utf-8').read()
@@ -1937,7 +2099,7 @@ cp -R "$temp_root/software-case" "$redline_unwired_case"
 mkdir -p "$redline_unwired_case/src"
 printf '#!/usr/bin/env bash\necho ok\n' >"$redline_unwired_case/src/main.sh"
 sed -i.bak 's/^- Main: .$/- Main: src\/main.sh/' "$redline_unwired_case/PROJECT_STATE.md"
-python3 - "$redline_unwired_case" <<'PYEOF2'
+$PY3 - "$redline_unwired_case" <<'PYEOF2'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -1962,7 +2124,7 @@ grep -q 'red line not wired to an executed check' "$temp_root/redline-unwired.ou
 
 coverage_prose_case="$temp_root/coverage-prose-case"
 cp -R "$temp_root/standard-case" "$coverage_prose_case"
-python3 - "$coverage_prose_case" <<'PYEOF2'
+$PY3 - "$coverage_prose_case" <<'PYEOF2'
 import re, sys
 root = sys.argv[1]
 p = root + '/CONTEXT.md'
@@ -1976,7 +2138,7 @@ expect_invalid "$coverage_prose_case" \
 
 coverage_ghost_case="$temp_root/coverage-ghost-case"
 cp -R "$temp_root/standard-case" "$coverage_ghost_case"
-python3 - "$coverage_ghost_case" <<'PYEOF2'
+$PY3 - "$coverage_ghost_case" <<'PYEOF2'
 import re, sys
 root = sys.argv[1]
 p = root + '/CONTEXT.md'
@@ -1990,7 +2152,7 @@ expect_invalid "$coverage_ghost_case" \
 
 aged_proposal_case="$temp_root/aged-proposal-case"
 cp -R "$temp_root/standard-case" "$aged_proposal_case"
-python3 - "$aged_proposal_case" <<'PYEOF2'
+$PY3 - "$aged_proposal_case" <<'PYEOF2'
 import re, sys
 root = sys.argv[1]
 p = root + '/CONTEXT.md'
@@ -2004,7 +2166,7 @@ expect_invalid "$aged_proposal_case" \
 
 abandoned_proposal_case="$temp_root/abandoned-proposal-case"
 cp -R "$temp_root/standard-case" "$abandoned_proposal_case"
-python3 - "$abandoned_proposal_case" <<'PYEOF2'
+$PY3 - "$abandoned_proposal_case" <<'PYEOF2'
 import re, sys
 root = sys.argv[1]
 p = root + '/CONTEXT.md'
@@ -2075,7 +2237,7 @@ packet_relay_case="$temp_root/packet-relay-case"
 bash "$skill/scripts/init_project.sh" packet-relay-case \
   --profile standard --parent "$temp_root" \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
-python3 - "$packet_relay_case" <<'PYEOF2'
+$PY3 - "$packet_relay_case" <<'PYEOF2'
 import sys
 root = sys.argv[1]
 p = root + '/AGENTS.md'
@@ -2214,7 +2376,7 @@ bash "$skill/scripts/init_project.sh" ambiguous-stamp-case \
   --profile standard --parent "$temp_root" \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
 bash "$ambiguous_stamp_case/scripts/verify_gate.sh" "$ambiguous_stamp_case" >/dev/null
-python3 - "$ambiguous_stamp_case/.pps/verify-stamp" <<'PYEOF'
+$PY3 - "$ambiguous_stamp_case/.pps/verify-stamp" <<'PYEOF'
 import sys
 p = sys.argv[1]
 t = open(p).read()

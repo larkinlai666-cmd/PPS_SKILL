@@ -4,6 +4,35 @@ set -uo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 root="$(pwd)"
 quiet=""
+
+# F-050-02: Python 3 interpreter discovery, shared shape with verify_gate.
+# Order: PPS_PYTHON -> python3 -> python -> py -3. Missing interpreter is a
+# hard failure: without the evidence engine, validation proves nothing.
+resolve_python3() {
+  local cand
+  if [[ -n "${PPS_PYTHON:-}" ]] &&
+    "$PPS_PYTHON" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+    printf '%s\n' "$PPS_PYTHON"
+    return 0
+  fi
+  for cand in python3 python; do
+    if command -v "$cand" >/dev/null 2>&1 &&
+      "$cand" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  if command -v py >/dev/null 2>&1 &&
+    py -3 -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+    printf '%s\n' "py -3"
+    return 0
+  fi
+  return 1
+}
+if ! python3_bin="$(resolve_python3)"; then
+  echo "ERROR: the PPS evidence engine requires Python 3. Tried: python3, python, py -3. Install Python 3 or set PPS_PYTHON to the interpreter path." >&2
+  exit 1
+fi
 root_seen=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -1110,7 +1139,7 @@ if (( is_pps12 == 1 )); then
         grep -Eq '^PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$'; then
         add_error "Task $task_id Active Package must be a PKG-* ID, found '$task_active_package'."
       elif [[ "$task_active_package" != "$package" ]] &&
-        [[ "$(python3 "$script_dir/pps_evidence.py" event-positive "$root" "$task_active_package" 2>/dev/null)" != "ok" ]]; then
+        [[ "$($python3_bin "$script_dir/pps_evidence.py" event-positive "$root" "$task_active_package" 2>/dev/null)" != "ok" ]]; then
         add_error "Task $task_id Active Package '$task_active_package' is neither the current package '$package' nor recorded as a positive event line in EVENTS.md."
       fi
       case "$task_role" in
@@ -1127,7 +1156,7 @@ if (( is_pps12 == 1 )); then
         if [[ -z "$task_base_checkpoint" || "$task_base_checkpoint" == "none" ]]; then
           add_error "Task $task_id is 'handoff_ready' without a 'Base Checkpoint' field; the handoff must record where the work was frozen."
         elif [[ "$task_base_checkpoint" != "lineage_incomplete" ]] &&
-          [[ "$(python3 "$script_dir/pps_evidence.py" resolve-commit "$root" "$task_base_checkpoint" 2>/dev/null)" != "commit" ]]; then
+          [[ "$($python3_bin "$script_dir/pps_evidence.py" resolve-commit "$root" "$task_base_checkpoint" 2>/dev/null)" != "commit" ]]; then
           add_error "Task $task_id Base Checkpoint '$task_base_checkpoint' is not a resolvable commit."
         fi
       fi
@@ -1320,7 +1349,7 @@ if (( is_pps12 == 1 )); then
       # recorded in the chronicle as a parsed event line. A substring in a
       # comment, heading, or prose is not evidence a package ever existed.
       if [[ "$merge_target" =~ ^PKG- && "$merge_target" != "$package" ]] &&
-        [[ "$(python3 "$script_dir/pps_evidence.py" event-positive "$root" "$merge_target" 2>/dev/null)" != "ok" ]]; then
+        [[ "$($python3_bin "$script_dir/pps_evidence.py" event-positive "$root" "$merge_target" 2>/dev/null)" != "ok" ]]; then
         add_error "Merge receipt $merge_id Target Package '$merge_target' is neither the current package '$package' nor recorded as a positive event line in EVENTS.md."
       fi
       if [[ "$merge_status" == "integrated" ]]; then
@@ -1458,7 +1487,7 @@ if (( is_pps12 == 1 )); then
             exit
           }' "$task_index" 2>/dev/null)"
         [[ -n "$src_role" ]] || continue
-        if [[ "$(python3 "$script_dir/pps_evidence.py" role-allows "$src_role" "$merge_relation" 2>/dev/null)" != "true" ]]; then
+        if [[ "$($python3_bin "$script_dir/pps_evidence.py" role-allows "$src_role" "$merge_relation" 2>/dev/null)" != "true" ]]; then
           add_error "Merge receipt $merge_id Relation '$merge_relation' is not allowed for Source Task $src_task_id whose Role is '$src_role' (see references/state-machine.json)."
         fi
       done < <(printf '%s\n' "$merge_sources" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
@@ -1482,7 +1511,7 @@ if (( is_pps12 == 1 )); then
         # manifest check), file_evidence (an in-repo regular file), or event
         # (a positive, non-negated chronicle line naming this merge). Free
         # text — especially text containing fail/failed — proves nothing.
-        verification_verdict="$(python3 "$script_dir/pps_evidence.py" verification-parse "$root" "$merge_verification" "$merge_id" 2>/dev/null)"
+        verification_verdict="$($python3_bin "$script_dir/pps_evidence.py" verification-parse "$root" "$merge_verification" "$merge_id" 2>/dev/null)"
         if [[ "$verification_verdict" != ok* ]]; then
           add_error "Merge receipt $merge_id Verification '$merge_verification' is not evidence the merge succeeded ($verification_verdict). Use 'gate_result: <check id>', 'file_evidence: <existing in-repo file>', 'event: <mergeId>' (or 'event: <date>:<mergeId>'), or a named gate with a positive outcome."
         fi
@@ -1510,7 +1539,7 @@ if (( is_pps12 == 1 )); then
             kept_real=0
             [[ -e "$root/$disposition_path" ]] && kept_real=1
             if (( kept_real == 0 )) && [[ "$merge_base" != "lineage_incomplete" && -n "$merge_base" ]] &&
-              [[ "$(python3 "$script_dir/pps_evidence.py" in-commit "$root" "$merge_base" "$disposition_path" 2>/dev/null)" == "present" ]]; then
+              [[ "$($python3_bin "$script_dir/pps_evidence.py" in-commit "$root" "$merge_base" "$disposition_path" 2>/dev/null)" == "present" ]]; then
               kept_real=1
             fi
             (( kept_real == 1 )) ||
@@ -1524,7 +1553,7 @@ if (( is_pps12 == 1 )); then
             if [[ "$merge_result" != "lineage_incomplete" && -n "$merge_result" ]]; then
               # The Result tree is the truth of what merged. A path that
               # exists only in a dirty worktree is pending, not merged.
-              if [[ "$(python3 "$script_dir/pps_evidence.py" in-commit "$root" "$merge_result" "$disposition_path" 2>/dev/null)" == "present" ]]; then
+              if [[ "$($python3_bin "$script_dir/pps_evidence.py" in-commit "$root" "$merge_result" "$disposition_path" 2>/dev/null)" == "present" ]]; then
                 accepted_real=1
               fi
             elif [[ -e "$root/$disposition_path" ]]; then
@@ -1580,13 +1609,13 @@ if (( is_pps12 == 1 )); then
           -n "$merge_base" && -n "$merge_result" ]]; then
           # Fingerprints are not lineage: two commits can share a tree, and a
           # reversed pair is a regression, not an integration.
-          ancestor_verdict="$(python3 "$script_dir/pps_evidence.py" ancestor "$root" "$merge_base" "$merge_result" 2>/dev/null)"
+          ancestor_verdict="$($python3_bin "$script_dir/pps_evidence.py" ancestor "$root" "$merge_base" "$merge_result" 2>/dev/null)"
           if [[ "$ancestor_verdict" == "unresolvable" ]]; then
             add_error "Merge receipt $merge_id Base/Result Checkpoints are not resolvable commits; lineage cannot be proven."
           elif [[ "$ancestor_verdict" == "not-ancestor" ]]; then
             add_error "Merge receipt $merge_id Result Checkpoint is not a descendant of its Base Checkpoint; reversed or forked lineage is not an integration."
           fi
-          tree_verdict="$(python3 "$script_dir/pps_evidence.py" tree-diff "$root" "$merge_base" "$merge_result" 2>/dev/null)"
+          tree_verdict="$($python3_bin "$script_dir/pps_evidence.py" tree-diff "$root" "$merge_base" "$merge_result" 2>/dev/null)"
           if [[ "$tree_verdict" == "same" ]]; then
             add_error "Merge receipt $merge_id Base and Result Checkpoints carry the same tree; different commit ids with byte-identical content integrated nothing."
           fi
@@ -1876,7 +1905,7 @@ while IFS= read -r id; do
         else
           # Execution is proven by the gate's run record, not by text shape
           # in the entry.
-          if [[ "$(python3 "$script_dir/pps_evidence.py" run-has-path "$root" "$coverage_ref" 2>/dev/null)" == "ok" ]]; then
+          if [[ "$($python3_bin "$script_dir/pps_evidence.py" run-has-path "$root" "$coverage_ref" 2>/dev/null)" == "ok" ]]; then
             coverage_evidence_ok=1
           else
             coverage_evidence_reason="names '$coverage_ref' which exists but no manifest check ran it successfully on this platform; evidence the gate did not run keeps the table green forever"

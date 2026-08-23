@@ -45,7 +45,15 @@ package_id="$(awk '
 [[ -n "$package_id" ]] || die "cannot resolve the current package from PROJECT_STATE.md"
 
 today="$(date -u '+%Y-%m-%d')"
+# F-050-06: never collide with a decision id the project already uses. A
+# silently skipped append would leave the migration without its authorization.
+used_ids="$(grep -Eo '^###[[:space:]]+D-[A-Za-z0-9-]+' "$root/DECISIONS.md" 2>/dev/null | awk '{print $2}' | sort -u | tr '\n' ' ')"
 decision_id="D-MIGRATE-001"
+n=1
+while [[ " $used_ids " == *" $decision_id "* ]]; do
+  n=$((n + 1))
+  decision_id="D-MIGRATE-$(printf '%03d' "$n")"
+done
 
 task_index_text() {
   cat <<EOF
@@ -132,7 +140,7 @@ apply() {
   grep -Fq "[$package_id] migration_authorized" "$root/EVENTS.md" || event_text >> "$root/EVENTS.md"
   if [[ ! -f "$root/.pps/verify-manifest.txt" ]]; then
     mkdir -p "$root/.pps"
-    printf '# PPS check manifest — check_id\tplatform\tcwd\ttimeout_s\texpected_exit\tcommand\tnote\nM-001\tpowershell\t.\t60\t0\tpwsh -NoProfile -ExecutionPolicy Bypass -File scripts/project_verify.ps1 -Root .\tgate entry runs all project checks\nM-001\tbash\t.\t60\t0\tbash scripts/project_verify.sh .\tgate entry runs all project checks\n' > "$root/.pps/verify-manifest.txt"
+    printf '# PPS check manifest — check_id\tplatform\tcwd\ttimeout_s\texpected_exit\tcommand\tnote\nM-001\tpowershell\t.\t60\t0\t& ./scripts/project_verify.ps1 -Root .\tgate entry runs all project checks\nM-001\tbash\t.\t60\t0\tbash scripts/project_verify.sh .\tgate entry runs all project checks\n' > "$root/.pps/verify-manifest.txt"
   fi
   echo "migration applied; backup: $backup"
   echo "NOTICE: 'Protocol:' in PROJECT_STATE.md was NOT changed. Run validate_project"
@@ -141,9 +149,23 @@ apply() {
 
 rollback() {
   [[ -n "$backup_dir" && -d "$backup_dir" ]] || die "rollback needs a backup directory created by --apply"
-  for f in TASK_INDEX.md MERGES.md DECISIONS.md EVENTS.md PROJECT_STATE.md verify-manifest.txt; do
-    [[ -f "$backup_dir/$f" ]] && cp "$backup_dir/$f" "$root/$f"
+  # F-050-06: rollback restores the file set that existed BEFORE apply. Files
+  # that apply created (no backup entry) are deleted, so a rollback cannot
+  # leave a half-activated multitask layer behind.
+  for f in TASK_INDEX.md MERGES.md DECISIONS.md EVENTS.md PROJECT_STATE.md; do
+    if [[ -f "$backup_dir/$f" ]]; then
+      cp "$backup_dir/$f" "$root/$f"
+    elif [[ -f "$root/$f" ]]; then
+      rm "$root/$f"
+    fi
   done
+  if [[ -f "$backup_dir/verify-manifest.txt" ]]; then
+    mkdir -p "$root/.pps"
+    cp "$backup_dir/verify-manifest.txt" "$root/.pps/verify-manifest.txt"
+  elif [[ -f "$root/.pps/verify-manifest.txt" ]]; then
+    rm "$root/.pps/verify-manifest.txt"
+  fi
+  rmdir "$root/.pps" 2>/dev/null || true
   echo "migration rolled back from $backup_dir"
 }
 
