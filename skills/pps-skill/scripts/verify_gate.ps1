@@ -459,13 +459,13 @@ foreach ($lineRaw in [System.IO.File]::ReadAllLines($manifestPath, [System.Text.
         # F-050-03: the timeout column is a real deadline, not a note. The
         # command runs as its own process; on expiry the whole tree is killed
         # and the row fails. -EncodedCommand avoids all quoting mangling.
+        # Process.WaitForExit is reliable on both PS 5.1 and 7 (Wait-Process
+        # plus ExitCode proved flaky on 5.1).
         $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($checkCommand))
         $itemProc = Start-Process -FilePath $engine.Source `
             -ArgumentList @('-NoProfile', '-EncodedCommand', $encoded) `
             -WorkingDirectory $itemCwd -PassThru -NoNewWindow
-        $null = Wait-Process -Id $itemProc.Id -Timeout $itemTimeout -ErrorAction SilentlyContinue
-        $itemProc.Refresh()
-        if ($itemProc.HasExited) {
+        if ($itemProc.WaitForExit([int]($itemTimeout * 1000))) {
             $itemCode = $itemProc.ExitCode
         } else {
             $itemTimedOut = $true
