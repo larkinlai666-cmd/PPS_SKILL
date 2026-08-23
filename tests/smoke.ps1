@@ -2167,6 +2167,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $realPy = (Get-Command python3 -ErrorAction SilentlyContinue).Source
     if ($null -eq $realPy) { $realPy = (Get-Command python -ErrorAction SilentlyContinue).Source }
     if ($null -ne $realPy) {
+        $mxPrevPath = $env:PATH
         $shimDir = Join-Path $tempRoot "ps-py-shim"
         New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
         if ($null -ne (Get-Command chmod -ErrorAction SilentlyContinue)) {
@@ -2195,6 +2196,9 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     }
     if ($mxPyResult.Code -ne 0 -or -not (Test-Path -LiteralPath $mxStampPath)) {
         throw ("The PowerShell gate failed without a working python3. gate output: " + $mxPyResult.Text)
+    }
+    if ($null -ne $realPy) {
+        $env:PATH = $mxPrevPath
     }
 
     $emptyDeferred = Join-Path $tempRoot "empty-deferred"

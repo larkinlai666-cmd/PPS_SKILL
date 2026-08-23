@@ -33,10 +33,15 @@ function Resolve-PPSPython {
     foreach ($cand in $candidates) {
         if ($null -eq (Get-Command $cand[0] -ErrorAction SilentlyContinue)) { continue }
         $candTail = if ($cand.Count -gt 1) { @($cand[1..($cand.Count - 1)]) } else { @() }
-        $null = & $cand[0] @($candTail) -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $script:PPSPython = $cand
-            return $cand
+        try {
+            $null = & $cand[0] @($candTail) -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $script:PPSPython = $cand
+                return $cand
+            }
+        } catch {
+            # A stub that cannot even run (e.g. an extensionless file found on
+            # Windows PATH) is not a usable interpreter.
         }
     }
     return $null
