@@ -482,9 +482,15 @@ foreach ($lineRaw in [System.IO.File]::ReadAllLines($manifestPath, [System.Text.
         $psi.RedirectStandardError = $true
         $itemProc = [System.Diagnostics.Process]::Start($psi)
         $itemProc.StandardInput.Close()
+        # Drain the pipes while the child runs: Windows anonymous pipes are
+        # ~4KB and a blocked child can never exit, so a synchronous
+        # ReadToEnd after WaitForExit deadlocks. ReadToEndAsync runs
+        # concurrently on both engines.
+        $itemOutTask = $itemProc.StandardOutput.ReadToEndAsync()
+        $itemErrTask = $itemProc.StandardError.ReadToEndAsync()
         if ($itemProc.WaitForExit([int]($itemTimeout * 1000))) {
-            $itemStdOut = $itemProc.StandardOutput.ReadToEnd()
-            $itemStdErr = $itemProc.StandardError.ReadToEnd()
+            $itemStdOut = $itemOutTask.Result
+            $itemStdErr = $itemErrTask.Result
             if ($itemStdOut) { Write-Host $itemStdOut }
             if ($itemStdErr) { Write-Host "stderr: $itemStdErr" }
             $itemCode = -1
