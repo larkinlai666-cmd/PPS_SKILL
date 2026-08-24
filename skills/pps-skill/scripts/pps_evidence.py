@@ -391,7 +391,7 @@ def cmd_event_positive(root, token):
     if not os.path.isfile(events_path):
         print("fail")
         return
-    event_line = re.compile(r"^\s*-\s+\d{4}-\d{2}-\d{2}:")
+    event_line = re.compile(r"^\s*-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z:")
     with open(events_path, encoding="utf-8") as fh:
         for line in fh:
             if ("[%s]" % token) not in line and token not in line:

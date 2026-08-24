@@ -60,7 +60,7 @@ if ([string]::IsNullOrWhiteSpace($packageId)) {
     exit 1
 }
 
-$dateValue = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+$dateValue = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 $line = "- ${dateValue}: [$packageId] $Title | files: $Files | verify: $Verify | pending: $Pending"
 # Insert at the end of the '## Events' section, not the end of the file, so
 # trailing sections can never silently absorb new events.

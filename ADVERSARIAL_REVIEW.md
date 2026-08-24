@@ -1,7 +1,7 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-23 (updated for the 0.5.2 real-migration round)
-- Scope: skill 0.5.2, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
+- Review date: 2026-08-24 (updated for the 0.6.0 anti-drift round)
+- Scope: skill 0.6.0, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
 

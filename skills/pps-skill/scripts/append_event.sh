@@ -96,7 +96,7 @@ package_id="$(
   exit 1
 }
 
-date_value="$(date -u '+%Y-%m-%d')"
+date_value="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 event_line="- ${date_value}: [${package_id}] ${title} | files: ${files_value} | verify: ${verify_value} | pending: ${pending_value}"
 
 # Insert at the end of the '## Events' section, not the end of the file, so

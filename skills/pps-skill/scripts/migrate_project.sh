@@ -70,7 +70,8 @@ if [[ "$mode" != "rollback" ]]; then
   esac
 fi
 
-today="$(date -u '+%Y-%m-%d')"
+today="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+decision_date="$(date -u '+%Y-%m-%d')"
 file_sha() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -92,7 +93,7 @@ decision_text() {
   cat <<EOF
 
 ### $decision_id [active]
-- Date: $today
+- Date: $decision_date
 - Decision: approve
 - Subject: PPS/1.2 core migration
 - Summary: Authorize upgrading this project from $protocol to PPS/1.2. Pre-layer history predates the typed layers; no historical merge is guessed into a relation.
@@ -310,7 +311,7 @@ apply() {
       ' "$context" > "$context.new"
       mv "$context.new" "$context"
     fi
-    awk -v date="$today" '
+    awk -v date="$decision_date" '
       $0 ~ /^- P-[A-Za-z0-9_-]+:/ && $0 !~ /\(opened [0-9]{4}-[0-9]{2}-[0-9]{2}\)/ {
         sub(/: /, " (opened " date "): ")
       }

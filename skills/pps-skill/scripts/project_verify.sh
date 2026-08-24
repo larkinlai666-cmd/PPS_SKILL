@@ -45,7 +45,7 @@ main_exists() {
   [[ -n "$main_rel" && -e "$root/$main_rel" ]]
 }
 events_nonempty() {
-  grep -Eq '^- [0-9]{4}-[0-9]{2}-[0-9]{2}: \[PKG-' "$root/EVENTS.md"
+  grep -Eq '^- [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z: \[PKG-' "$root/EVENTS.md"
 }
 
 check "main artifact exists ($main_rel)" main_exists

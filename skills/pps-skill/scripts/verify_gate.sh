@@ -97,9 +97,8 @@ anchor_current_hash="$(sha256_of_text "$anchor_text_value")"
 echo "-- Step 0/4: objective anchor review"
 # The anchor review is the anti-drift ritual: every gate run re-surfaces the
 # objective, the red lines, and the active decisions before anything is
-# stamped. Fresh-context subagents are GSD's cure for context rot; PPS is a
-# protocol, so its cure is a forced re-read at the only checkpoint that
-# cannot be skipped: the gate.
+# stamped. PPS is a protocol; its cure for context rot is a forced re-read
+# at the only checkpoint that cannot be skipped: the gate.
 echo "--- anchored objective ---"
 printf '%s\n' "$anchor_text_value" | sed -n '1,12p'
 if [[ -f "$root/AGENTS.md" ]]; then
@@ -131,6 +130,17 @@ anchor_mode_value="$(
     }
   ' "$root/PROJECT_STATE.md"
 )"
+stage_value="$(
+  awk '
+    $0 ~ "^##[[:space:]]+Hot State[[:space:]]*$" { inside=1; next }
+    inside && /^##[[:space:]]/ { exit }
+    inside && index($0, "- Stage:") == 1 {
+      sub("^- Stage:[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$root/PROJECT_STATE.md"
+)"
 anchor_path="$root/.pps/objective-anchor"
 if [[ -f "$anchor_path" ]]; then
   anchored_hash="$(sed -n 's/^objective_sha256:[[:space:]]*//p' "$anchor_path" | head -n 1)"
@@ -138,12 +148,12 @@ if [[ -f "$anchor_path" ]]; then
   if [[ -n "$anchored_hash" && "$anchored_hash" != "$anchor_current_hash" ]]; then
     revised_events=""
     if [[ -f "$root/EVENTS.md" ]]; then
-      revised_events="$(awk -v from="${anchored_at:0:10}" '
+      revised_events="$(awk -v from="${anchored_at:0:19}" '
         $0 ~ "^##[[:space:]]+Events[[:space:]]*$" { inside=1; next }
         inside && /^##[[:space:]]/ { exit }
         inside && /^- / {
-          event_date = substr($0, 3, 10)
-          if (event_date >= from && $0 ~ /\[[^]]+\][[:space:]]+(objective-revised|goal-revised)[[:space:]]*([:|])/) print
+          event_ts = substr($0, 3, 19)
+          if (event_ts >= from && $0 ~ /\[[^]]+\][[:space:]]+(objective-revised|goal-revised)[[:space:]]*([:|])/) print
         }
       ' "$root/EVENTS.md")"
     fi
@@ -638,6 +648,7 @@ acceptance_items="$(awk '
 ' "$root/CONTEXT.md")"
 if [[ -n "$acceptance_items" ]]; then
   acceptance_unwired=0
+  acceptance_structural_only=""
   while IFS= read -r acceptance_line; do
     [[ -n "$acceptance_line" ]] || continue
     acceptance_id="$(printf '%s\n' "$acceptance_line" |
@@ -653,6 +664,7 @@ if [[ -n "$acceptance_items" ]]; then
       sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "$acceptance_token" in
       validate_project | verify_gate | readiness_check | boundary_check | asset_check)
+        acceptance_structural_only="${acceptance_structural_only}${acceptance_id} "
         continue
         ;;
       manual)
@@ -667,7 +679,7 @@ if [[ -n "$acceptance_items" ]]; then
             }
           ' "$root/PROJECT_STATE.md"
         )"
-        if printf '%s' "$next_value" | grep -Fq "$acceptance_id"; then
+        if printf '%s' "$next_value" | grep -Eq "(^|[^[:alnum:]])${acceptance_id}([^[:alnum:]]|\$)"; then
           continue
         fi
         echo "ERROR: acceptance item $acceptance_id uses 'manual' but is not restated in Hot State Next; a manual acceptance must stay openly pending." >&2
@@ -688,6 +700,15 @@ if [[ -n "$acceptance_items" ]]; then
   if (( acceptance_unwired == 1 )); then
     echo "Add a check row for the named check to .pps/verify-manifest.txt and re-run the gate." >&2
     echo "PPS verify gate: FAILED (acceptance not wired to an executed check)" >&2
+    exit 1
+  fi
+  acceptance_structural_only="$(printf '%s' "$acceptance_structural_only" | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')"
+  if [[ -n "$acceptance_structural_only" ]] &&
+     [[ "$mode_value" =~ ^(software|hybrid)$ ]] &&
+     ! printf '%s' "$stage_value" | grep -q 'bootstrap'; then
+    echo "ERROR: non-bootstrap $mode_value package has acceptance items that only name structural gate names: $acceptance_structural_only." >&2
+    echo "After bootstrap, every acceptance item must be backed by a manifest check or a real project artifact path." >&2
+    echo "PPS verify gate: FAILED (acceptance items are structural-only floor)" >&2
     exit 1
   fi
   echo "acceptance wiring: every acceptance item is backed by an executed check"

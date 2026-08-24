@@ -1017,7 +1017,7 @@ if (( is_pps12 == 1 )); then
     while IFS=: read -r line_number event_line; do
       [[ -n "$line_number" ]] || continue
       printf '%s\n' "$event_line" |
-        grep -Eq '^- [0-9]{4}-[0-9]{2}-[0-9]{2}: \[PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$' ||
+        grep -Eq '^- [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z: \[PKG-[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$' ||
         add_error "Malformed event line in EVENTS.md at line $line_number: $event_line"
       if (( is_pps12 == 1 )); then
         event_files="$(printf '%s\n' "$event_line" | sed -n 's/.*| files:[[:space:]]*\(.*\)| verify:.*/\1/p' |
@@ -1027,7 +1027,7 @@ if (( is_pps12 == 1 )); then
         event_pending="$(printf '%s\n' "$event_line" | sed -n 's/.*| pending:[[:space:]]*\(.*\)$/\1/p' |
           sed 's/[[:space:]]*$//')"
         event_title="$(printf '%s\n' "$event_line" |
-          sed -n 's/^- [0-9-]*: \[[^]]*\][[:space:]]*\(.*\)| files:.*/\1/p' |
+          sed -nE 's/^- [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z: \[[^]]*\][[:space:]]*(.*)[[:space:]]*\|[[:space:]]files:.*/\1/p' |
           sed 's/[[:space:]]*$//')"
         if [[ -n "$event_files" && "$event_files" != "none" ]]; then
           while IFS= read -r event_path; do

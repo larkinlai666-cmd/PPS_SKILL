@@ -48,7 +48,7 @@ Invoke-Check "main artifact exists ($mainRel)" {
 Invoke-Check "EVENTS.md records at least one event" {
     $eventsText = [System.IO.File]::ReadAllText(
         (Join-Path $rootFull 'EVENTS.md'), [System.Text.Encoding]::UTF8)
-    $eventsText -match '(?m)^- \d{4}-\d{2}-\d{2}: \[PKG-'
+    $eventsText -match '(?m)^- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z: \[PKG-'
 }
 
 # Behavioral check (required for software/hybrid packages). The gate refuses to

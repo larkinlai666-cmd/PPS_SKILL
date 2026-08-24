@@ -179,6 +179,7 @@ render() {
     -e "s|{{PROFILE}}|$profile|g" \
     -e "s|{{MODE}}|$mode|g" \
     -e "s|{{TIMESTAMP}}|$timestamp|g" \
+    -e "s|{{TIMESTAMP}}|$timestamp|g" \
     -e "s|{{DATE}}|$date_value|g" \
     -e "s|{{DEVICE}}|$device|g" \
     -e "s|{{MAIN_ARTIFACT}}|$main_artifact|g" \

@@ -55,9 +55,8 @@ $anchorCurrentHash = Get-TextSha256 $anchorNormText
 Write-Host "-- Step 0/4: objective anchor review"
 # The anchor review is the anti-drift ritual: every gate run re-surfaces the
 # objective, the red lines, and the active decisions before anything is
-# stamped. Fresh-context subagents are GSD's cure for context rot; PPS is a
-# protocol, so its cure is a forced re-read at the only checkpoint that
-# cannot be skipped: the gate.
+# stamped. PPS is a protocol; its cure for context rot is a forced re-read
+# at the only checkpoint that cannot be skipped: the gate.
 Write-Host '--- anchored objective ---'
 ($anchorNormText -split "`n" | Select-Object -First 12) | ForEach-Object { Write-Host $_ }
 $agentsPathAnchor = Join-Path $rootFull 'AGENTS.md'
@@ -100,15 +99,15 @@ if (Test-Path -LiteralPath $anchorFilePath -PathType Leaf) {
         $revisedEvents = @()
         $eventsPathAnchor = Join-Path $rootFull 'EVENTS.md'
         if (Test-Path -LiteralPath $eventsPathAnchor -PathType Leaf) {
-            $anchoredFrom = if ($anchoredAt.Length -ge 10) { $anchoredAt.Substring(0, 10) } else { '0000-00-00' }
+            $anchoredFrom = if ($anchoredAt.Length -ge 19) { $anchoredAt.Substring(0, 19) } else { '0000-00-00T00:00:00' }
             $eventsTextAnchor = [System.IO.File]::ReadAllText($eventsPathAnchor, [System.Text.Encoding]::UTF8)
             $eventsBodyAnchor = if ($eventsTextAnchor -match '(?ms)^##\s+Events\s*\r?\n(?<body>.*?)(?=^##\s+|\z)') {
                 $Matches['body']
             } else { '' }
             foreach ($eventLineAnchor in ($eventsBodyAnchor -split "`r?`n")) {
-                if ($eventLineAnchor -match '^- (\d{4}-\d{2}-\d{2}):.*$') {
-                    $eventDateAnchor = $Matches[1]
-                    if (($eventDateAnchor -ge $anchoredFrom) -and
+                if ($eventLineAnchor -match '^- (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z):.*$') {
+                    $eventTimestampAnchor = $Matches[1]
+                    if (($eventTimestampAnchor -ge $anchoredFrom) -and
                         ($eventLineAnchor -match '\[[^]]+\]\s+(objective-revised|goal-revised)\s*([:|])')) {
                         $revisedEvents += $eventLineAnchor
                     }
@@ -329,6 +328,8 @@ $entryText = [System.IO.File]::ReadAllText($verifyEntry, [System.Text.Encoding]:
 $stateText = [System.IO.File]::ReadAllText((Join-Path $rootFull 'PROJECT_STATE.md'), [System.Text.Encoding]::UTF8)
 $modeMatch = [regex]::Match($stateText, '(?m)^-\s+Mode:\s*(.*?)\s*$')
 $modeValue = if ($modeMatch.Success) { $modeMatch.Groups[1].Value } else { '' }
+$stageMatch = [regex]::Match($stateText, '(?m)^-\s+Stage:\s*(.*?)\s*$')
+$stageValue = if ($stageMatch.Success) { $stageMatch.Groups[1].Value } else { '' }
 if ($modeValue -in @('software', 'hybrid')) {
     # Unit tests can pass while the caller path is broken: a software package
     # needs at least one check that is not the structural validator itself.
@@ -689,6 +690,7 @@ $acceptanceLines = @([regex]::Matches($acceptancePackageText, '(?m)^\s*-\s*A[0-9
     ForEach-Object { $_.Value.Trim() })
 if ($acceptanceLines.Count -gt 0) {
     $acceptanceUnwired = $false
+    $acceptanceStructuralOnly = @()
     foreach ($acceptanceLine in $acceptanceLines) {
         $acceptanceIdMatch = [regex]::Match($acceptanceLine, '^\s*-\s*(A[0-9]+):')
         if (-not $acceptanceIdMatch.Success) { continue }
@@ -701,12 +703,13 @@ if ($acceptanceLines.Count -gt 0) {
         }
         $acceptanceToken = $tokenMatch.Groups[1].Value.Trim()
         if ($acceptanceToken -in @('validate_project', 'verify_gate', 'readiness_check', 'boundary_check', 'asset_check')) {
+            $acceptanceStructuralOnly += $acceptanceId
             continue
         }
         if ($acceptanceToken -eq 'manual') {
             $nextMatchAnchor = [regex]::Match($anchorStateText0, '(?m)^-\s+Next:\s*(.*?)\s*$')
             $nextValueAnchor = if ($nextMatchAnchor.Success) { $nextMatchAnchor.Groups[1].Value } else { '' }
-            if ($nextValueAnchor.Contains($acceptanceId)) { continue }
+            if ($nextValueAnchor -match "(?<!\w)$([regex]::Escape($acceptanceId))(?!\w)") { continue }
             Write-Host "ERROR: acceptance item $acceptanceId uses 'manual' but is not restated in Hot State Next; a manual acceptance must stay openly pending."
             $acceptanceUnwired = $true
             continue
@@ -728,6 +731,12 @@ if ($acceptanceLines.Count -gt 0) {
     if ($acceptanceUnwired) {
         Write-Host 'Add a check row for the named check to .pps/verify-manifest.txt and re-run the gate.'
         Write-Host 'PPS verify gate: FAILED (acceptance not wired to an executed check)'
+        exit 1
+    }
+    if ($acceptanceStructuralOnly.Count -gt 0 -and $modeValue -in @('software', 'hybrid') -and $stageValue -notmatch '\bbootstrap\b') {
+        Write-Host "ERROR: non-bootstrap $modeValue package has acceptance items that only name structural gate names: $($acceptanceStructuralOnly -join ', ')."
+        Write-Host 'After bootstrap, every acceptance item must be backed by a manifest check or a real project artifact path.'
+        Write-Host 'PPS verify gate: FAILED (acceptance items are structural-only floor)'
         exit 1
     }
     Write-Host 'acceptance wiring: every acceptance item is backed by an executed check'

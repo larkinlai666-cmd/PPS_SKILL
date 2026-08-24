@@ -969,7 +969,7 @@ if ($isPps12) {
             $eventsText,
             '(?ms)^##\s+Events\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
         if ($eventsSection.Success) {
-            $eventPattern = '^- \d{4}-\d{2}-\d{2}: \[PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$'
+            $eventPattern = '^- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z: \[PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$'
             foreach ($line in @($eventsSection.Groups['body'].Value -split "`r?`n")) {
                 if ($line -notmatch '^- ') { continue }
                 if ($line -notmatch $eventPattern) {
@@ -979,7 +979,7 @@ if ($isPps12) {
                     $filesMatch = [regex]::Match($line, '\|\s*files:\s*(?<v>.*?)\s*\|\s*verify:')
                     $verifyMatch = [regex]::Match($line, '\|\s*verify:\s*(?<v>.*?)\s*\|\s*pending:')
                     $pendingMatch = [regex]::Match($line, '\|\s*pending:\s*(?<v>.*?)\s*$')
-                    $titleMatch = [regex]::Match($line, '^-\s+[0-9-]+:\s*\[[^\]]*\]\s*(?<v>.*?)\s*\|\s*files:')
+                    $titleMatch = [regex]::Match($line, '^-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z:\s*\[[^\]]*\]\s*(?<v>.*?)\s*\|\s*files:')
                     $filesValue = if ($filesMatch.Success) { $filesMatch.Groups['v'].Value } else { '' }
                     $verifyValue = if ($verifyMatch.Success) { $verifyMatch.Groups['v'].Value } else { '' }
                     $pendingValue = if ($pendingMatch.Success) { $pendingMatch.Groups['v'].Value } else { '' }

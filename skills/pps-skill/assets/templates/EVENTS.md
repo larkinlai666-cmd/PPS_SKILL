@@ -4,4 +4,4 @@ Chronicle of record. Append with `scripts/append_event.*`; never rewrite past li
 
 ## Events
 
-- {{DATE}}: [PKG-001] Initialized PPS/1.2 project bootstrap | files: PROJECT_STATE.md, DECISIONS.md, CONTEXT.md | verify: validate_project pass | pending: replace bootstrap objective
+- {{TIMESTAMP}}: [PKG-001] Initialized PPS/1.2 project bootstrap | files: PROJECT_STATE.md, DECISIONS.md, CONTEXT.md | verify: validate_project pass | pending: replace bootstrap objective

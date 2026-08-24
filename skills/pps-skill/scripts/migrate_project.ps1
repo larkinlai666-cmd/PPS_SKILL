@@ -56,6 +56,7 @@ if ($Mode -ne 'rollback') {
 }
 
 $today = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+$timestamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 
 function Get-FileSha([string]$Path) {
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -101,7 +102,7 @@ function Get-DecisionText {
 }
 
 function Get-EventText {
-    "- $today`: [$packageId] migration_authorized $decisionId | files: scripts/, AGENTS.md, CONTEXT.md, DECISIONS.md, EVENTS.md, .pps/verify-manifest.txt | verify: validate_project pass | pending: review migrated coverage evidence"
+    "- $timestamp`: [$packageId] migration_authorized $decisionId | files: scripts/, AGENTS.md, CONTEXT.md, DECISIONS.md, EVENTS.md, .pps/verify-manifest.txt | verify: validate_project pass | pending: review migrated coverage evidence"
 }
 
 function Write-Utf8([string]$Path, [string]$Text) {
