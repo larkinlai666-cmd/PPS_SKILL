@@ -99,15 +99,22 @@ if (Test-Path -LiteralPath $anchorFilePath -PathType Leaf) {
         $revisedEvents = @()
         $eventsPathAnchor = Join-Path $rootFull 'EVENTS.md'
         if (Test-Path -LiteralPath $eventsPathAnchor -PathType Leaf) {
-            $anchoredFrom = if ($anchoredAt.Length -ge 19) { $anchoredAt.Substring(0, 19) } else { '0000-00-00T00:00:00' }
+            $anchoredFrom = if ([string]::IsNullOrWhiteSpace($anchoredAt)) { '0000-00-00' } else { $anchoredAt }
             $eventsTextAnchor = [System.IO.File]::ReadAllText($eventsPathAnchor, [System.Text.Encoding]::UTF8)
             $eventsBodyAnchor = if ($eventsTextAnchor -match '(?ms)^##\s+Events\s*\r?\n(?<body>.*?)(?=^##\s+|\z)') {
                 $Matches['body']
             } else { '' }
             foreach ($eventLineAnchor in ($eventsBodyAnchor -split "`r?`n")) {
-                if ($eventLineAnchor -match '^- (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z):.*$') {
+                # A migrated PPS/1.1 chronicle carries calendar-day lines while
+                # 1.2 writes full ISO stamps. Accept both, then compare on the
+                # shorter precision so a legitimate revision recorded in either
+                # grammar still refreshes the anchor.
+                if ($eventLineAnchor -match '^- (\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?):\s') {
                     $eventTimestampAnchor = $Matches[1]
-                    if (($eventTimestampAnchor -ge $anchoredFrom) -and
+                    $comparableLength = [Math]::Min($eventTimestampAnchor.Length, $anchoredFrom.Length)
+                    $eventPrefix = $eventTimestampAnchor.Substring(0, $comparableLength)
+                    $anchorPrefix = $anchoredFrom.Substring(0, $comparableLength)
+                    if (($eventPrefix -ge $anchorPrefix) -and
                         ($eventLineAnchor -match '\[[^]]+\]\s+(objective-revised|goal-revised)\s*([:|])')) {
                         $revisedEvents += $eventLineAnchor
                     }

@@ -322,8 +322,11 @@ def cmd_verification_parse(root, verification, merge_id):
     m = re.match(r"^event\s*:\s*(\S+?)\s*$", text)
     if m:
         token = m.group(1)
+        # An ISO-8601 event stamp contains colons, so the date/id separator is
+        # the LAST colon, not the first: splitting left-first turned
+        # "2026-08-24T10:00:00Z:M-001" into merge id "00:00Z:M-001".
         if ":" in token:
-            date_part, merge_part = token.split(":", 1)
+            date_part, merge_part = token.rsplit(":", 1)
         else:
             date_part, merge_part = None, token
         events_path = os.path.join(root, "EVENTS.md")
@@ -391,7 +394,7 @@ def cmd_event_positive(root, token):
     if not os.path.isfile(events_path):
         print("fail")
         return
-    event_line = re.compile(r"^\s*-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z:")
+    event_line = re.compile(r"^\s*-\s+\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?:")
     with open(events_path, encoding="utf-8") as fh:
         for line in fh:
             if ("[%s]" % token) not in line and token not in line:

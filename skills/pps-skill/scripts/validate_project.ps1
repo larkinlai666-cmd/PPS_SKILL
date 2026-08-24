@@ -969,7 +969,7 @@ if ($isPps12) {
             $eventsText,
             '(?ms)^##\s+Events\s*\r?\n(?<body>.*?)(?=^##\s+|\z)')
         if ($eventsSection.Success) {
-            $eventPattern = '^- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z: \[PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$'
+            $eventPattern = '^- \d{4}-\d{2}-\d{2}(?:T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ)?: \[PKG-[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?\] [^|]+\| files: [^|]+\| verify: [^|]+\| pending: [^|]+$'
             foreach ($line in @($eventsSection.Groups['body'].Value -split "`r?`n")) {
                 if ($line -notmatch '^- ') { continue }
                 if ($line -notmatch $eventPattern) {
@@ -979,7 +979,7 @@ if ($isPps12) {
                     $filesMatch = [regex]::Match($line, '\|\s*files:\s*(?<v>.*?)\s*\|\s*verify:')
                     $verifyMatch = [regex]::Match($line, '\|\s*verify:\s*(?<v>.*?)\s*\|\s*pending:')
                     $pendingMatch = [regex]::Match($line, '\|\s*pending:\s*(?<v>.*?)\s*$')
-                    $titleMatch = [regex]::Match($line, '^-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z:\s*\[[^\]]*\]\s*(?<v>.*?)\s*\|\s*files:')
+                    $titleMatch = [regex]::Match($line, '^-\s+\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?:\s*\[[^\]]*\]\s*(?<v>.*?)\s*\|\s*files:')
                     $filesValue = if ($filesMatch.Success) { $filesMatch.Groups['v'].Value } else { '' }
                     $verifyValue = if ($verifyMatch.Success) { $verifyMatch.Groups['v'].Value } else { '' }
                     $pendingValue = if ($pendingMatch.Success) { $pendingMatch.Groups['v'].Value } else { '' }
@@ -1942,7 +1942,7 @@ foreach ($id in $requiredIds) {
                 $coverageDate = [regex]::Match($evidenceCell, '\d{4}-\d{2}-\d{2}').Value
                 $eventsPathCov = Join-Path $rootFull 'EVENTS.md'
                 if ((Test-Path -LiteralPath $eventsPathCov -PathType Leaf) -and
-                    (Read-Utf8File $eventsPathCov) -match ('(?m)^-\s+' + [regex]::Escape($coverageDate) + ':')) {
+                    (Read-Utf8File $eventsPathCov) -match ('(?m)^-\s+' + [regex]::Escape($coverageDate) + '(T\d{2}:\d{2}:\d{2}Z)?:')) {
                     $coverageOk = $true
                 } else {
                     $coverageReason = "names date $coverageDate which is not an event line in EVENTS.md"

@@ -1,9 +1,41 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-24 (updated for the 0.6.0 anti-drift round)
+- Review date: 2026-08-24 (updated for the 0.6.0 anti-drift round, self-distilled)
 - Scope: skill 0.6.0, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
+
+### 0.6.0 self-distillation round (D-060-A..E)
+
+The 0.6.0 anti-drift release moved `EVENTS.md` to ISO-8601 stamps. A
+self-distillation pass asked the only question that matters after a format
+change: **who else reads this file by date?** Five defects surfaced, none of
+which the release's own suite could see, because every new fixture was written
+against the new grammar only.
+
+| ID | Defect | Status in 0.6.0 |
+|---|---|---|
+| D-060-A coverage date evidence became fail-forever | The coverage table's "an existing EVENTS.md date" evidence anchored on `^- DATE:`, which no ISO-stamped line matches; every legitimate date attestation was rejected | **Closed**: both engines accept `DATE` and `DATE T…Z`; fixture 052-01 asserts a real stamped event resolves |
+| D-060-B typed `event:<date>:<id>` evidence silently broke | `pps_evidence.py` split the token on the FIRST colon, so `2026-08-24T10:00:00Z:M-001` yielded merge id `00:00Z:M-001` and no receipt ever resolved | **Closed**: `rsplit(":", 1)`; fixture 052-02 asserts an ISO-stamped typed reference resolves |
+| D-060-C anti-drift went blind on migrated projects | The gate only recognised ISO-stamped `objective-revised` lines; a migrated PPS/1.1 chronicle carries calendar-day lines, so a legitimate revision could not be recorded at all — the anti-drift machine failed *closed* into an unfixable state | **Closed**: both engines accept either grammar and compare on the shorter precision; fixture 052-03 proves a calendar-day revision refreshes the anchor |
+| D-060-D the release broke its own append-only compatibility promise | `EVENTS.md` is append-only ("never rewrite past lines"), so every project written by an earlier release keeps calendar-day lines forever; tightening the validator to ISO-only meant **upgrading the skill retroactively invalidated every existing project**, contradicting "PPS/1.0 and PPS/1.1 projects validate unchanged" | **Closed**: all five chronicle readers (validator ×2, project_verify ×2, evidence engine) accept both grammars while writers always emit stamps; fixture 052-04 locks the promise |
+| D-060-E widening the grammar widened it into nonsense | The compatibility fix accepted `T99:99:99Z` as a valid stamp | **Closed**: hour/minute/second range-bounded on both engines; fixture 052-05 rejects the impossible clock |
+
+Two lessons recorded deliberately, because they generalise past this round.
+First: **a format migration's blast radius is every reader, not every writer.**
+The release updated the append path and the format check, then declared done;
+the four readers that consume the chronicle *by date* were each a silent
+green-forever or fail-forever hazard. Second: **an append-only artifact makes
+every format tightening a breaking change by construction** — a validator may
+only ever widen what it accepts for historical lines, while writers narrow to
+the new grammar.
+
+Anti-drift and anti-rot were then re-verified against live attacks rather than
+fixtures: a silent objective rewrite fails the gate; a `note`-prefixed fake
+revision cannot launder it; a real `objective-revised` event legitimizes the
+change and refreshes the anchor; a missing anchor fails `software`/`hybrid`
+outright; and the gate re-surfaces objective, red lines, and active decisions
+before anything else on every run.
 
 ## Open / closed core defects (D-CORE series, core-duty report 2026-08-20)
 

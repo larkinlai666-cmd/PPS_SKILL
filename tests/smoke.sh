@@ -2660,4 +2660,127 @@ sed -i.bak 's/(verify: validate_project)/(verify: M-001)/' \
 bash "$wired_case/scripts/session_begin.sh" "$wired_case" >/dev/null
 bash "$wired_case/scripts/verify_gate.sh" "$wired_case" >/dev/null
 
+# ==== 052 self-distillation regressions: the timestamp migration's blast radius
+# Moving EVENTS.md to ISO-8601 stamps silently broke three consumers that read
+# the chronicle by date. Each one is a green-forever or fail-forever hazard, so
+# each gets a fixture.
+
+# 052-01: coverage evidence naming an EVENTS.md date must still resolve when
+# the chronicle carries full ISO stamps (was: fail-forever).
+cov_date_case="$temp_root/coverage-date-case"
+cp -R "$temp_root/standard-case" "$cov_date_case"
+bash "$cov_date_case/scripts/append_event.sh" "$cov_date_case" \
+  --title "coverage attestation refreshed" --files docs/MAIN.md \
+  --verify "validate_project pass" --pending none >/dev/null
+cov_event_day="$(date -u '+%Y-%m-%d')"
+$PY3 - "$cov_date_case" "$cov_event_day" <<'PYEOF'
+import re, sys
+root, day = sys.argv[1], sys.argv[2]
+p = root + '/CONTEXT.md'
+t = open(p, encoding='utf-8').read()
+t = re.sub(r'(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', r'\1 ' + day + ' |', t, count=1)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+bash "$cov_date_case/scripts/validate_project.sh" "$cov_date_case" --quiet || {
+  echo "Coverage evidence naming a real ISO-stamped event date was rejected." >&2
+  exit 1
+}
+
+# 052-02: `event: <stamp>:<mergeId>` must not be split on the stamp's colons
+# (was: merge id became '00:00Z:M-001', so real receipts never resolved).
+evidence_split_case="$temp_root/evidence-split-case"
+cp -R "$temp_root/standard-case" "$evidence_split_case"
+printf -- '- 2026-08-24T10:00:00Z: [PKG-001] MERGE-001 integrated | files: docs/MAIN.md | verify: gate pass | pending: none\n' \
+  >>"$evidence_split_case/EVENTS.md"
+split_probe="$($PY3 "$skill/scripts/pps_evidence.py" verification-parse \
+  "$evidence_split_case" "event: 2026-08-24T10:00:00Z:MERGE-001" "MERGE-001" 2>&1)"
+[[ "$split_probe" == "ok" ]] || {
+  echo "Typed event evidence with an ISO stamp did not resolve: $split_probe" >&2
+  exit 1
+}
+
+# 052-03: an objective revision recorded in a migrated PPS/1.1 calendar-day
+# line must still legitimize the change (was: anti-drift blind on migrated
+# projects because the gate only accepted ISO stamps).
+legacy_revision_case="$temp_root/legacy-revision-case"
+cp -R "$temp_root/standard-case" "$legacy_revision_case"
+bash "$legacy_revision_case/scripts/session_begin.sh" "$legacy_revision_case" >/dev/null
+awk '
+  $0 == "## Objective" { inside=1; print; print ""; print "Revised objective, recorded in a legacy-format chronicle line."; next }
+  inside && /^## / { inside=0 }
+  { print }
+' "$legacy_revision_case/PROJECT_STATE.md" > "$legacy_revision_case/PROJECT_STATE.md.new"
+mv "$legacy_revision_case/PROJECT_STATE.md.new" "$legacy_revision_case/PROJECT_STATE.md"
+$PY3 - "$legacy_revision_case" "$(date -u '+%Y-%m-%d')" <<'PYEOF'
+import sys
+root, day = sys.argv[1], sys.argv[2]
+p = root + '/EVENTS.md'
+lines = open(p, encoding='utf-8').read().splitlines()
+legacy = ('- ' + day + ': [PKG-001] objective-revised: scope deliberately widened'
+          ' | files: PROJECT_STATE.md | verify: manual | pending: review the revision')
+out, placed = [], False
+for line in lines:
+    if not placed and line.startswith('- ') and ': [PKG-' in line:
+        out.append(legacy)
+        placed = True
+    out.append(line)
+if not placed:
+    out.append(legacy)
+open(p, 'w', encoding='utf-8').write('\n'.join(out) + '\n')
+PYEOF
+bash "$legacy_revision_case/scripts/verify_gate.sh" "$legacy_revision_case" \
+  >"$temp_root/legacy-revision.out" 2>&1 || {
+  echo "A calendar-day objective-revised line did not legitimize the change." >&2
+  cat "$temp_root/legacy-revision.out" >&2
+  exit 1
+}
+grep -q 'anchor refreshed' "$temp_root/legacy-revision.out" || {
+  echo "The gate accepted the legacy revision without refreshing the anchor." >&2
+  exit 1
+}
+
+# 052-04: the chronicle is append-only ("never rewrite past lines"), so a
+# project written by an older release keeps calendar-day event lines forever.
+# The validator must accept both grammars or upgrading the skill retroactively
+# invalidates every existing project — the compatibility promise in
+# ADVERSARIAL_REVIEW.md ("PPS/1.0 and PPS/1.1 projects validate unchanged").
+legacy_chronicle_case="$temp_root/legacy-chronicle-case"
+cp -R "$temp_root/standard-case" "$legacy_chronicle_case"
+$PY3 - "$legacy_chronicle_case" <<'PYEOF'
+import sys
+root = sys.argv[1]
+p = root + '/EVENTS.md'
+lines = open(p, encoding='utf-8').read().splitlines()
+legacy = ('- 2026-08-20: [PKG-001] legacy calendar-day entry from an older release'
+          ' | files: docs/MAIN.md | verify: validate_project pass | pending: none')
+out, placed = [], False
+for line in lines:
+    if not placed and line.startswith('- ') and ': [PKG-' in line:
+        out.append(legacy)
+        placed = True
+    out.append(line)
+if not placed:
+    out.append(legacy)
+open(p, 'w', encoding='utf-8').write('\n'.join(out) + '\n')
+PYEOF
+bash "$legacy_chronicle_case/scripts/validate_project.sh" "$legacy_chronicle_case" --quiet || {
+  echo "A calendar-day chronicle line written by an older release was rejected;" >&2
+  echo "upgrading the skill must not retroactively invalidate existing projects." >&2
+  exit 1
+}
+bash "$legacy_chronicle_case/scripts/project_verify.sh" "$legacy_chronicle_case" >/dev/null || {
+  echo "project_verify no longer recognises a legacy calendar-day event line." >&2
+  exit 1
+}
+
+# 052-05: widening the grammar for backward compatibility must not widen it
+# into nonsense. An impossible clock (T99:99:99Z) is still a malformed line.
+impossible_clock_case="$temp_root/impossible-clock-case"
+cp -R "$temp_root/standard-case" "$impossible_clock_case"
+printf -- '- 2026-08-24T99:99:99Z: [PKG-001] forged stamp | files: docs/MAIN.md | verify: gate pass | pending: none\n' \
+  >>"$impossible_clock_case/EVENTS.md"
+expect_invalid "$impossible_clock_case" \
+  "Malformed event line" \
+  "Impossible clock in an event stamp"
+
 echo "PPS Bash smoke tests: OK"

@@ -4,6 +4,35 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+### Fixed
+
+Self-distillation pass over the 0.6.0 ISO-8601 chronicle migration. The
+release changed how `EVENTS.md` is written but not how it is *read*, and every
+consumer that resolves the chronicle by date broke silently.
+
+- **Coverage date evidence resolved again** (D-060-A): the "an existing
+  `EVENTS.md` date" evidence form anchored on `^- DATE:` and matched nothing
+  once lines carried full stamps, so every legitimate attestation was rejected.
+  Both engines now accept `DATE` and `DATE T…Z`.
+- **Typed `event: <stamp>:<mergeId>` evidence resolved again** (D-060-B): the
+  token was split on the first colon, turning `…T10:00:00Z:M-001` into merge id
+  `00:00Z:M-001`. Split is now right-most.
+- **Anti-drift no longer blind on migrated projects** (D-060-C): the gate only
+  recognised ISO-stamped `objective-revised` events, so a migrated PPS/1.1
+  chronicle (calendar-day lines, append-only) could not record a legitimate
+  revision at all. Both grammars are accepted and compared on the shorter
+  precision.
+- **Append-only backward compatibility restored** (D-060-D): `EVENTS.md` may
+  never be rewritten, so tightening the validator to ISO-only retroactively
+  invalidated every project written by an earlier release. All chronicle
+  readers accept both grammars; writers always emit stamps.
+- **Impossible stamps still rejected** (D-060-E): the compatibility widening
+  had started accepting `T99:99:99Z`. Hour/minute/second are range-bounded.
+
+Both suites gain fixture group 052 (five cases) covering each defect, and the
+anti-drift/anti-rot machines were re-verified against live attacks rather than
+fixtures alone.
+
 ## [0.6.0] - 2026-08-23
 
 Anti-drift reinforcement while keeping the protocol's core stance: no

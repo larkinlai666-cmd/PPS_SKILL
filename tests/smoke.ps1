@@ -3893,6 +3893,149 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw "wired-case gate failed: $($wiredGate.Text)"
     }
 
+    # ==== 052 self-distillation regressions (parity with the Bash suite) =====
+    # The ISO-8601 chronicle migration silently broke three date-reading
+    # consumers and the append-only compatibility promise. Each is fixtured.
+
+    # 052-01: coverage evidence naming an EVENTS.md date must resolve against a
+    # full ISO stamp (was: fail-forever).
+    $covDateCase = Join-Path $tempRoot 'coverage-date-case'
+    Copy-Item -LiteralPath $standard -Destination $covDateCase -Recurse
+    $covAppend = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $covDateCase 'scripts/append_event.ps1') `
+            -Root $covDateCase -Title 'coverage attestation refreshed' `
+            -Files 'docs/MAIN.md' -Verify 'validate_project pass' -Pending 'none'
+    }
+    if ($covAppend.Code -ne 0) { throw "coverage-date-case append_event failed: $($covAppend.Text)" }
+    $covDay = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+    $covContextPath = Join-Path $covDateCase 'CONTEXT.md'
+    $covContext = [System.IO.File]::ReadAllText($covContextPath, [System.Text.Encoding]::UTF8)
+    $covContext = [regex]::Replace(
+        $covContext, '(\| M-001 \|[^|]*\|[^|]*\|)[^|]*\|', ('${1} ' + $covDay + ' |'), 1)
+    [System.IO.File]::WriteAllText($covContextPath, $covContext, $utf8NoBom)
+    $covValidate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $covDateCase 'scripts/validate_project.ps1') -Root $covDateCase -Quiet
+    }
+    if ($covValidate.Code -ne 0) {
+        throw "Coverage evidence naming a real ISO-stamped event date was rejected: $($covValidate.Text)"
+    }
+
+    # 052-02: `event: <stamp>:<mergeId>` must split on the LAST colon.
+    $evidenceSplitCase = Join-Path $tempRoot 'evidence-split-case'
+    Copy-Item -LiteralPath $standard -Destination $evidenceSplitCase -Recurse
+    Add-Content -LiteralPath (Join-Path $evidenceSplitCase 'EVENTS.md') -Encoding utf8 `
+        -Value '- 2026-08-24T10:00:00Z: [PKG-001] MERGE-001 integrated | files: docs/MAIN.md | verify: gate pass | pending: none'
+    # F-050-02 discovery order: never hardcode python3, a field box may ship a
+    # Store stub that exits 127.
+    $splitPy = $null
+    foreach ($pyCand in @($env:PPS_PYTHON, 'python3', 'python')) {
+        if ([string]::IsNullOrWhiteSpace($pyCand)) { continue }
+        $pyCmd = Get-Command $pyCand -ErrorAction SilentlyContinue
+        if ($null -eq $pyCmd) { continue }
+        $pyProbe = Invoke-NativeCapture { & $pyCmd.Source -c 'import sys; sys.exit(0)' }
+        if ($pyProbe.Code -eq 0) { $splitPy = $pyCmd.Source; break }
+    }
+    if ($null -eq $splitPy) { throw '052-02 needs a working Python 3 interpreter.' }
+    $splitProbe = Invoke-NativeCapture {
+        & $splitPy (Join-Path $skill 'scripts/pps_evidence.py') verification-parse `
+            $evidenceSplitCase 'event: 2026-08-24T10:00:00Z:MERGE-001' 'MERGE-001'
+    }
+    if ($splitProbe.Text.Trim() -ne 'ok') {
+        throw "Typed event evidence with an ISO stamp did not resolve: $($splitProbe.Text)"
+    }
+
+    # 052-03: an objective revision recorded on a migrated calendar-day line
+    # must still legitimize the change and refresh the anchor.
+    $legacyRevisionCase = Join-Path $tempRoot 'legacy-revision-case'
+    Copy-Item -LiteralPath $standard -Destination $legacyRevisionCase -Recurse
+    $legacySession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $legacyRevisionCase 'scripts/session_begin.ps1') -Root $legacyRevisionCase
+    }
+    if ($legacySession.Code -ne 0) { throw "legacy-revision session_begin failed: $($legacySession.Text)" }
+    $legacyStatePath = Join-Path $legacyRevisionCase 'PROJECT_STATE.md'
+    $legacyState = [System.IO.File]::ReadAllText($legacyStatePath, [System.Text.Encoding]::UTF8)
+    $legacyState = [regex]::Replace(
+        $legacyState, '(?m)^(##\s+Objective\s*\r?\n)',
+        '$1' + "Revised objective, recorded in a legacy-format chronicle line.`r`n`r`n", 1)
+    [System.IO.File]::WriteAllText($legacyStatePath, $legacyState, $utf8NoBom)
+    $legacyEventsPath = Join-Path $legacyRevisionCase 'EVENTS.md'
+    $legacyEventLines = [System.Collections.Generic.List[string]]@(
+        [System.IO.File]::ReadAllLines($legacyEventsPath, [System.Text.Encoding]::UTF8))
+    $legacyLine = '- ' + [DateTime]::UtcNow.ToString('yyyy-MM-dd') +
+        ': [PKG-001] objective-revised: scope deliberately widened | files: PROJECT_STATE.md | verify: manual | pending: review the revision'
+    $legacyInsertAt = -1
+    for ($i = 0; $i -lt $legacyEventLines.Count; $i++) {
+        if ($legacyEventLines[$i].StartsWith('- ') -and $legacyEventLines[$i].Contains(': [PKG-')) {
+            $legacyInsertAt = $i
+            break
+        }
+    }
+    if ($legacyInsertAt -ge 0) { $legacyEventLines.Insert($legacyInsertAt, $legacyLine) }
+    else { $legacyEventLines.Add($legacyLine) }
+    [System.IO.File]::WriteAllText(
+        $legacyEventsPath, (($legacyEventLines -join "`n") + "`n"), $utf8NoBom)
+    $legacyGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $legacyRevisionCase 'scripts/verify_gate.ps1') -Root $legacyRevisionCase
+    }
+    if ($legacyGate.Code -ne 0) {
+        throw "A calendar-day objective-revised line did not legitimize the change: $($legacyGate.Text)"
+    }
+    if ($legacyGate.Text -notmatch 'anchor refreshed') {
+        throw 'The gate accepted the legacy revision without refreshing the anchor.'
+    }
+
+    # 052-04: the chronicle is append-only, so calendar-day lines written by an
+    # older release must keep validating. Upgrading the skill must never
+    # retroactively invalidate an existing project.
+    $legacyChronicleCase = Join-Path $tempRoot 'legacy-chronicle-case'
+    Copy-Item -LiteralPath $standard -Destination $legacyChronicleCase -Recurse
+    $chronPath = Join-Path $legacyChronicleCase 'EVENTS.md'
+    $chronLines = [System.Collections.Generic.List[string]]@(
+        [System.IO.File]::ReadAllLines($chronPath, [System.Text.Encoding]::UTF8))
+    $chronLegacy = '- 2026-08-20: [PKG-001] legacy calendar-day entry from an older release | files: docs/MAIN.md | verify: validate_project pass | pending: none'
+    $chronAt = -1
+    for ($i = 0; $i -lt $chronLines.Count; $i++) {
+        if ($chronLines[$i].StartsWith('- ') -and $chronLines[$i].Contains(': [PKG-')) { $chronAt = $i; break }
+    }
+    if ($chronAt -ge 0) { $chronLines.Insert($chronAt, $chronLegacy) } else { $chronLines.Add($chronLegacy) }
+    [System.IO.File]::WriteAllText($chronPath, (($chronLines -join "`n") + "`n"), $utf8NoBom)
+    $chronValidate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $legacyChronicleCase 'scripts/validate_project.ps1') `
+            -Root $legacyChronicleCase -Quiet
+    }
+    if ($chronValidate.Code -ne 0) {
+        throw "A calendar-day chronicle line written by an older release was rejected: $($chronValidate.Text)"
+    }
+    $chronVerify = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $legacyChronicleCase 'scripts/project_verify.ps1') -Root $legacyChronicleCase
+    }
+    if ($chronVerify.Code -ne 0) {
+        throw "project_verify no longer recognises a legacy calendar-day event line: $($chronVerify.Text)"
+    }
+
+    # 052-05: widening the grammar must not widen it into nonsense.
+    $impossibleClockCase = Join-Path $tempRoot 'impossible-clock-case'
+    Copy-Item -LiteralPath $standard -Destination $impossibleClockCase -Recurse
+    Add-Content -LiteralPath (Join-Path $impossibleClockCase 'EVENTS.md') -Encoding utf8 `
+        -Value '- 2026-08-24T99:99:99Z: [PKG-001] forged stamp | files: docs/MAIN.md | verify: gate pass | pending: none'
+    $impossibleClock = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $impossibleClockCase 'scripts/validate_project.ps1') `
+            -Root $impossibleClockCase
+    }
+    if ($impossibleClock.Code -eq 0) {
+        throw 'An impossible clock (T99:99:99Z) was accepted as a valid event stamp.'
+    }
+    if ($impossibleClock.Text -notmatch 'Malformed event line') {
+        throw "Impossible clock failed without the malformed-line diagnostic: $($impossibleClock.Text)"
+    }
+
     Write-Host "PPS PowerShell smoke tests: OK"
 } finally {
     $resolved = [System.IO.Path]::GetFullPath($tempRoot)

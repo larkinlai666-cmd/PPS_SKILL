@@ -148,12 +148,24 @@ if [[ -f "$anchor_path" ]]; then
   if [[ -n "$anchored_hash" && "$anchored_hash" != "$anchor_current_hash" ]]; then
     revised_events=""
     if [[ -f "$root/EVENTS.md" ]]; then
-      revised_events="$(awk -v from="${anchored_at:0:19}" '
+      revised_events="$(awk -v anchor="$anchored_at" '
+        function stamp_of(line,    body, colon) {
+          body = substr(line, 3)
+          colon = index(body, ": ")
+          if (colon == 0) return ""
+          return substr(body, 1, colon - 1)
+        }
         $0 ~ "^##[[:space:]]+Events[[:space:]]*$" { inside=1; next }
         inside && /^##[[:space:]]/ { exit }
         inside && /^- / {
-          event_ts = substr($0, 3, 19)
-          if (event_ts >= from && $0 ~ /\[[^]]+\][[:space:]]+(objective-revised|goal-revised)[[:space:]]*([:|])/) print
+          event_ts = stamp_of($0)
+          if (event_ts == "") next
+          # A migrated PPS/1.1 chronicle carries calendar-day lines while 1.2
+          # writes full ISO stamps. Compare on the shorter precision so a
+          # legitimate revision recorded in either grammar still counts.
+          n = length(event_ts) < length(anchor) ? length(event_ts) : length(anchor)
+          if (substr(event_ts, 1, n) >= substr(anchor, 1, n) &&
+              $0 ~ /\[[^]]+\][[:space:]]+(objective-revised|goal-revised)[[:space:]]*([:|])/) print
         }
       ' "$root/EVENTS.md")"
     fi
