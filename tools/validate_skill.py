@@ -81,6 +81,8 @@ required = [
     "scripts/append_event.sh",
     "scripts/boundary_check.ps1",
     "scripts/boundary_check.sh",
+    "scripts/core_fingerprint.ps1",
+    "scripts/core_fingerprint.sh",
     "scripts/project_verify.ps1",
     "scripts/project_verify.sh",
 ]

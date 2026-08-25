@@ -3110,4 +3110,154 @@ ratio_full="$(bash "$ratio_case/scripts/resume_packet.sh" "$ratio_case" --level 
   exit 1
 }
 
+# ==== 055 write-time fresh-packet pulse ====================================
+# The packet is the only bounded way back to the goal mid-session; the pulse
+# turns "did working memory re-anchor" into a checkable fact before the first
+# write, instead of a notice at the gate when the bytes are already out.
+
+pulse_case="$temp_root/pulse-case"
+cp -R "$temp_root/standard-case" "$pulse_case"
+(
+  cd "$pulse_case"
+  git init -q
+  git add -A
+  git -c user.name=T -c user.email=t@e.invalid commit -qm base
+  bash scripts/session_begin.sh . >/dev/null
+)
+# 055-01: no packet yet -> the pulse must fail.
+set +e
+bash "$pulse_case/scripts/boundary_check.sh" "$pulse_case" --require-fresh-packet   >"$temp_root/pulse-missing.out" 2>&1
+pulse_missing_code=$?
+set -e
+[[ "$pulse_missing_code" != "0" ]] || {
+  echo "The pulse passed without any packet in the session." >&2
+  exit 1
+}
+grep -q 'no resume packet has been generated' "$temp_root/pulse-missing.out" || {
+  echo "Missing-packet failure does not say what to do." >&2
+  exit 1
+}
+# 055-02: pull anchor, pulse passes, and the default run is unchanged.
+bash "$pulse_case/scripts/resume_packet.sh" "$pulse_case" --level anchor >/dev/null
+bash "$pulse_case/scripts/boundary_check.sh" "$pulse_case" --require-fresh-packet   >"$temp_root/pulse-fresh.out" 2>&1 || {
+  echo "The pulse failed on a packet pulled in this session:" >&2
+  cat "$temp_root/pulse-fresh.out" >&2
+  exit 1
+}
+grep -q 'Fresh-packet pulse: OK' "$temp_root/pulse-fresh.out" || {
+  echo "Fresh pulse did not report success." >&2
+  exit 1
+}
+bash "$pulse_case/scripts/boundary_check.sh" "$pulse_case"   >"$temp_root/pulse-default.out" 2>&1 || true
+if grep -q 'Fresh-packet pulse' "$temp_root/pulse-default.out"; then
+  echo "The pulse ran without --require-fresh-packet; the default must not change." >&2
+  exit 1
+fi
+# 055-03: a forged OLD timestamp must not pass.
+sed 's/^generated_at: .*/generated_at: 2020-01-01T00:00:00Z/'   "$pulse_case/.pps/last-packet" > "$pulse_case/.pps/last-packet.forged"
+mv "$pulse_case/.pps/last-packet.forged" "$pulse_case/.pps/last-packet"
+set +e
+bash "$pulse_case/scripts/boundary_check.sh" "$pulse_case" --require-fresh-packet   >"$temp_root/pulse-stale.out" 2>&1
+pulse_stale_code=$?
+set -e
+[[ "$pulse_stale_code" != "0" ]] || {
+  echo "A forged old timestamp passed the pulse." >&2
+  exit 1
+}
+grep -q 'predates this session' "$temp_root/pulse-stale.out" || {
+  echo "Stale-packet failure does not name the cause." >&2
+  exit 1
+}
+# 055-04: a forged NEW timestamp with a wrong fingerprint must not pass.
+# The fingerprint is the load-bearing part: faking it means reading the core
+# sections off the disk, which is exactly the re-anchoring the pulse forces.
+printf 'packet_level: anchor\ngenerated_at: 2026-08-25T12:00:00Z\ncore_sha256: deadbeefdeadbeef\n'   > "$pulse_case/.pps/last-packet"
+set +e
+bash "$pulse_case/scripts/boundary_check.sh" "$pulse_case" --require-fresh-packet   >"$temp_root/pulse-forged.out" 2>&1
+pulse_forged_code=$?
+set -e
+[[ "$pulse_forged_code" != "0" ]] || {
+  echo "A forged fingerprint passed the pulse." >&2
+  exit 1
+}
+grep -q 'does not match the disk' "$temp_root/pulse-forged.out" || {
+  echo "Fingerprint mismatch failure does not name the cause." >&2
+  exit 1
+}
+# 055-05: a packet pulled, THEN the objective changed on disk, must fail even
+# though the timestamp is fresh: freshness is about the DISK, not the clock.
+bash "$pulse_case/scripts/resume_packet.sh" "$pulse_case" --level anchor >/dev/null
+$PY3 - "$pulse_case" <<'PYEOF'
+import io, sys
+p = sys.argv[1] + '/PROJECT_STATE.md'
+t = io.open(p, encoding='utf-8').read()
+t = t.replace('Replace this paragraph', 'Replace this paragraph REWRITTEN', 1)
+io.open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+set +e
+bash "$pulse_case/scripts/boundary_check.sh" "$pulse_case" --require-fresh-packet   >"$temp_root/pulse-drift.out" 2>&1
+pulse_drift_code=$?
+set -e
+[[ "$pulse_drift_code" != "0" ]] || {
+  echo "The pulse passed after the objective changed on disk." >&2
+  exit 1
+}
+grep -q 'does not match the disk' "$temp_root/pulse-drift.out" || {
+  echo "Objective-drift failure does not name the cause." >&2
+  exit 1
+}
+# 055-06: the fingerprint is identical across engines and sensitive to the
+# objective. This is the parity guarantee the pulse rests on.
+fp_case="$temp_root/fp-case"
+cp -R "$temp_root/standard-case" "$fp_case"
+fp_bash="$(bash "$fp_case/scripts/core_fingerprint.sh" "$fp_case")"
+fp_ps="$(pwsh -NoProfile -ExecutionPolicy Bypass -File "$fp_case/scripts/core_fingerprint.ps1" -Root "$fp_case" 2>/dev/null | tr -d '[:space:]')"
+[[ -n "$fp_bash" && "$fp_bash" == "$fp_ps" ]] || {
+  echo "core_fingerprint diverged between engines: bash=$fp_bash ps=$fp_ps" >&2
+  exit 1
+}
+$PY3 - "$fp_case" <<'PYEOF'
+import io, sys
+p = sys.argv[1] + '/PROJECT_STATE.md'
+t = io.open(p, encoding='utf-8').read()
+t = t.replace('Replace this paragraph', 'Replace this paragraph REWRITTEN', 1)
+io.open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+fp_bash_changed="$(bash "$fp_case/scripts/core_fingerprint.sh" "$fp_case")"
+[[ "$fp_bash_changed" != "$fp_bash" ]] || {
+  echo "core_fingerprint did not change when the objective changed." >&2
+  exit 1
+}
+
+# 055-07: the document-mode anchor exemption is a written-down freeze, not an
+# accident: a missing anchor warns in document mode and fails in software mode.
+doc_anchor_case="$temp_root/doc-anchor-case"
+cp -R "$temp_root/standard-case" "$doc_anchor_case"
+bash "$doc_anchor_case/scripts/session_begin.sh" "$doc_anchor_case" >/dev/null
+rm -f "$doc_anchor_case/.pps/objective-anchor"
+set +e
+bash "$doc_anchor_case/scripts/verify_gate.sh" "$doc_anchor_case"   >"$temp_root/doc-anchor.out" 2>&1
+doc_anchor_code=$?
+set -e
+[[ "$doc_anchor_code" == "0" ]] || {
+  echo "document mode failed on a missing anchor; the documented exemption regressed." >&2
+  exit 1
+}
+grep -q 'objective anchor: missing' "$temp_root/doc-anchor.out" || {
+  echo "document mode did not warn about the missing anchor." >&2
+  exit 1
+}
+sw_anchor_case="$temp_root/sw-anchor-case"
+cp -R "$temp_root/software-case" "$sw_anchor_case"
+bash "$sw_anchor_case/scripts/session_begin.sh" "$sw_anchor_case" >/dev/null
+rm -f "$sw_anchor_case/.pps/objective-anchor"
+set +e
+bash "$sw_anchor_case/scripts/verify_gate.sh" "$sw_anchor_case"   >"$temp_root/sw-anchor.out" 2>&1
+sw_anchor_code=$?
+set -e
+[[ "$sw_anchor_code" != "0" ]] || {
+  echo "software mode passed on a missing anchor; the hard failure regressed." >&2
+  exit 1
+}
+
 echo "PPS Bash smoke tests: OK"

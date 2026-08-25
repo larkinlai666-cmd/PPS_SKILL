@@ -398,9 +398,17 @@ if (( line_count > 240 || byte_count > 32768 )); then
   exit 1
 fi
 if [[ -d "$root/.pps" ]]; then
+  # The fingerprint lets a later write-time check verify that the packet
+  # matches the DISK, not just a timestamp. See core_fingerprint.sh for why
+  # the cost of faking it equals the benefit of compliance.
+  core_fp=""
+  if [[ -x "$root/scripts/core_fingerprint.sh" || -f "$root/scripts/core_fingerprint.sh" ]]; then
+    core_fp="$(bash "$root/scripts/core_fingerprint.sh" "$root" 2>/dev/null || true)"
+  fi
   {
     printf 'packet_level: %s\n' "$packet_level"
     printf 'generated_at: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    [[ -n "$core_fp" ]] && printf 'core_sha256: %s\n' "$core_fp"
   } > "$root/.pps/last-packet" 2>/dev/null || true
 fi
 sed -n '1,240p' "$tmp_file"

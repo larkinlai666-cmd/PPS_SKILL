@@ -2,13 +2,14 @@
 set -uo pipefail
 
 usage() {
-  echo "Usage: boundary_check.sh [ROOT] [--task T-ID] [--record-baseline] [--allow-preexisting] [--discard-handover PATH]"
+  echo "Usage: boundary_check.sh [ROOT] [--task T-ID] [--record-baseline] [--allow-preexisting] [--discard-handover PATH] [--require-fresh-packet]"
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 root="$(cd "$script_dir/.." && pwd -P)"
 allow_preexisting=0
 record_baseline=0
+require_fresh_packet=0
 task_arg=""
 discard_handover=""
 root_seen=0
@@ -16,6 +17,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --allow-preexisting) allow_preexisting=1; shift ;;
     --record-baseline) record_baseline=1; shift ;;
+    --require-fresh-packet) require_fresh_packet=1; shift ;;
     --discard-handover)
       [[ $# -ge 2 ]] || { usage >&2; exit 2; }
       discard_handover="${discard_handover}${2}"$'\n'
@@ -101,6 +103,51 @@ if (( record_baseline == 1 )); then
   echo "Boundary baseline recorded: ${baseline_count:-0} pre-existing dirty path(s) with content fingerprints."
   echo "PPS boundary check: BASELINE RECORDED"
   exit 0
+fi
+
+# --- Fresh-packet pulse (write-time re-anchor check) -------------------------
+# Optional, opt-in: pass --require-fresh-packet before the first write of a
+# session. It fails unless a resume packet generated IN THIS SESSION matches
+# the disk's core fingerprint. The fingerprint, not the timestamp, is the
+# load-bearing part: faking it requires reading the objective, red lines,
+# current package, and write boundary off the disk — which is the re-anchoring
+# this check exists to force. It is deliberately NOT part of verify_gate: by
+# the gate, the bytes are already written.
+fresh_packet_fail() {
+  local reason="$1"
+  echo "ERROR: fresh-packet check failed: $reason" >&2
+  echo "Re-run scripts/resume_packet.* -Level anchor (bash: --level anchor), then re-run the boundary check." >&2
+  exit 1
+}
+if (( require_fresh_packet == 1 )); then
+  [[ -f "$snapshot_file" ]] || fresh_packet_fail "session snapshot missing; run scripts/session_begin.* first"
+  [[ -f "$root/.pps/last-packet" ]] || fresh_packet_fail "no resume packet has been generated in this session"
+  session_started_at="$(sed -n 's/^started_at:[[:space:]]*//p' "$snapshot_file" | head -n 1)"
+  packet_generated_at="$(sed -n 's/^generated_at:[[:space:]]*//p' "$root/.pps/last-packet" | head -n 1)"
+  recorded_fp="$(sed -n 's/^core_sha256:[[:space:]]*//p' "$root/.pps/last-packet" | head -n 1)"
+  if [[ -z "$packet_generated_at" || -z "$session_started_at" ]]; then
+    fresh_packet_fail "packet or session timestamp unreadable"
+  fi
+  # ISO-8601 timestamps compare correctly as strings; no wall-clock TTL is
+  # used, so clock skew cannot forge freshness.
+  if [[ "$packet_generated_at" < "$session_started_at" ]]; then
+    fresh_packet_fail "packet ($packet_generated_at) predates this session ($session_started_at)"
+  fi
+  if [[ -x "$root/scripts/core_fingerprint.sh" || -f "$root/scripts/core_fingerprint.sh" ]]; then
+    current_fp="$(bash "$root/scripts/core_fingerprint.sh" "$root" 2>/dev/null || true)"
+  else
+    current_fp=""
+  fi
+  if [[ -z "$recorded_fp" ]]; then
+    fresh_packet_fail "packet carries no core fingerprint; regenerate it with the current resume_packet"
+  fi
+  if [[ -z "$current_fp" ]]; then
+    fresh_packet_fail "scripts/core_fingerprint.sh is missing; re-run init to restore tooling"
+  fi
+  if [[ "$recorded_fp" != "$current_fp" ]]; then
+    fresh_packet_fail "packet fingerprint ($recorded_fp) does not match the disk ($current_fp); the objective, red lines, package, or write boundary changed since the packet was pulled"
+  fi
+  echo "Fresh-packet pulse: OK (packet $packet_generated_at matches the disk core fingerprint)"
 fi
 
 section_field() {

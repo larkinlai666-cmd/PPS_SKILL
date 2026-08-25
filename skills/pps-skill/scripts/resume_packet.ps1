@@ -405,9 +405,18 @@ if ($packet.Count -gt 240 -or $packetBytes -gt 32768) {
 $ppsDir = Join-Path $rootFull '.pps'
 if (Test-Path -LiteralPath $ppsDir -PathType Container) {
     try {
+        # The fingerprint lets a later write-time check verify that the packet
+        # matches the DISK, not just a timestamp. See core_fingerprint.ps1 for
+        # why the cost of faking it equals the benefit of compliance.
+        $coreFpText = ''
+        $coreFpPath = Join-Path $rootFull 'scripts/core_fingerprint.ps1'
+        if (Test-Path -LiteralPath $coreFpPath -PathType Leaf) {
+            $coreFpText = (& $engine.Source -NoProfile -ExecutionPolicy Bypass -File $coreFpPath -Root $rootFull 2>$null | Out-String).Trim()
+        }
+        $fingerprintLine = if ([string]::IsNullOrWhiteSpace($coreFpText)) { '' } else { "core_sha256: $coreFpText`n" }
         [System.IO.File]::WriteAllText(
             (Join-Path $ppsDir 'last-packet'),
-            "packet_level: $packetLevel`ngenerated_at: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))`n",
+            "packet_level: $packetLevel`ngenerated_at: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))`n$fingerprintLine",
             [System.Text.UTF8Encoding]::new($false))
     } catch { }
 }

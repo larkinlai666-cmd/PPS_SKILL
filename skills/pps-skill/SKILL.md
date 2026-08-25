@@ -105,6 +105,7 @@ Keep one concrete package active. For code, lock component, entry point, interfa
 When the user approves, rejects, or modifies:
 
 0. **before writing anything**, run `scripts/session_begin.*` — it records which files already carry uncommitted handover work, and the verify gate refuses to stamp without that snapshot;
+   **re-anchor before the first write** — run `scripts/resume_packet.* -Level anchor` (bash: `--level anchor`), then `scripts/boundary_check.* -RequireFreshPacket` (bash: `--require-fresh-packet`). The pulse fails unless a packet generated in this session matches the disk's objective, red lines, current package, and write boundary. The packet's Goal, `Acceptance`, red lines, `Write` set, and IDs override anything stated earlier in the conversation;
 1. update the real artifact or code;
 2. add or update the canonical `D-*` record and active block;
 3. append an event for supersession or rejection;
@@ -146,7 +147,7 @@ Run the project-local validator before claiming closure. A clean prose summary i
 - `scripts/verify_gate.ps1` and `.sh`: one entry for structural validation plus declared project checks; writes the device-local verify stamp.
 - `scripts/append_event.ps1` and `.sh`: append a format-stable event line for the current package.
 - `scripts/session_begin.ps1` and `.sh`: run this **before writing anything** in a session. It records `.pps/session-snapshot` (the dirty paths and their content hashes at session start), so a wholesale overwrite of a predecessor's uncommitted work becomes detectable, and writes `.pps/objective-anchor` (the hash of the objective-bearing sections), so a silently rewritten goal fails the gate. A second session over an unexpired snapshot needs `--takeover` / `-Takeover`, which must then be recorded as an event.
-- `scripts/boundary_check.ps1` and `.sh`: classify every worktree change as claimed by a Write set / task output root, or flag it as an `unclaimed_write`. It also fails with `protected_overwrite` when a path that carried uncommitted work at session start has changed; discard that work deliberately with `--discard-handover PATH` / `-DiscardHandover PATH` and record the discard.
+- `scripts/boundary_check.ps1` and `.sh`: classify every worktree change as claimed by a Write set / task output root, or flag it as an `unclaimed_write`. With `-RequireFreshPacket` / `--require-fresh-packet` it also fails unless a resume packet generated in this session matches the disk's core fingerprint (`scripts/core_fingerprint.*`), a write-time re-anchor pulse for long sessions. It also fails with `protected_overwrite` when a path that carried uncommitted work at session start has changed; discard that work deliberately with `--discard-handover PATH` / `-DiscardHandover PATH` and record the discard.
 - `scripts/readiness_check.ps1` and `.sh`: combine structural, asset, verify-stamp, and caller-attested project verification without auto-executing untrusted commands.
 - `scripts/validate_skill.ps1` and `.sh`: verify an installed skill bundle without repository tooling.
 - `scripts/`: cross-platform initializer, status, bounded resume packet, environment doctor, audit, validators, and pre-commit gate.

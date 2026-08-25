@@ -4296,6 +4296,183 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw "anchor level is now below half of full; re-check the documented ratio ($ratioAnchorBytes / $ratioFullBytes)."
     }
 
+    # ==== 055 write-time fresh-packet pulse (parity with the Bash suite) ====
+    $pulseCase = Join-Path $tempRoot 'pulse-case'
+    Copy-Item -LiteralPath $standard -Destination $pulseCase -Recurse
+    Push-Location $pulseCase
+    try {
+        $gitProbe = Get-Command git -ErrorAction SilentlyContinue
+        if ($null -ne $gitProbe) {
+            & $gitProbe.Source init -q | Out-Null
+            & $gitProbe.Source add -A | Out-Null
+            & $gitProbe.Source -c user.name=T -c user.email=t@e.invalid commit -qm base | Out-Null
+        }
+        & $engine -NoProfile -ExecutionPolicy Bypass -File (Join-Path $pulseCase 'scripts/session_begin.ps1') -Root $pulseCase | Out-Null
+    } finally {
+        Pop-Location
+    }
+
+    # 055-01: no packet yet -> the pulse must fail.
+    $pulseMissing = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $pulseCase 'scripts/boundary_check.ps1') `
+            -Root $pulseCase -RequireFreshPacket
+    }
+    if ($pulseMissing.Code -eq 0) {
+        throw 'The pulse passed without any packet in the session.'
+    }
+    if ($pulseMissing.Text -notmatch 'no resume packet has been generated') {
+        throw "Missing-packet failure does not say what to do: $($pulseMissing.Text)"
+    }
+
+    # 055-02: pull anchor, pulse passes, default run is unchanged.
+    $pulsePull = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $pulseCase 'scripts/resume_packet.ps1') `
+            -Root $pulseCase -Level anchor
+    }
+    if ($pulsePull.Code -ne 0) { throw "pulse-case packet pull failed: $($pulsePull.Text)" }
+    $pulseFresh = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $pulseCase 'scripts/boundary_check.ps1') `
+            -Root $pulseCase -RequireFreshPacket
+    }
+    if ($pulseFresh.Code -ne 0) {
+        throw "The pulse failed on a packet pulled in this session: $($pulseFresh.Text)"
+    }
+    if ($pulseFresh.Text -notmatch 'Fresh-packet pulse: OK') {
+        throw "Fresh pulse did not report success: $($pulseFresh.Text)"
+    }
+    $pulseDefault = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $pulseCase 'scripts/boundary_check.ps1') -Root $pulseCase
+    }
+    if ($pulseDefault.Text -match 'Fresh-packet pulse') {
+        throw 'The pulse ran without -RequireFreshPacket; the default must not change.'
+    }
+
+    # 055-03: a forged OLD timestamp must not pass.
+    $lastPacketPath = Join-Path $pulseCase '.pps/last-packet'
+    $lastPacketText = [System.IO.File]::ReadAllText($lastPacketPath, [System.Text.Encoding]::UTF8)
+    $lastPacketText = [regex]::Replace($lastPacketText, '(?m)^generated_at:.*$', 'generated_at: 2020-01-01T00:00:00Z')
+    [System.IO.File]::WriteAllText($lastPacketPath, $lastPacketText, $utf8NoBom)
+    $pulseStale = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $pulseCase 'scripts/boundary_check.ps1') `
+            -Root $pulseCase -RequireFreshPacket
+    }
+    if ($pulseStale.Code -eq 0) {
+        throw 'A forged old timestamp passed the pulse.'
+    }
+    if ($pulseStale.Text -notmatch 'predates this session') {
+        throw "Stale-packet failure does not name the cause: $($pulseStale.Text)"
+    }
+
+    # 055-04: a forged NEW timestamp with a wrong fingerprint must not pass.
+    [System.IO.File]::WriteAllText(
+        $lastPacketPath,
+        "packet_level: anchor`ngenerated_at: 2026-08-25T12:00:00Z`ncore_sha256: deadbeefdeadbeef`n",
+        $utf8NoBom)
+    $pulseForged = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $pulseCase 'scripts/boundary_check.ps1') `
+            -Root $pulseCase -RequireFreshPacket
+    }
+    if ($pulseForged.Code -eq 0) {
+        throw 'A forged fingerprint passed the pulse.'
+    }
+    if ($pulseForged.Text -notmatch 'does not match the disk') {
+        throw "Fingerprint mismatch failure does not name the cause: $($pulseForged.Text)"
+    }
+
+    # 055-05: a packet pulled, THEN the objective changed on disk, must fail
+    # even though the timestamp is fresh: freshness is about the DISK.
+    $pulsePull2 = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $pulseCase 'scripts/resume_packet.ps1') `
+            -Root $pulseCase -Level anchor
+    }
+    if ($pulsePull2.Code -ne 0) { throw "pulse-case second pull failed: $($pulsePull2.Text)" }
+    $statePathPulse = Join-Path $pulseCase 'PROJECT_STATE.md'
+    $stateTextPulse = [System.IO.File]::ReadAllText($statePathPulse, [System.Text.Encoding]::UTF8)
+    $stateTextPulse = $stateTextPulse.Replace('Replace this paragraph', 'Replace this paragraph REWRITTEN')
+    [System.IO.File]::WriteAllText($statePathPulse, $stateTextPulse, $utf8NoBom)
+    $pulseDrift = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $pulseCase 'scripts/boundary_check.ps1') `
+            -Root $pulseCase -RequireFreshPacket
+    }
+    if ($pulseDrift.Code -eq 0) {
+        throw 'The pulse passed after the objective changed on disk.'
+    }
+    if ($pulseDrift.Text -notmatch 'does not match the disk') {
+        throw "Objective-drift failure does not name the cause: $($pulseDrift.Text)"
+    }
+
+    # 055-06: the fingerprint is identical across engines and sensitive to the
+    # objective. This is the parity guarantee the pulse rests on.
+    $fpCase = Join-Path $tempRoot 'fp-case'
+    Copy-Item -LiteralPath $standard -Destination $fpCase -Recurse
+    $fpPs = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $fpCase 'scripts/core_fingerprint.ps1') -Root $fpCase
+    }
+    $bashExe2 = Get-Command bash -ErrorAction SilentlyContinue
+    if ($null -ne $bashExe2) {
+        $fpBash = Invoke-NativeCapture {
+            & $bashExe2.Source (Join-Path $fpCase 'scripts/core_fingerprint.sh') $fpCase
+        }
+        $fpPsTrim = ($fpPs.Text -replace '[\s]', '').Trim()
+        $fpBashTrim = ($fpBash.Text -replace '[\s]', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($fpPsTrim) -or $fpPsTrim -ne $fpBashTrim) {
+            throw "core_fingerprint diverged between engines: bash=$fpBashTrim ps=$fpPsTrim"
+        }
+    }
+    $statePathFp = Join-Path $fpCase 'PROJECT_STATE.md'
+    $stateTextFp = [System.IO.File]::ReadAllText($statePathFp, [System.Text.Encoding]::UTF8)
+    $stateTextFp = $stateTextFp.Replace('Replace this paragraph', 'Replace this paragraph REWRITTEN')
+    [System.IO.File]::WriteAllText($statePathFp, $stateTextFp, $utf8NoBom)
+    $fpPsChanged = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $fpCase 'scripts/core_fingerprint.ps1') -Root $fpCase
+    }
+    if (($fpPsChanged.Text -replace '[\s]', '').Trim() -eq $fpPsTrim) {
+        throw 'core_fingerprint did not change when the objective changed.'
+    }
+
+    # 055-07: the document-mode anchor exemption is a written-down freeze.
+    $docAnchorCase = Join-Path $tempRoot 'doc-anchor-case'
+    Copy-Item -LiteralPath $standard -Destination $docAnchorCase -Recurse
+    $docSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $docAnchorCase 'scripts/session_begin.ps1') -Root $docAnchorCase
+    }
+    Remove-Item -LiteralPath (Join-Path $docAnchorCase '.pps/objective-anchor') -ErrorAction SilentlyContinue
+    $docGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $docAnchorCase 'scripts/verify_gate.ps1') -Root $docAnchorCase
+    }
+    if ($docGate.Code -ne 0) {
+        throw "document mode failed on a missing anchor; the documented exemption regressed: $($docGate.Text)"
+    }
+    if ($docGate.Text -notmatch 'objective anchor: missing') {
+        throw "document mode did not warn about the missing anchor: $($docGate.Text)"
+    }
+    $swAnchorCase = Join-Path $tempRoot 'sw-anchor-case'
+    Copy-Item -LiteralPath $software -Destination $swAnchorCase -Recurse
+    $swSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $swAnchorCase 'scripts/session_begin.ps1') -Root $swAnchorCase
+    }
+    Remove-Item -LiteralPath (Join-Path $swAnchorCase '.pps/objective-anchor') -ErrorAction SilentlyContinue
+    $swGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $swAnchorCase 'scripts/verify_gate.ps1') -Root $swAnchorCase
+    }
+    if ($swGate.Code -eq 0) {
+        throw 'software mode passed on a missing anchor; the hard failure regressed.'
+    }
+
     Write-Host "PPS PowerShell smoke tests: OK"
 } finally {
     $resolved = [System.IO.Path]::GetFullPath($tempRoot)

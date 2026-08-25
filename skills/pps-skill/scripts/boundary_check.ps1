@@ -4,7 +4,10 @@ param(
     [string]$Task,
     [switch]$RecordBaseline,
     [switch]$AllowPreexisting,
-    [string[]]$DiscardHandover = @()
+    [string[]]$DiscardHandover = @(),
+    # Opt-in write-time re-anchor check: fails unless a resume packet
+    # generated in this session matches the disk's core fingerprint.
+    [switch]$RequireFreshPacket
 )
 
 $ErrorActionPreference = "Stop"
@@ -101,6 +104,60 @@ if ($RecordBaseline) {
     Write-Host "Boundary baseline recorded: $($entries.Count) pre-existing dirty path(s) with content fingerprints."
     Write-Host "PPS boundary check: BASELINE RECORDED"
     exit 0
+}
+
+# --- Fresh-packet pulse (write-time re-anchor check) -------------------------
+# Optional, opt-in: pass -RequireFreshPacket before the first write of a
+# session. It fails unless a resume packet generated IN THIS SESSION matches
+# the disk's core fingerprint. The fingerprint, not the timestamp, is the
+# load-bearing part: faking it requires reading the objective, red lines,
+# current package, and write boundary off the disk - which is the re-anchoring
+# this check exists to force. It is deliberately NOT part of verify_gate: by
+# the gate, the bytes are already written.
+if ($RequireFreshPacket) {
+    function Fail-FreshPacket([string]$Reason) {
+        Write-Host "ERROR: fresh-packet check failed: $Reason"
+        Write-Host 'Re-run scripts/resume_packet.* -Level anchor (bash: --level anchor), then re-run the boundary check.'
+        exit 1
+    }
+    $snapshotPathPulse = Join-Path $rootFull '.pps/session-snapshot'
+    if (-not (Test-Path -LiteralPath $snapshotPathPulse -PathType Leaf)) {
+        Fail-FreshPacket 'session snapshot missing; run scripts/session_begin.* first'
+    }
+    $lastPacketPath = Join-Path $rootFull '.pps/last-packet'
+    if (-not (Test-Path -LiteralPath $lastPacketPath -PathType Leaf)) {
+        Fail-FreshPacket 'no resume packet has been generated in this session'
+    }
+    $snapshotTextPulse = [System.IO.File]::ReadAllText($snapshotPathPulse, [System.Text.Encoding]::UTF8)
+    $lastPacketText = [System.IO.File]::ReadAllText($lastPacketPath, [System.Text.Encoding]::UTF8)
+    $sessionStartedAt = ([regex]::Match($snapshotTextPulse, '(?m)^started_at:\s*(.+)$')).Groups[1].Value.Trim()
+    $packetGeneratedAt = ([regex]::Match($lastPacketText, '(?m)^generated_at:\s*(.+)$')).Groups[1].Value.Trim()
+    $recordedFp = ([regex]::Match($lastPacketText, '(?m)^core_sha256:\s*(.+)$')).Groups[1].Value.Trim()
+    if ([string]::IsNullOrWhiteSpace($packetGeneratedAt) -or [string]::IsNullOrWhiteSpace($sessionStartedAt)) {
+        Fail-FreshPacket 'packet or session timestamp unreadable'
+    }
+    # ISO-8601 timestamps compare correctly as strings; no wall-clock TTL is
+    # used, so clock skew cannot forge freshness.
+    if ([string]::CompareOrdinal($packetGeneratedAt, $sessionStartedAt) -lt 0) {
+        Fail-FreshPacket "packet ($packetGeneratedAt) predates this session ($sessionStartedAt)"
+    }
+    $coreFpPath = Join-Path $rootFull 'scripts/core_fingerprint.ps1'
+    if (-not (Test-Path -LiteralPath $coreFpPath -PathType Leaf)) {
+        Fail-FreshPacket 'scripts/core_fingerprint.ps1 is missing; re-run init to restore tooling'
+    }
+    $engineCmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($null -eq $engineCmd) { $engineCmd = Get-Command powershell -ErrorAction SilentlyContinue }
+    $currentFp = (& $engineCmd.Source -NoProfile -ExecutionPolicy Bypass -File $coreFpPath -Root $rootFull 2>$null | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($recordedFp)) {
+        Fail-FreshPacket 'packet carries no core fingerprint; regenerate it with the current resume_packet'
+    }
+    if ([string]::IsNullOrWhiteSpace($currentFp)) {
+        Fail-FreshPacket 'could not compute the disk core fingerprint'
+    }
+    if ($recordedFp -ne $currentFp) {
+        Fail-FreshPacket "packet fingerprint ($recordedFp) does not match the disk ($currentFp); the objective, red lines, package, or write boundary changed since the packet was pulled"
+    }
+    Write-Host "Fresh-packet pulse: OK (packet $packetGeneratedAt matches the disk core fingerprint)"
 }
 
 function Get-SectionField([string]$Path, [string]$Section, [string]$Field) {

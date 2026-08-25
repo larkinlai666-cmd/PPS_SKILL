@@ -6,6 +6,26 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ### Added
 
+**Write-time re-anchor pulse** (`boundary_check.* -RequireFreshPacket` /
+`--require-fresh-packet`), the one machine the scorecard said PPS could still
+add on its own. The gate could only NOTICE a missing packet pull at the end of
+a session; the pulse FAILS at the start of writing unless a packet generated in
+this session matches the disk. Freshness is two layers: `generated_at` must not
+predate the session snapshot (no wall-clock TTL, so clock skew cannot forge
+it), and `core_sha256` — a fingerprint of the objective, red lines, current
+package, and write boundary computed by the new `scripts/core_fingerprint.*` —
+must match the disk. Faking the fingerprint requires reading those sections off
+the disk, which is the re-anchoring the pulse exists to force: the cost of a
+fake equals the benefit of compliance. The pulse is opt-in, write-time, and
+deliberately absent from `verify_gate`. `resume_packet.*` never consults it, so
+recovery is never locked out.
+
+Frozen boundaries, now written into the protocol so they cannot quietly become
+release themes: conversation drift is out of scope (monitoring the chat would
+violate the no-second-memory rule), and mid-session packet injection after
+compaction is a host adapter job — PPS guarantees the contract
+(`resume_packet.* -Level anchor`), not the host.
+
 Small-context retrieval, in response to "can mid-session anti-rot go further
 without breaking the base structure?". Measurement first: the packet was only
 78 lines / ~3 KB against a 240-line / 32 KB budget, so size was never the

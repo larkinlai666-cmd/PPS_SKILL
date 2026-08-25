@@ -204,6 +204,55 @@ degrading is a workset problem and fails loudly. Byte budgets are measured in
 bytes on both engines: counting characters made non-ASCII red lines and
 objectives truncate at different points per platform.
 
+### Write-time re-anchor pulse
+
+The gate notices a missing packet pull at the end of a session; the pulse
+enforces one at the start of writing. `boundary_check.* -RequireFreshPacket`
+(bash: `--require-fresh-packet`) fails unless a packet generated in this
+session matches the disk, before any write classification runs. The check is
+opt-in, sits at the write time, and is deliberately absent from `verify_gate`:
+by the gate, the bytes are already written.
+
+Freshness has two layers, and only one of them is a timestamp. The packet
+records `generated_at`, which must not predate the session snapshot — an
+ISO-8601 string comparison, with no wall-clock TTL, so clock skew cannot forge
+it. The load-bearing layer is `core_sha256`, a fingerprint of the objective,
+red lines, current package, and write boundary on the disk
+(`scripts/core_fingerprint.*`). A forged timestamp with a wrong fingerprint
+still fails. Faking the fingerprint requires reading those sections off the
+disk and hashing them — which is exactly the re-anchoring the pulse exists to
+force. The cost of a fake equals the benefit of compliance, so the pulse is
+harder to defeat than it looks.
+
+The pulse fails, never the packet: `resume_packet.*` does not consult it, so a
+cold session can always pull a packet first. The pulse is a guardrail on
+writes, not a lock on recovery.
+
+### Frozen boundaries (do not reopen)
+
+These gaps are design boundaries, not backlog. Do not turn them into future
+release themes.
+
+- **Conversation drift is out of scope.** Nothing in PPS reads the chat, so an
+  agent that changes the goal in conversation without touching the files is
+  invisible to the protocol. Closing that gap means monitoring the
+  conversation, which violates the standing rule of not building a second
+  memory or replacing the agent's brain. The score for this dimension stays
+  where it is by design.
+- **Mid-session injection is a host job.** Getting the `anchor` packet
+  re-injected into the context after a compaction is the only way to force a
+  mid-session re-anchor without the agent calling a script, and it can only
+  happen in the host (the thing that performs compaction). PPS guarantees the
+  adapter contract — `resume_packet.* -Level anchor` is stable, scriptable,
+  bounded, and its Goal/Acceptance/red lines/Write set override earlier
+  conversation — and does not build the host. No PPS release may claim a
+  mid-session score the host has not implemented.
+- **The document-mode anchor exemption is a freeze, not a gap.** `document`
+  projects warn on a missing `.pps/objective-anchor` while `software`/`hybrid`
+  fail hard; fixture 055-07 pins both directions. Either align document mode
+  with the hard failure (a repair), or keep the warning — but do not keep the
+  warning while claiming document projects are drift-protected the same way.
+
 ## Red line wiring (PPS/1.2)
 
 A red line in `AGENTS.md` may name the check that enforces it by ending the

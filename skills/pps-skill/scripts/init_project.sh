@@ -220,6 +220,7 @@ for script_name in \
   project_verify.ps1 project_verify.sh \
   append_event.ps1 append_event.sh \
   boundary_check.ps1 boundary_check.sh \
+  core_fingerprint.ps1 core_fingerprint.sh \
   session_begin.ps1 session_begin.sh \
   migrate_project.ps1 migrate_project.sh \
   e2e_probe.ps1 e2e_probe.sh \
