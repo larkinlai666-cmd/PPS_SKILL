@@ -3086,4 +3086,28 @@ objective_bytes="$(awk '/^## Objective$/{f=1;next} f&&/^## /{exit} f' \
   exit 1
 }
 
+# 054-07 (A1): the shipped docs must not overstate the anchor level's saving.
+# Measured on a template project it is ~2/3 of full, not ~1/3. A wrong ratio in
+# the docs is the same class of defect as the retired "forced re-read" claim.
+for ratio_file in "$skill/SKILL.md" "$repo_root/CHANGELOG.md"; do
+  if grep -qi 'a third of the full packet' "$ratio_file"; then
+    echo "Overstated anchor-level ratio still present in $ratio_file." >&2
+    exit 1
+  fi
+done
+ratio_case="$temp_root/ratio-case"
+cp -R "$temp_root/standard-case" "$ratio_case"
+ratio_anchor="$(bash "$ratio_case/scripts/resume_packet.sh" "$ratio_case" --level anchor 2>/dev/null | wc -c | tr -d '[:space:]')"
+ratio_full="$(bash "$ratio_case/scripts/resume_packet.sh" "$ratio_case" --level full 2>/dev/null | wc -c | tr -d '[:space:]')"
+# Guard the claim numerically: anchor must be a real saving but not the ~1/3
+# the docs used to promise, so a future edit cannot silently restore the myth.
+(( ratio_anchor < ratio_full )) || {
+  echo "anchor level is not smaller than full: $ratio_anchor vs $ratio_full" >&2
+  exit 1
+}
+(( ratio_anchor * 2 > ratio_full )) || {
+  echo "anchor level is now below half of full; re-check the documented ratio ($ratio_anchor / $ratio_full)." >&2
+  exit 1
+}
+
 echo "PPS Bash smoke tests: OK"

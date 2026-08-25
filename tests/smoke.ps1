@@ -4270,6 +4270,32 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         }
     }
 
+    # 054-07 (A1): the shipped docs must not overstate the anchor saving.
+    foreach ($ratioFile in @((Join-Path $skill 'SKILL.md'), (Join-Path $repoRoot 'CHANGELOG.md'))) {
+        $ratioText = [System.IO.File]::ReadAllText($ratioFile, [System.Text.Encoding]::UTF8)
+        if ($ratioText -match '(?i)a third of the full packet') {
+            throw "Overstated anchor-level ratio still present in $ratioFile."
+        }
+    }
+    $ratioCase = Join-Path $tempRoot 'ratio-case'
+    Copy-Item -LiteralPath $standard -Destination $ratioCase -Recurse
+    $ratioAnchorRun = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $ratioCase 'scripts/resume_packet.ps1') -Root $ratioCase -Level anchor
+    }
+    $ratioFullRun = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $ratioCase 'scripts/resume_packet.ps1') -Root $ratioCase -Level full
+    }
+    $ratioAnchorBytes = [System.Text.Encoding]::UTF8.GetByteCount($ratioAnchorRun.Text)
+    $ratioFullBytes = [System.Text.Encoding]::UTF8.GetByteCount($ratioFullRun.Text)
+    if ($ratioAnchorBytes -ge $ratioFullBytes) {
+        throw "anchor level is not smaller than full: $ratioAnchorBytes vs $ratioFullBytes"
+    }
+    if (($ratioAnchorBytes * 2) -le $ratioFullBytes) {
+        throw "anchor level is now below half of full; re-check the documented ratio ($ratioAnchorBytes / $ratioFullBytes)."
+    }
+
     Write-Host "PPS PowerShell smoke tests: OK"
 } finally {
     $resolved = [System.IO.Path]::GetFullPath($tempRoot)

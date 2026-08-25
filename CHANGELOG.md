@@ -16,7 +16,7 @@ exceeding the budget was a hard failure.
   PowerShell). These are subsets of the same content — no new sections, no new
   state, nothing generated per level. `anchor` carries only the anti-drift
   payload (objective, red lines, current package with `Acceptance`, the
-  `Read`/`Write`/`Verify` boundary, handover, Git risk) at roughly a third of
+  `Read`/`Write`/`Verify` boundary, handover, Git risk) at roughly two thirds of
   the full packet, so a mid-session re-anchor is cheap on a small context
   window. `hot` adds hot state, recent events, and the rest of the manifest.
   `full` remains the default and is byte-identical to the previous output.
