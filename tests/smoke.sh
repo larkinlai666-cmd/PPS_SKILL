@@ -302,6 +302,7 @@ PPS_FAKE_RCLONE_COUNT=1 PPS_FAKE_RCLONE_BYTES="$asset_bytes" \
 grep -q '^WARNING: Reference asset A-REF-001 is not materialized' \
   "$temp_root/asset-full.out"
 grep -q '^PASS cloud copy: A-CORE-001' "$temp_root/asset-full.out"
+bash "$asset_case/scripts/session_begin.sh" "$asset_case" >/dev/null
 bash "$asset_case/scripts/verify_gate.sh" "$asset_case" >/dev/null
 PPS_FAKE_RCLONE_COUNT=1 PPS_FAKE_RCLONE_BYTES="$asset_bytes" \
   PATH="$fake_rclone_bin:$PATH" \
@@ -1702,6 +1703,7 @@ stamp_missing_code=$?
 set -e
 [[ "$stamp_missing_code" == "4" ]]
 grep -q 'VERIFY EVIDENCE MISSING' "$temp_root/stamp-missing.out"
+bash "$stamp_case/scripts/session_begin.sh" "$stamp_case" >/dev/null
 bash "$stamp_case/scripts/verify_gate.sh" "$stamp_case" >/dev/null
 bash "$stamp_case/scripts/readiness_check.sh" "$stamp_case" --verified \
   >"$temp_root/stamp-present.out"
@@ -2389,6 +2391,7 @@ cp -R "$temp_root/standard-case" "$gate_fail_case"
 } >"$gate_fail_case/scripts/project_verify.sh"
 chmod +x "$gate_fail_case/scripts/project_verify.sh"
 rm -f "$gate_fail_case/.pps/verify-stamp"
+bash "$gate_fail_case/scripts/session_begin.sh" "$gate_fail_case" >/dev/null
 if bash "$gate_fail_case/scripts/verify_gate.sh" "$gate_fail_case" \
   >"$temp_root/gate-fail.out" 2>&1; then
   echo "Verify gate wrote a green stamp for a failing project verification." >&2
@@ -2411,6 +2414,7 @@ unrouted_case="$temp_root/unrouted-verify-case"
 cp -R "$temp_root/standard-case" "$unrouted_case"
 sed -i.bak 's|^- Verify:.*|- Verify: bash -c "exit 9"|' "$unrouted_case/CONTEXT.md"
 rm -f "$unrouted_case/.pps/verify-stamp"
+bash "$unrouted_case/scripts/session_begin.sh" "$unrouted_case" >/dev/null
 if bash "$unrouted_case/scripts/verify_gate.sh" "$unrouted_case" \
   >"$temp_root/unrouted.out" 2>&1; then
   echo "Verify gate accepted an unrouted free-form Verify declaration." >&2
@@ -2423,6 +2427,7 @@ stale_worktree_case="$temp_root/stale-worktree-case"
 bash "$skill/scripts/init_project.sh" stale-worktree-case \
   --profile standard --parent "$temp_root" \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+bash "$stale_worktree_case/scripts/session_begin.sh" "$stale_worktree_case" >/dev/null
 bash "$stale_worktree_case/scripts/verify_gate.sh" "$stale_worktree_case" >/dev/null
 printf 'post-stamp drift\n' >>"$stale_worktree_case/docs/MAIN.md"
 set +e
@@ -2438,6 +2443,7 @@ bash "$skill/scripts/init_project.sh" dirty-content-case \
   --profile standard --parent "$temp_root" \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
 printf 'dirty before gate\n' >>"$dirty_content_case/docs/MAIN.md"
+bash "$dirty_content_case/scripts/session_begin.sh" "$dirty_content_case" >/dev/null
 bash "$dirty_content_case/scripts/verify_gate.sh" "$dirty_content_case" >/dev/null
 printf 'dirty again after gate\n' >>"$dirty_content_case/docs/MAIN.md"
 set +e
@@ -2453,6 +2459,7 @@ bash "$skill/scripts/init_project.sh" cjk-dirty-case \
   --profile standard --parent "$temp_root" \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
 printf 'first version\n' >"$cjk_dirty_case/中文 脏文件.md"
+bash "$cjk_dirty_case/scripts/session_begin.sh" "$cjk_dirty_case" >/dev/null
 bash "$cjk_dirty_case/scripts/verify_gate.sh" "$cjk_dirty_case" >/dev/null
 printf 'second version\n' >"$cjk_dirty_case/中文 脏文件.md"
 set +e
@@ -2467,6 +2474,7 @@ gitless_case="$temp_root/gitless-stamp-case"
 bash "$skill/scripts/init_project.sh" gitless-stamp-case \
   --profile standard --parent "$temp_root" \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+bash "$gitless_case/scripts/session_begin.sh" "$gitless_case" >/dev/null
 bash "$gitless_case/scripts/verify_gate.sh" "$gitless_case" >/dev/null
 mv "$gitless_case/.git" "$temp_root/gitless-stamp-case-git"
 set +e
@@ -2482,6 +2490,7 @@ capsule_drift_case="$temp_root/capsule-drift-case"
 bash "$skill/scripts/init_project.sh" capsule-drift-case \
   --profile standard --parent "$temp_root" \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+bash "$capsule_drift_case/scripts/session_begin.sh" "$capsule_drift_case" >/dev/null
 bash "$capsule_drift_case/scripts/verify_gate.sh" "$capsule_drift_case" >/dev/null
 printf '\n<!-- capsule drift -->\n' >>"$capsule_drift_case/CONTEXT.md"
 set +e
@@ -2495,6 +2504,7 @@ ambiguous_stamp_case="$temp_root/ambiguous-stamp-case"
 bash "$skill/scripts/init_project.sh" ambiguous-stamp-case \
   --profile standard --parent "$temp_root" \
   --git-name "PPS Smoke" --git-email "pps-smoke@example.invalid" >/dev/null
+bash "$ambiguous_stamp_case/scripts/session_begin.sh" "$ambiguous_stamp_case" >/dev/null
 bash "$ambiguous_stamp_case/scripts/verify_gate.sh" "$ambiguous_stamp_case" >/dev/null
 $PY3 - "$ambiguous_stamp_case/.pps/verify-stamp" <<'PYEOF'
 import sys
@@ -3168,10 +3178,14 @@ grep -q 'predates this session' "$temp_root/pulse-stale.out" || {
   echo "Stale-packet failure does not name the cause." >&2
   exit 1
 }
-# 055-04: a forged NEW timestamp with a wrong fingerprint must not pass.
+# 055-04: a forged timestamp with a wrong fingerprint must not pass.
 # The fingerprint is the load-bearing part: faking it means reading the core
 # sections off the disk, which is exactly the re-anchoring the pulse forces.
-printf 'packet_level: anchor\ngenerated_at: 2026-08-25T12:00:00Z\ncore_sha256: deadbeefdeadbeef\n'   > "$pulse_case/.pps/last-packet"
+# Forge generated_at == session started_at: equal is not "before", so this
+# passes the timestamp layer (no hard-coded clock) and lands on the fingerprint
+# layer, which is the layer under test.
+pulse_started="$(sed -n 's/^started_at:[[:space:]]*//p' "$pulse_case/.pps/session-snapshot" | head -n 1)"
+printf 'packet_level: anchor\ngenerated_at: %s\ncore_sha256: deadbeefdeadbeef\n'   "$pulse_started" > "$pulse_case/.pps/last-packet"
 set +e
 bash "$pulse_case/scripts/boundary_check.sh" "$pulse_case" --require-fresh-packet   >"$temp_root/pulse-forged.out" 2>&1
 pulse_forged_code=$?
@@ -3229,8 +3243,10 @@ fp_bash_changed="$(bash "$fp_case/scripts/core_fingerprint.sh" "$fp_case")"
   exit 1
 }
 
-# 055-07: the document-mode anchor exemption is a written-down freeze, not an
-# accident: a missing anchor warns in document mode and fails in software mode.
+# 055-07 (A2): every mode now fails hard on a missing anchor. The document
+# exemption was a drift hole: a document project could rewrite its objective
+# and the gate would only warn. session_begin works without Git, so the cost
+# of compliance is identical across modes.
 doc_anchor_case="$temp_root/doc-anchor-case"
 cp -R "$temp_root/standard-case" "$doc_anchor_case"
 bash "$doc_anchor_case/scripts/session_begin.sh" "$doc_anchor_case" >/dev/null
@@ -3239,12 +3255,20 @@ set +e
 bash "$doc_anchor_case/scripts/verify_gate.sh" "$doc_anchor_case"   >"$temp_root/doc-anchor.out" 2>&1
 doc_anchor_code=$?
 set -e
-[[ "$doc_anchor_code" == "0" ]] || {
-  echo "document mode failed on a missing anchor; the documented exemption regressed." >&2
+[[ "$doc_anchor_code" != "0" ]] || {
+  echo "document mode passed on a missing anchor; the A2 alignment regressed." >&2
   exit 1
 }
-grep -q 'objective anchor: missing' "$temp_root/doc-anchor.out" || {
-  echo "document mode did not warn about the missing anchor." >&2
+grep -q 'OBJECTIVE ANCHOR MISSING' "$temp_root/doc-anchor.out" || {
+  echo "document mode did not fail loudly on the missing anchor." >&2
+  exit 1
+}
+# A2 does not lock out recovery: a fresh session_begin restores the anchor and
+# the same project then passes. The first session's snapshot is still unexpired,
+# so the recovery session claims it with --takeover.
+bash "$doc_anchor_case/scripts/session_begin.sh" "$doc_anchor_case" --takeover >/dev/null
+bash "$doc_anchor_case/scripts/verify_gate.sh" "$doc_anchor_case"   >"$temp_root/doc-anchor-recovered.out" 2>&1 || {
+  echo "The gate still fails after a fresh session_begin restored the anchor." >&2
   exit 1
 }
 sw_anchor_case="$temp_root/sw-anchor-case"
@@ -3257,6 +3281,27 @@ sw_anchor_code=$?
 set -e
 [[ "$sw_anchor_code" != "0" ]] || {
   echo "software mode passed on a missing anchor; the hard failure regressed." >&2
+  exit 1
+}
+
+# 055-08: a project with recorded events that never left bootstrap gets a
+# NOTICE about the exempted Acceptance floor. The notice never fails the gate.
+boot_notice_case="$temp_root/boot-notice-case"
+cp -R "$temp_root/standard-case" "$boot_notice_case"
+bash "$boot_notice_case/scripts/session_begin.sh" "$boot_notice_case" >/dev/null
+bash "$boot_notice_case/scripts/append_event.sh" "$boot_notice_case" \
+  --title "exploration during bootstrap" \
+  --files "CONTEXT.md" \
+  --verify "event recorded" \
+  --pending "none" >/dev/null 2>&1 || true
+bash "$boot_notice_case/scripts/verify_gate.sh" "$boot_notice_case"   >"$temp_root/boot-notice.out" 2>&1
+boot_notice_code=$?
+[[ "$boot_notice_code" == "0" ]] || {
+  echo "The bootstrap NOTICE failed the gate; it must stay a notice." >&2
+  exit 1
+}
+grep -q 'still in bootstrap stage' "$temp_root/boot-notice.out" || {
+  echo "A project with events but still in bootstrap did not get the NOTICE." >&2
   exit 1
 }
 

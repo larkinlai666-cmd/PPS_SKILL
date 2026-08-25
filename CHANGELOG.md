@@ -6,6 +6,22 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ### Added
 
+**A2: the document-mode anchor exemption is closed.** Every mode now fails
+hard on a missing `.pps/objective-anchor`, closing the last disk-drift hole
+(scorecard's disk anti-drift 7 -> 8): a document project could rewrite its
+objective and the gate would only warn. The anchor is written by
+`session_begin`, which works without Git (verified), so a document project
+pays the same compliance cost as any other — one `session_begin` before
+writing. Fixture 055-07 pins all modes failing plus the recovery path (a fresh
+`session_begin` restores the anchor and the gate passes again).
+
+**Bootstrap evasion is now visible.** A project that records events but never
+leaves bootstrap has evaded the Acceptance floor indefinitely, because the
+floor is exempted in bootstrap. The gate now prints a NOTICE for that state.
+It stays a notice: staying in bootstrap is not forbidden, and the floor cannot
+be enforced by a wall clock without hurting offline projects (the same reason
+the pulse uses no wall-clock TTL).
+
 **Write-time re-anchor pulse** (`boundary_check.* -RequireFreshPacket` /
 `--require-fresh-packet`), the one machine the scorecard said PPS could still
 add on its own. The gate could only NOTICE a missing packet pull at the end of

@@ -181,13 +181,15 @@ if (Test-Path -LiteralPath $anchorFilePath -PathType Leaf) {
         Write-Host 'objective anchor: unchanged since session begin'
     }
 } else {
-    if ($anchorModeValue -in @('software', 'hybrid')) {
-        Write-Host 'ERROR: .pps/objective-anchor is missing; run scripts/session_begin.ps1 before writing.'
-        Write-Host 'Without the anchor the gate cannot prove the objective was not rewritten mid-session.'
-        Write-Host 'PPS verify gate: FAILED (OBJECTIVE ANCHOR MISSING)'
-        exit 1
-    }
-    Write-Host "objective anchor: missing; run scripts/session_begin.ps1 before writing (warning in $anchorModeValue mode)."
+    # A2: every mode fails hard on a missing anchor. The anchor is written by
+    # session_begin, which works without Git, so a document project pays the
+    # same cost as any other: one session_begin before writing. A warning here
+    # let document projects drift without the gate noticing.
+    $shownAnchorMode = if ([string]::IsNullOrWhiteSpace($anchorModeValue)) { 'unknown' } else { $anchorModeValue }
+    Write-Host 'ERROR: .pps/objective-anchor is missing; run scripts/session_begin.ps1 before writing.'
+    Write-Host "Without the anchor the gate cannot prove the objective was not rewritten mid-session (mode: $shownAnchorMode)."
+    Write-Host 'PPS verify gate: FAILED (OBJECTIVE ANCHOR MISSING)'
+    exit 1
 }
 
 Write-Host "-- Step 1/4: structural validation"
@@ -377,6 +379,21 @@ $modeMatch = [regex]::Match($stateText, '(?m)^-\s+Mode:\s*(.*?)\s*$')
 $modeValue = if ($modeMatch.Success) { $modeMatch.Groups[1].Value } else { '' }
 $stageMatch = [regex]::Match($stateText, '(?m)^-\s+Stage:\s*(.*?)\s*$')
 $stageValue = if ($stageMatch.Success) { $stageMatch.Groups[1].Value } else { '' }
+# A project with recorded events that never left bootstrap has evaded the
+# Acceptance floor indefinitely: the floor is exempted in bootstrap. Make that
+# evasion visible. A NOTICE, never a failure: staying in bootstrap is not
+# forbidden, and the floor cannot be enforced by a wall clock.
+if ($stageValue -match 'bootstrap') {
+    $eventsPathNotice = Join-Path $rootFull 'EVENTS.md'
+    if (Test-Path -LiteralPath $eventsPathNotice -PathType Leaf) {
+        $eventsTextNotice = [System.IO.File]::ReadAllText($eventsPathNotice, [System.Text.Encoding]::UTF8)
+        $hasEventEntry = $eventsTextNotice -match '(?m)^##\s+Events[\s\S]*?^- '
+        if ($hasEventEntry) {
+            Write-Host 'NOTICE: events are recorded but the project is still in bootstrap stage.'
+            Write-Host '        The Acceptance floor is exempted in bootstrap; prepare PKG-001 to leave it.'
+        }
+    }
+}
 if ($modeValue -in @('software', 'hybrid')) {
     # Unit tests can pass while the caller path is broken: a software package
     # needs at least one check that is not the structural validator itself.

@@ -247,11 +247,14 @@ release themes.
   bounded, and its Goal/Acceptance/red lines/Write set override earlier
   conversation — and does not build the host. No PPS release may claim a
   mid-session score the host has not implemented.
-- **The document-mode anchor exemption is a freeze, not a gap.** `document`
-  projects warn on a missing `.pps/objective-anchor` while `software`/`hybrid`
-  fail hard; fixture 055-07 pins both directions. Either align document mode
-  with the hard failure (a repair), or keep the warning — but do not keep the
-  warning while claiming document projects are drift-protected the same way.
+- **The document-mode exemption is closed, not frozen.** Every mode now fails
+  hard on a missing `.pps/objective-anchor` (fixture 055-07 pins all three
+  modes plus the recovery path): the anchor is written by `session_begin`,
+  which works without Git, so the compliance cost is identical across modes.
+  A project that records events but never leaves bootstrap gets a NOTICE about
+  the exempted Acceptance floor (fixture 055-08); it stays a notice because
+  staying in bootstrap is not forbidden and the floor cannot be enforced by a
+  wall clock.
 
 ## Red line wiring (PPS/1.2)
 

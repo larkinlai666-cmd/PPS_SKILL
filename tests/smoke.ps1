@@ -506,6 +506,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         $assetFullResult.Text -notmatch 'PASS cloud copy: A-CORE-001') {
         throw 'PowerShell full asset check mishandled a marker-only reference.'
     }
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $assetCase 'scripts/session_begin.ps1') -Root $assetCase
+    }
     $gateResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $assetCase 'scripts/verify_gate.ps1') `
@@ -1586,6 +1590,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         -ProjectName ambiguous-stamp-case -Profile standard -ParentDir $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Ambiguous-stamp initialization failed." }
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $ambiguousStampCase 'scripts/session_begin.ps1') -Root $ambiguousStampCase
+    }
     $ambGate = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $ambiguousStampCase 'scripts/verify_gate.ps1') `
@@ -2505,6 +2513,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     if ($stampMissingResult.Code -ne 4 -or
         $stampMissingResult.Text -notmatch 'VERIFY EVIDENCE MISSING') {
         throw 'Readiness accepted attestation without a verify stamp.'
+    }
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $stampCase 'scripts/session_begin.ps1') -Root $stampCase
     }
     $gateStampResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
@@ -3519,6 +3531,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     [System.IO.File]::WriteAllText($casePath, $text, $utf8NoBom)
     $unroutedStamp = Join-Path $unroutedCase '.pps/verify-stamp'
     if (Test-Path -LiteralPath $unroutedStamp) { Remove-Item -LiteralPath $unroutedStamp }
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $unroutedCase 'scripts/session_begin.ps1') -Root $unroutedCase
+    }
     $unroutedResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $unroutedCase 'scripts/verify_gate.ps1') `
@@ -3538,6 +3554,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         -ProjectName stale-worktree-case -Profile standard -ParentDir $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Stale-worktree initialization failed." }
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $staleWorktreeCase 'scripts/session_begin.ps1') -Root $staleWorktreeCase
+    }
     $staleGate = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $staleWorktreeCase 'scripts/verify_gate.ps1') `
@@ -3566,6 +3586,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     if ($LASTEXITCODE -ne 0) { throw "Dirty-content initialization failed." }
     [System.IO.File]::AppendAllText(
         (Join-Path $dirtyContentCase "docs/MAIN.md"), "dirty before gate`n", $utf8NoBom)
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $dirtyContentCase 'scripts/session_begin.ps1') -Root $dirtyContentCase
+    }
     $dirtyGate = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $dirtyContentCase 'scripts/verify_gate.ps1') `
@@ -3592,6 +3616,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         -ProjectName capsule-drift-case -Profile standard -ParentDir $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Capsule-drift initialization failed." }
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $capsuleDriftCase 'scripts/session_begin.ps1') -Root $capsuleDriftCase
+    }
     $capsuleGate = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $capsuleDriftCase 'scripts/verify_gate.ps1') `
@@ -3619,6 +3647,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     if ($LASTEXITCODE -ne 0) { throw "CJK-dirty initialization failed." }
     $cjkFile = Join-Path $cjkDirtyCase ([string]::Join('', [char]0x4E2D, [char]0x6587, ' ', [char]0x810F, '.md'))
     [System.IO.File]::WriteAllText($cjkFile, "first version`n", $utf8NoBom)
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $cjkDirtyCase 'scripts/session_begin.ps1') -Root $cjkDirtyCase
+    }
     $cjkGate = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $cjkDirtyCase 'scripts/verify_gate.ps1') `
@@ -3644,6 +3676,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         -ProjectName gitless-stamp-case -Profile standard -ParentDir $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Gitless-stamp initialization failed." }
+    $null = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $gitlessCase 'scripts/session_begin.ps1') -Root $gitlessCase
+    }
     $gitlessGate = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $gitlessCase 'scripts/verify_gate.ps1') `
@@ -4368,10 +4404,16 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw "Stale-packet failure does not name the cause: $($pulseStale.Text)"
     }
 
-    # 055-04: a forged NEW timestamp with a wrong fingerprint must not pass.
+    # 055-04: a forged timestamp with a wrong fingerprint must not pass.
+    # Forge generated_at == session started_at: equal is not "before", so this
+    # passes the timestamp layer (no hard-coded clock) and lands on the
+    # fingerprint layer, which is the layer under test.
+    $snapshotPathPulse2 = Join-Path $pulseCase '.pps/session-snapshot'
+    $snapshotTextPulse2 = [System.IO.File]::ReadAllText($snapshotPathPulse2, [System.Text.Encoding]::UTF8)
+    $pulseStartedAt = ([regex]::Match($snapshotTextPulse2, '(?m)^started_at:\s*(.+)$')).Groups[1].Value.Trim()
     [System.IO.File]::WriteAllText(
         $lastPacketPath,
-        "packet_level: anchor`ngenerated_at: 2026-08-25T12:00:00Z`ncore_sha256: deadbeefdeadbeef`n",
+        "packet_level: anchor`ngenerated_at: $pulseStartedAt`ncore_sha256: deadbeefdeadbeef`n",
         $utf8NoBom)
     $pulseForged = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
@@ -4440,7 +4482,10 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw 'core_fingerprint did not change when the objective changed.'
     }
 
-    # 055-07: the document-mode anchor exemption is a written-down freeze.
+    # 055-07 (A2): every mode now fails hard on a missing anchor. The document
+    # exemption was a drift hole: a document project could rewrite its objective
+    # and the gate would only warn. session_begin works without Git, so the cost
+    # of compliance is identical across modes.
     $docAnchorCase = Join-Path $tempRoot 'doc-anchor-case'
     Copy-Item -LiteralPath $standard -Destination $docAnchorCase -Recurse
     $docSession = Invoke-NativeCapture {
@@ -4452,11 +4497,25 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $docAnchorCase 'scripts/verify_gate.ps1') -Root $docAnchorCase
     }
-    if ($docGate.Code -ne 0) {
-        throw "document mode failed on a missing anchor; the documented exemption regressed: $($docGate.Text)"
+    if ($docGate.Code -eq 0) {
+        throw "document mode passed on a missing anchor; the A2 alignment regressed: $($docGate.Text)"
     }
-    if ($docGate.Text -notmatch 'objective anchor: missing') {
-        throw "document mode did not warn about the missing anchor: $($docGate.Text)"
+    if ($docGate.Text -notmatch 'OBJECTIVE ANCHOR MISSING') {
+        throw "document mode did not fail loudly on the missing anchor: $($docGate.Text)"
+    }
+    # A2 does not lock out recovery: a fresh session_begin restores the anchor
+    # and the same project then passes. The first session's snapshot is still
+    # unexpired, so the recovery session claims it with -Takeover.
+    $docSession2 = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $docAnchorCase 'scripts/session_begin.ps1') -Root $docAnchorCase -Takeover
+    }
+    $docGate2 = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $docAnchorCase 'scripts/verify_gate.ps1') -Root $docAnchorCase
+    }
+    if ($docGate2.Code -ne 0) {
+        throw "The gate still fails after a fresh session_begin restored the anchor: $($docGate2.Text)"
     }
     $swAnchorCase = Join-Path $tempRoot 'sw-anchor-case'
     Copy-Item -LiteralPath $software -Destination $swAnchorCase -Recurse
@@ -4473,8 +4532,34 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw 'software mode passed on a missing anchor; the hard failure regressed.'
     }
 
-    Write-Host "PPS PowerShell smoke tests: OK"
-} finally {
+    # 055-08: a project with recorded events that never left bootstrap gets a
+    # NOTICE about the exempted Acceptance floor. The notice never fails the gate.
+    $bootNoticeCase = Join-Path $tempRoot 'boot-notice-case'
+    Copy-Item -LiteralPath $standard -Destination $bootNoticeCase -Recurse
+    $bootSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $bootNoticeCase 'scripts/session_begin.ps1') -Root $bootNoticeCase
+    }
+    $bootEvent = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $bootNoticeCase 'scripts/append_event.ps1') -Root $bootNoticeCase `
+            -Title 'exploration during bootstrap' `
+            -Files 'CONTEXT.md' `
+            -Verify 'event recorded' `
+            -Pending 'none'
+    }
+    $bootGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $bootNoticeCase 'scripts/verify_gate.ps1') -Root $bootNoticeCase
+    }
+    if ($bootGate.Code -ne 0) {
+        throw "The bootstrap NOTICE failed the gate; it must stay a notice: $($bootGate.Text)"
+    }
+    if ($bootGate.Text -notmatch 'still in bootstrap stage') {
+        throw "A project with events but still in bootstrap did not get the NOTICE: $($bootGate.Text)"
+    }
+
+    Write-Host "PPS PowerShell smoke tests: OK"} finally {
     $resolved = [System.IO.Path]::GetFullPath($tempRoot)
     $comparison = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
         [System.StringComparison]::OrdinalIgnoreCase

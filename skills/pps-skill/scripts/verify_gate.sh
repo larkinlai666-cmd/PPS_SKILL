@@ -162,6 +162,20 @@ stage_value="$(
     }
   ' "$root/PROJECT_STATE.md"
 )"
+# A project with recorded events that never left bootstrap has evaded the
+# Acceptance floor indefinitely: the floor is exempted in bootstrap. Make that
+# evasion visible. A NOTICE, never a failure: staying in bootstrap is not
+# forbidden, and the floor cannot be enforced by a wall clock.
+if [[ "$stage_value" == *"bootstrap"* && -f "$root/EVENTS.md" ]]; then
+  if awk '
+    $0 ~ "^##[[:space:]]+Events[[:space:]]*$" { inside=1; next }
+    inside && /^##[[:space:]]/ { exit }
+    inside && /^- / { print; exit }
+  ' "$root/EVENTS.md" | grep -q .; then
+    echo "NOTICE: events are recorded but the project is still in bootstrap stage."
+    echo "        The Acceptance floor is exempted in bootstrap; prepare PKG-001 to leave it."
+  fi
+fi
 anchor_path="$root/.pps/objective-anchor"
 if [[ -f "$anchor_path" ]]; then
   # The readable objective body below the marker is context, never metadata:
@@ -212,17 +226,15 @@ if [[ -f "$anchor_path" ]]; then
     echo "objective anchor: unchanged since session begin"
   fi
 else
-  case "$anchor_mode_value" in
-    software | hybrid)
-      echo "ERROR: .pps/objective-anchor is missing; run scripts/session_begin.sh before writing." >&2
-      echo "Without the anchor the gate cannot prove the objective was not rewritten mid-session." >&2
-      echo "PPS verify gate: FAILED (OBJECTIVE ANCHOR MISSING)" >&2
-      exit 1
-      ;;
-    *)
-      echo "objective anchor: missing; run scripts/session_begin.sh before writing (warning in $anchor_mode_value mode)."
-      ;;
-  esac
+  # A2: every mode fails hard on a missing anchor. The anchor is written by
+  # session_begin, which works without Git, so a document project pays the
+  # same cost as any other: one session_begin before writing. A warning here
+  # let document projects drift without the gate noticing, which is exactly
+  # the hole this closes.
+  echo "ERROR: .pps/objective-anchor is missing; run scripts/session_begin.sh before writing." >&2
+  echo "Without the anchor the gate cannot prove the objective was not rewritten mid-session (mode: ${anchor_mode_value:-unknown})." >&2
+  echo "PPS verify gate: FAILED (OBJECTIVE ANCHOR MISSING)" >&2
+  exit 1
 fi
 
 echo "-- Step 1/4: structural validation"
