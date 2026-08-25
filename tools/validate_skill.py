@@ -273,6 +273,93 @@ def check_self_description() -> None:
 
 check_self_description()
 
+
+def check_cli_parity() -> None:
+    """Every paired .sh/.ps1 script must expose the same CLI surface.
+
+    The two engines implement one protocol; an option that exists on one side
+    only is interface drift waiting to strand a cross-engine user. Parsed
+    statically with no runtime cost: bash long options come from the Usage
+    line, PowerShell parameter names from the leading param() block. Both are
+    normalized to lowercase letters only, so --require-fresh-packet and
+    -RequireFreshPacket compare as one name.
+
+    Engine-neutral equivalences, not drift:
+    - `root`: every PS script carries $Root (the positional project root);
+      the bash scripts that also spell it as an option use --root. Dropped
+      from both sides.
+    - `projectname`: init_project takes the name positionally in bash
+      (<project-name>) and as -ProjectName in PowerShell. Dropped from PS.
+    - `backupdir`: migrate_project takes the backup directory positionally
+      after --rollback in bash and binds it positionally to -BackupDir in
+      PowerShell. Dropped from PS.
+
+    Template and hook pairs whose surface is owned by the project or by Git,
+    not by PPS, are skipped: pre-commit (Git hook), project_verify and
+    e2e_probe (templates the project rewrites), validate_skill (distribution
+    self-check; its bash edition takes the root positionally, its PS edition
+    uses -SkillRoot by historical name). pps_evidence.py has no pair.
+    """
+    scripts = SKILL / "scripts"
+    excluded = {
+        "pre-commit",
+        "project_verify",
+        "e2e_probe",
+        "validate_skill",
+    }
+    option_re = re.compile(r"--[a-z][a-z-]*")
+    param_re = re.compile(r"\[(?:string|switch|string\[\])\]\s*\$(\w+)")
+    positional_equivalents = {"root", "projectname", "backupdir"}
+
+    for sh in sorted(scripts.glob("*.sh")):
+        name = sh.stem
+        if name in excluded:
+            continue
+        ps = scripts / f"{name}.ps1"
+        if not ps.is_file():
+            continue
+        sh_text = read(sh)
+        ps_text = read(ps)
+
+        bash_opts: set[str] = set()
+        for line in sh_text.splitlines():
+            if "Usage:" in line:
+                for opt in option_re.findall(line):
+                    bash_opts.add(opt[2:].replace("-", ""))
+                break
+
+        ps_params: set[str] = set()
+        start = ps_text.find("param(")
+        if start != -1:
+            depth = 0
+            end = -1
+            for i in range(start, len(ps_text)):
+                if ps_text[i] == "(":
+                    depth += 1
+                elif ps_text[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+            if end != -1:
+                block = ps_text[start + len("param("):end]
+                for nm in param_re.findall(block):
+                    ps_params.add(nm.lower())
+
+        bash_extra = bash_opts - ps_params - positional_equivalents
+        ps_extra = ps_params - bash_opts - positional_equivalents
+        if bash_extra or ps_extra:
+            parts = []
+            if bash_extra:
+                parts.append("bash-only: " + ", ".join(sorted(bash_extra)))
+            if ps_extra:
+                parts.append("ps-only: " + ", ".join(sorted(ps_extra)))
+            error(f"CLI parity drift in scripts/{name}.*: " + "; ".join(parts))
+
+
+check_cli_parity()
+
+
 if ERRORS:
     print(f"PPS distribution validation: FAILED ({len(ERRORS)} error(s))")
     for item in ERRORS:

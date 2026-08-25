@@ -1,11 +1,23 @@
 [CmdletBinding()]
 param(
     [string]$Root,
-    [string]$Mode = "dry-run",
+    [switch]$DryRun,
+    [switch]$Apply,
+    [switch]$Rollback,
     [switch]$Confirm,
     [switch]$WithMultitask,
-    [string]$RollbackDir
+    [string]$BackupDir
 )
+
+# CLI parity with migrate_project.sh: the bash engine spells the same three
+# modes as separate flags (--dry-run / --apply / --rollback DIR) rather than a
+# -Mode value. Derive the shared mode variables here so the rest of the script
+# stays engine-neutral; -Rollback binds its directory through the position of
+# -BackupDir, mirroring "--rollback DIR".
+$Mode = 'dry-run'
+if ($Apply) { $Mode = 'apply' }
+if ($Rollback) { $Mode = 'rollback' }
+$RollbackDir = $BackupDir
 
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($Root)) { $Root = (Get-Location).Path }

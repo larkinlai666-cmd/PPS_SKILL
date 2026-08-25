@@ -138,24 +138,24 @@ try {
 
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName standard-case -Profile standard -ParentDir $tempRoot -NoGit
+        -ProjectName standard-case -Profile standard -Parent $tempRoot -NoGit
     if ($LASTEXITCODE -ne 0) { throw "Standard initialization failed." }
 
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName evidence-case -Profile evidence -ParentDir $tempRoot -NoGit
+        -ProjectName evidence-case -Profile evidence -Parent $tempRoot -NoGit
     if ($LASTEXITCODE -ne 0) { throw "Evidence initialization failed." }
 
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
         -ProjectName software-case -Mode software -Profile standard `
-        -ParentDir $tempRoot -NoGit
+        -Parent $tempRoot -NoGit
     if ($LASTEXITCODE -ne 0) { throw "Software initialization failed." }
 
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
         -ProjectName hybrid-case -Mode hybrid -Profile standard `
-        -ParentDir $tempRoot -NoGit
+        -Parent $tempRoot -NoGit
     if ($LASTEXITCODE -ne 0) { throw "Hybrid initialization failed." }
 
     $standard = Join-Path $tempRoot "standard-case"
@@ -646,7 +646,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
 
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName git-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName git-case -Profile standard -Parent $tempRoot `
         -GitName "PPS Smoke" -GitEmail "pps-smoke@example.invalid" `
         -InstallHook
     if ($LASTEXITCODE -ne 0) { throw "Git initialization case failed." }
@@ -801,7 +801,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $nonemptyResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill "scripts/init_project.ps1") `
-            -ProjectName nonempty -ParentDir $tempRoot -NoGit 2>&1
+            -ProjectName nonempty -Parent $tempRoot -NoGit 2>&1
     }
     if ($nonemptyResult.Code -eq 0 -or
         $nonemptyResult.Text -notmatch "Refusing to initialize a non-empty target" -or
@@ -812,7 +812,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $invalidNameResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill "scripts/init_project.ps1") `
-            -ProjectName "invalid/name" -ParentDir $tempRoot -NoGit 2>&1
+            -ProjectName "invalid/name" -Parent $tempRoot -NoGit 2>&1
     }
     if ($invalidNameResult.Code -eq 0 -or
         $invalidNameResult.Text -notmatch "may contain only") {
@@ -821,7 +821,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $dotDotNameResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill "scripts/init_project.ps1") `
-            -ProjectName ".." -ParentDir $tempRoot -NoGit 2>&1
+            -ProjectName ".." -Parent $tempRoot -NoGit 2>&1
     }
     if ($dotDotNameResult.Code -eq 0 -or
         $dotDotNameResult.Text -notmatch "cannot be '.' or '..'") {
@@ -830,7 +830,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $reservedNameResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill "scripts/init_project.ps1") `
-            -ProjectName "CON" -ParentDir $tempRoot -NoGit 2>&1
+            -ProjectName "CON" -Parent $tempRoot -NoGit 2>&1
     }
     if ($reservedNameResult.Code -eq 0 -or
         $reservedNameResult.Text -notmatch "Windows-reserved device name") {
@@ -839,7 +839,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $contradictoryResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill "scripts/init_project.ps1") `
-            -ProjectName "contradictory" -ParentDir $tempRoot -NoGit -InstallHook 2>&1
+            -ProjectName "contradictory" -Parent $tempRoot -NoGit -InstallHook 2>&1
     }
     if ($contradictoryResult.Code -eq 0 -or
         $contradictoryResult.Text -notmatch "cannot be used with -NoGit") {
@@ -1142,7 +1142,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $legacyReport = Join-Path $tempRoot "legacy-report.md"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
-        -Root $legacy -OutputPath $legacyReport
+        -Root $legacy -Output $legacyReport
     if ($LASTEXITCODE -ne 0) { throw "Legacy project audit failed." }
     $legacyAfter = Get-TreeFingerprint $legacy
     if ($legacyBefore -ne $legacyAfter) {
@@ -1216,7 +1216,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $insideResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill "scripts/audit_legacy_project.ps1") `
-            -Root $legacy -OutputPath $insideReport 2>&1
+            -Root $legacy -Output $insideReport 2>&1
     }
     if ($insideResult.Code -eq 0 -or
         $insideResult.Text -notmatch "Refusing to write the audit report inside the target project" -or
@@ -1587,7 +1587,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $ambiguousStampCase = Join-Path $tempRoot "ambiguous-stamp-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName ambiguous-stamp-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName ambiguous-stamp-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Ambiguous-stamp initialization failed." }
     $null = Invoke-NativeCapture {
@@ -2179,7 +2179,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         }
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill 'scripts/migrate_project.ps1') `
-            -Root $mxMig -Mode apply -Confirm 2>&1 | Out-Null
+            -Root $mxMig -Apply -Confirm 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw ("Migration of $migFixture failed on PowerShell. See the migrator output above.")
         }
@@ -2240,7 +2240,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         $mxMigBackup = $mxMigBackups | Select-Object -First 1
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill 'scripts/migrate_project.ps1') `
-            -Root $mxMig -Mode rollback -RollbackDir $mxMigBackup.FullName 2>&1 | Out-Null
+            -Root $mxMig -Rollback $mxMigBackup.FullName 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "${migFixture}: rollback failed." }
         $mxPostFiles = @(Get-ChildItem -LiteralPath $mxMig -File -Recurse | Where-Object {
             -not $_.FullName -like '*/.git/*' -and -not $_.FullName -like '*/.pps/*'
@@ -2273,7 +2273,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $null = Invoke-NativeCapture { & git -C $mxMt -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base 2>&1 }
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill 'scripts/migrate_project.ps1') `
-        -Root $mxMt -Mode apply -Confirm -WithMultitask 2>&1 | Out-Null
+        -Root $mxMt -Apply -Confirm -WithMultitask 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'The -WithMultitask migration failed.' }
     if (-not (Test-Path -LiteralPath (Join-Path $mxMt 'TASK_INDEX.md')) -or
         -not (Test-Path -LiteralPath (Join-Path $mxMt 'MERGES.md'))) {
@@ -2304,7 +2304,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $mxFailResult = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
             -File (Join-Path $skill 'scripts/migrate_project.ps1') `
-            -Root $mxFail -Mode apply -Confirm 2>&1
+            -Root $mxFail -Apply -Confirm 2>&1
     }
     if ($mxFailResult.Code -eq 0) {
         throw 'Migration of an unrecoverable 1.1 state incorrectly succeeded.'
@@ -2581,7 +2581,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $boundaryCase = Join-Path $tempRoot "boundary-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName boundary-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName boundary-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Boundary-case initialization failed." }
     [System.IO.File]::WriteAllText(
@@ -2659,7 +2659,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $terminalSubject = Join-Path $tempRoot "boundary-terminal-subject"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName boundary-terminal-subject -Profile standard -ParentDir $tempRoot `
+        -ProjectName boundary-terminal-subject -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Boundary-terminal initialization failed." }
     New-Item -ItemType Directory -Path (Join-Path $terminalSubject "task-contexts") -Force | Out-Null
@@ -2697,7 +2697,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $boundaryCanonical = Join-Path $tempRoot "boundary-canonical"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName boundary-canonical -Profile standard -ParentDir $tempRoot `
+        -ProjectName boundary-canonical -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Boundary-canonical initialization failed." }
     $casePath = Join-Path $boundaryCanonical "CONTEXT.md"
@@ -2748,7 +2748,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
         -ProjectName gate-only-overwrite-case -Mode software -Profile standard `
-        -ParentDir $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+        -Parent $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Gate-only overwrite fixture initialization failed.' }
     [System.IO.File]::WriteAllText(
         (Join-Path $gateOnlyOverwrite 'docs/MAIN.md'),
@@ -2777,7 +2777,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
         -ProjectName stale-snapshot-case -Mode software -Profile standard `
-        -ParentDir $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+        -Parent $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Stale snapshot fixture initialization failed.' }
     [System.IO.File]::WriteAllText(
         (Join-Path $staleSnapshot 'docs/MAIN.md'), "session A work`n", $utf8NoBom)
@@ -3120,7 +3120,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
         -ProjectName relay-discard-case -Profile standard `
-        -ParentDir $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
+        -Parent $tempRoot -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Relay discard fixture initialization failed.' }
     [System.IO.File]::WriteAllText(
         (Join-Path $relayDiscard 'docs/MAIN.md'), "session A work`n", $utf8NoBom)
@@ -3386,7 +3386,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $handoverCase = Join-Path $tempRoot "handover-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName handover-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName handover-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Handover fixture initialization failed.' }
     [System.IO.File]::WriteAllText(
@@ -3439,7 +3439,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $packetRelayCase = Join-Path $tempRoot "packet-relay-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName packet-relay-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName packet-relay-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Packet relay fixture initialization failed.' }
     $agentsFile = Join-Path $packetRelayCase 'AGENTS.md'
@@ -3551,7 +3551,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $staleWorktreeCase = Join-Path $tempRoot "stale-worktree-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName stale-worktree-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName stale-worktree-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Stale-worktree initialization failed." }
     $null = Invoke-NativeCapture {
@@ -3581,7 +3581,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $dirtyContentCase = Join-Path $tempRoot "dirty-content-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName dirty-content-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName dirty-content-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Dirty-content initialization failed." }
     [System.IO.File]::AppendAllText(
@@ -3613,7 +3613,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $capsuleDriftCase = Join-Path $tempRoot "capsule-drift-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName capsule-drift-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName capsule-drift-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Capsule-drift initialization failed." }
     $null = Invoke-NativeCapture {
@@ -3642,7 +3642,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $cjkDirtyCase = Join-Path $tempRoot "cjk-dirty-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName cjk-dirty-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName cjk-dirty-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "CJK-dirty initialization failed." }
     $cjkFile = Join-Path $cjkDirtyCase ([string]::Join('', [char]0x4E2D, [char]0x6587, ' ', [char]0x810F, '.md'))
@@ -3673,7 +3673,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $gitlessCase = Join-Path $tempRoot "gitless-stamp-case"
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill "scripts/init_project.ps1") `
-        -ProjectName gitless-stamp-case -Profile standard -ParentDir $tempRoot `
+        -ProjectName gitless-stamp-case -Profile standard -Parent $tempRoot `
         -GitName 'PPS Smoke' -GitEmail 'pps-smoke@example.invalid' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Gitless-stamp initialization failed." }
     $null = Invoke-NativeCapture {
@@ -3739,7 +3739,7 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     $anchorCase = Join-Path $tempRoot 'anchor-case'
     & $engine -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $skill 'scripts/init_project.ps1') `
-        -ProjectName anchor-case -Profile standard -ParentDir $tempRoot -NoGit
+        -ProjectName anchor-case -Profile standard -Parent $tempRoot -NoGit
     if ($LASTEXITCODE -ne 0) { throw 'anchor-case initialization failed.' }
     $anchorSession = Invoke-NativeCapture {
         & $engine -NoProfile -ExecutionPolicy Bypass `
@@ -4557,6 +4557,49 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
     }
     if ($bootGate.Text -notmatch 'still in bootstrap stage') {
         throw "A project with events but still in bootstrap did not get the NOTICE: $($bootGate.Text)"
+    }
+
+    # ==== 056 CLI parity drift check (validate_skill) ========================
+    # The parity checker must both pass on the shipped tree and CATCH an
+    # injected one-sided parameter. A checker that stops noticing drift is a
+    # silent gate.
+    $pyProbe = Get-Command python3 -ErrorAction SilentlyContinue
+    if ($null -eq $pyProbe) { $pyProbe = Get-Command python -ErrorAction SilentlyContinue }
+    if ($null -ne $pyProbe) {
+        $parityOk = Invoke-NativeCapture {
+            & $pyProbe.Source (Join-Path $repoRoot 'tools/validate_skill.py')
+        }
+        if ($parityOk.Code -ne 0) {
+            throw "The CLI parity check failed on the shipped tree: $($parityOk.Text)"
+        }
+        # Inject a PS-only ghost parameter, expect failure, then restore.
+        $parityScript = Join-Path $repoRoot 'skills/pps-skill/scripts/verify_gate.ps1'
+        $parityBackup = Join-Path $tempRoot 'verify_gate.ps1.parity.bak'
+        Copy-Item -LiteralPath $parityScript -Destination $parityBackup
+        try {
+            $parityText = [System.IO.File]::ReadAllText($parityScript, [System.Text.Encoding]::UTF8)
+            $parityText = $parityText.Replace(
+                "param(`n    [string]`$Root`n)",
+                "param(`n    [string]`$Root,`n    [switch]`$Ghost`n)")
+            [System.IO.File]::WriteAllText($parityScript, $parityText, $utf8NoBom)
+            $parityDrift = Invoke-NativeCapture {
+                & $pyProbe.Source (Join-Path $repoRoot 'tools/validate_skill.py')
+            }
+            if ($parityDrift.Code -eq 0) {
+                throw 'The parity check missed an injected PS-only parameter.'
+            }
+            if ($parityDrift.Text -notmatch 'CLI parity drift') {
+                throw "The parity failure does not name the drift: $($parityDrift.Text)"
+            }
+        } finally {
+            Copy-Item -LiteralPath $parityBackup -Destination $parityScript -Force
+        }
+        $parityRestored = Invoke-NativeCapture {
+            & $pyProbe.Source (Join-Path $repoRoot 'tools/validate_skill.py')
+        }
+        if ($parityRestored.Code -ne 0) {
+            throw "The parity check failed after the injected parameter was restored: $($parityRestored.Text)"
+        }
     }
 
     Write-Host "PPS PowerShell smoke tests: OK"} finally {

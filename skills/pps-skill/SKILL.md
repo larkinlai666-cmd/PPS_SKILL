@@ -58,7 +58,7 @@ PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File <skill>/scripts/init_project.ps1 `
-  -ProjectName <name> -Mode software -Profile standard -ParentDir <parent>
+  -ProjectName <name> -Mode software -Profile standard -Parent <parent>
 ```
 
 Bash:

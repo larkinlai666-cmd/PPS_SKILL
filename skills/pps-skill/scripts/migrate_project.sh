@@ -17,6 +17,10 @@
 # is therefore never left half-activated.
 set -uo pipefail
 
+usage() {
+  echo "Usage: migrate_project.sh [ROOT] [--dry-run | --apply --confirm [--with-multitask] | --rollback DIR]"
+}
+
 root="$(pwd)"
 mode="dry-run"
 confirm=0

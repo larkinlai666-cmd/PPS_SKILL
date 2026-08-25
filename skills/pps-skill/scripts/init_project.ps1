@@ -6,7 +6,7 @@ param(
     [string]$Mode = 'document',
     [ValidateSet('standard', 'evidence')]
     [string]$Profile = 'standard',
-    [string]$ParentDir,
+    [string]$Parent,
     [string]$GitName,
     [string]$GitEmail,
     [switch]$InstallHook,
@@ -56,17 +56,17 @@ if ($NoGit -and -not [string]::IsNullOrWhiteSpace($GitName)) {
     throw "-GitName/-GitEmail cannot be used with -NoGit."
 }
 
-if ([string]::IsNullOrWhiteSpace($ParentDir)) {
+if ([string]::IsNullOrWhiteSpace($Parent)) {
     if (-not [string]::IsNullOrWhiteSpace($env:PPS_PROJECT_HOME)) {
-        $ParentDir = $env:PPS_PROJECT_HOME
+        $Parent = $env:PPS_PROJECT_HOME
     } elseif (-not [string]::IsNullOrWhiteSpace($env:PLAN_PROJECT_HOME)) {
-        $ParentDir = $env:PLAN_PROJECT_HOME
+        $Parent = $env:PLAN_PROJECT_HOME
     } else {
-        $ParentDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Projects'
+        $Parent = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Projects'
     }
 }
 
-$parentFull = [System.IO.Path]::GetFullPath($ParentDir)
+$parentFull = [System.IO.Path]::GetFullPath($Parent)
 $target = Join-Path $parentFull $ProjectName
 if (Test-Path -LiteralPath $target) {
     if (-not (Test-Path -LiteralPath $target -PathType Container)) {

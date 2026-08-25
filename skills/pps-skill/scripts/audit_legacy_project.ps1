@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Root = (Get-Location).Path,
-    [string]$OutputPath
+    [string]$Output
 )
 
 $ErrorActionPreference = "Stop"
@@ -500,12 +500,12 @@ Add-ReportLine
 Add-ReportLine 'The target was inspected without modification. This report is a proposal, not an active migration.'
 $report = [string]::Join([Environment]::NewLine, $lines) + [Environment]::NewLine
 
-if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+if ([string]::IsNullOrWhiteSpace($Output)) {
     Write-Output $report
     exit 0
 }
 
-$outputInputFull = [System.IO.Path]::GetFullPath($OutputPath)
+$outputInputFull = [System.IO.Path]::GetFullPath($Output)
 $outputParentInput = Split-Path -Parent $outputInputFull
 if (-not (Test-Path -LiteralPath $outputParentInput -PathType Container)) {
     throw "Output parent does not exist: $outputParentInput"

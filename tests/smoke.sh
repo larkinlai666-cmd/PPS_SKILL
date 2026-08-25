@@ -3305,4 +3305,40 @@ grep -q 'still in bootstrap stage' "$temp_root/boot-notice.out" || {
   exit 1
 }
 
+# ==== 056 CLI parity drift check (validate_skill) ===========================
+# The parity checker must both pass on the shipped tree and CATCH an injected
+# one-sided option. A checker that stops noticing drift is a silent gate.
+parity_ok_out="$temp_root/parity-ok.out"
+"$PY3" "$repo_root/tools/validate_skill.py" >"$parity_ok_out" 2>&1 || {
+  echo "The CLI parity check failed on the shipped tree:" >&2
+  cat "$parity_ok_out" >&2
+  exit 1
+}
+# Inject a bash-only ghost option, expect failure, then restore. The backup
+# file guarantees the restore even if the check below aborts the suite.
+parity_script="$repo_root/skills/pps-skill/scripts/readiness_check.sh"
+cp "$parity_script" "$temp_root/readiness_check.sh.bak"
+trap 'cp "$temp_root/readiness_check.sh.bak" "$parity_script" 2>/dev/null || true' EXIT
+sed -i.bak 's/\[--verified\]/[--verified] [--ghost]/' "$parity_script"
+rm -f "$parity_script.bak"
+set +e
+"$PY3" "$repo_root/tools/validate_skill.py" >"$temp_root/parity-drift.out" 2>&1
+parity_drift_code=$?
+set -e
+cp "$temp_root/readiness_check.sh.bak" "$parity_script"
+trap - EXIT
+[[ "$parity_drift_code" != "0" ]] || {
+  echo "The parity check missed an injected bash-only option." >&2
+  exit 1
+}
+grep -q 'CLI parity drift' "$temp_root/parity-drift.out" || {
+  echo "The parity failure does not name the drift." >&2
+  exit 1
+}
+"$PY3" "$repo_root/tools/validate_skill.py" >"$temp_root/parity-restored.out" 2>&1 || {
+  echo "The parity check failed after the injected option was restored:" >&2
+  cat "$temp_root/parity-restored.out" >&2
+  exit 1
+}
+
 echo "PPS Bash smoke tests: OK"

@@ -19,7 +19,7 @@ powershell -ExecutionPolicy Bypass -File <skill>\scripts\audit_legacy_project.ps
 
 The command classifies the repository as `pps`, `plan-project-sync`, `other-state-system`, `mixed`, or `unstructured`; recommends a provisional mode/profile; counts strict numeric `M/F/D` IDs; and reports free-form decisions, tool/environment contamination signals, dependency manifests, implementation/prototype code, and binary assets. Generated and dependency directories such as `node_modules`, virtual environments, `vendor`, `dist`, and `build` are pruned so they cannot determine project mode or make the audit unbounded. The audit does not validate semantic authority and does not activate the proposal. Counts and keyword hits are triage signals, not automatic promotion rules.
 
-By default the report goes to standard output. `--output <file>` or `-OutputPath <file>` may save it only outside the target project. The command refuses to overwrite an existing report or write any report inside the audited project, so inspection cannot silently create a second state system.
+By default the report goes to standard output. `--output <file>` / `-Output <file>` may save it only outside the target project. The command refuses to overwrite an existing report or write any report inside the audited project, so inspection cannot silently create a second state system.
 
 ## From enhanced plan-project-sync
 
@@ -128,6 +128,10 @@ auditable upgrade path:
   decision and event. It does NOT flip the `Protocol:` field — you flip it
   only after `validate_project` passes on both platforms.
 - `--rollback <backup dir>`: restores the backup.
+
+The PowerShell edition exposes the same surface with engine spelling:
+`-DryRun` (default), `-Apply -Confirm`, `-Apply -Confirm -WithMultitask`,
+`-Rollback <backup dir>`.
 
 The upgrader never guesses historical merges into typed relations; pre-layer
 history uses the `lineage_incomplete` escape hatch with an explicit decision.

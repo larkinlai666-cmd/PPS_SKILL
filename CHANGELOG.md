@@ -6,6 +6,22 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ### Added
 
+**CLI parity is now a validated invariant.** `validate_skill.py` parses each
+paired `.sh`/`.ps1` script and fails when one engine exposes an option the
+other does not (bash Usage line vs. the PowerShell `param()` block, normalized
+to lowercase letters, so `--require-fresh-packet` and `-RequireFreshPacket`
+compare as one name). Positional engine-neutral names are equivalences, not
+drift: `root` (the positional project root), `projectname` (positional in
+bash, `-ProjectName` in PS), `backupdir` (`--rollback DIR` vs. `-Rollback
+<dir>` bound by position). Template/hook pairs whose surface is owned by the
+project or by Git are skipped. The check surfaced three real drifts, now
+fixed in the PowerShell engines to match the documented bash surface:
+`-OutputPath` -> `-Output`, `-ParentDir` -> `-Parent`, and migrate_project's
+`-Mode apply|rollback -RollbackDir <dir>` -> `-DryRun | -Apply | -Rollback
+<dir>` (with `-Confirm` / `-WithMultitask` unchanged). Fixture 056 pins the
+checker itself: an injected one-sided option must fail the validation and the
+restore must pass it, on both engines.
+
 **A2: the document-mode anchor exemption is closed.** Every mode now fails
 hard on a missing `.pps/objective-anchor`, closing the last disk-drift hole
 (scorecard's disk anti-drift 7 -> 8): a document project could rewrite its
