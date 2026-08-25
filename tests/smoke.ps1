@@ -4163,6 +4163,113 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw 'SKILL.md does not state the mid-session re-read invariant (R3).'
     }
 
+    # ==== 054 small-context retrieval levels (parity with the Bash suite) ====
+    $levelCase = Join-Path $tempRoot 'level-case'
+    Copy-Item -LiteralPath $standard -Destination $levelCase -Recurse
+    $levelSizes = @{}
+    foreach ($probeLevel in @('anchor', 'hot', 'full')) {
+        $levelRun = Invoke-NativeCapture {
+            & $engine -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $levelCase 'scripts/resume_packet.ps1') `
+                -Root $levelCase -Level $probeLevel
+        }
+        if ($levelRun.Code -ne 0) {
+            throw "resume_packet -Level $probeLevel failed: $($levelRun.Text)"
+        }
+        foreach ($required in @('(?m)^## Objective', '(?m)^## Red Lines',
+                '(?m)^## Current Package', '(?m)^- Write:')) {
+            if ($levelRun.Text -notmatch $required) {
+                throw "Level $probeLevel dropped an undroppable section: $required"
+            }
+        }
+        if ($levelRun.Text -notmatch "(?m)^- packet_level: $probeLevel`$") {
+            throw "Level $probeLevel did not declare its own packet_level."
+        }
+        $levelSizes[$probeLevel] = [System.Text.Encoding]::UTF8.GetByteCount($levelRun.Text)
+    }
+    if (-not ($levelSizes['anchor'] -lt $levelSizes['hot'])) {
+        throw "Levels are not ordered subsets: anchor=$($levelSizes['anchor']) hot=$($levelSizes['hot'])"
+    }
+    if ($levelSizes['hot'] -gt $levelSizes['full']) {
+        throw "hot level is larger than full: $($levelSizes['hot']) > $($levelSizes['full'])"
+    }
+
+    # 054-02: an unknown level must fail loudly (ValidateSet rejects it).
+    $bogusLevel = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $levelCase 'scripts/resume_packet.ps1') `
+            -Root $levelCase -Level bogus
+    }
+    if ($bogusLevel.Code -eq 0) { throw 'An unknown -Level was accepted.' }
+
+    # 054-04: the gate observes whether a packet was pulled in this session.
+    $observeCase = Join-Path $tempRoot 'observe-case'
+    Copy-Item -LiteralPath $standard -Destination $observeCase -Recurse
+    Remove-Item -LiteralPath (Join-Path $observeCase '.pps/last-packet') -ErrorAction SilentlyContinue
+    $observeSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $observeCase 'scripts/session_begin.ps1') -Root $observeCase
+    }
+    if ($observeSession.Code -ne 0) { throw "observe-case session_begin failed: $($observeSession.Text)" }
+    $observeMissing = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $observeCase 'scripts/verify_gate.ps1') -Root $observeCase
+    }
+    if ($observeMissing.Text -notmatch 'no resume packet has been generated') {
+        throw "The gate does not notice that no packet was ever pulled: $($observeMissing.Text)"
+    }
+    $observePull = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $observeCase 'scripts/resume_packet.ps1') `
+            -Root $observeCase -Level anchor
+    }
+    if ($observePull.Code -ne 0) { throw "observe-case packet pull failed: $($observePull.Text)" }
+    $observeFresh = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $observeCase 'scripts/verify_gate.ps1') -Root $observeCase
+    }
+    if ($observeFresh.Text -notmatch 'packet pull: level anchor') {
+        throw "The gate does not report a fresh packet pull: $($observeFresh.Text)"
+    }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $observeCase '.pps/last-packet'),
+        "packet_level: anchor`ngenerated_at: 2020-01-01T00:00:00Z`n",
+        $utf8NoBom)
+    $observeStale = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $observeCase 'scripts/verify_gate.ps1') -Root $observeCase
+    }
+    if ($observeStale.Text -notmatch 'predates this session') {
+        throw "The gate does not flag a packet older than the session: $($observeStale.Text)"
+    }
+
+    # 054-06: cross-engine parity. Byte budgets are measured in BYTES on both
+    # sides, so every level must be byte-identical apart from the timestamp.
+    $parityCase = Join-Path $tempRoot 'level-parity-case'
+    Copy-Item -LiteralPath $standard -Destination $parityCase -Recurse
+    foreach ($parityLevel in @('anchor', 'hot', 'full')) {
+        $psSide = Invoke-NativeCapture {
+            & $engine -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $parityCase 'scripts/resume_packet.ps1') `
+                -Root $parityCase -Level $parityLevel
+        }
+        $bashExe = Get-Command bash -ErrorAction SilentlyContinue
+        if ($null -ne $bashExe) {
+            $bashSide = Invoke-NativeCapture {
+                & $bashExe.Source (Join-Path $parityCase 'scripts/resume_packet.sh') `
+                    $parityCase '--level' $parityLevel
+            }
+            $normalise = {
+                param($text)
+                (@($text -split "`r?`n") |
+                    Where-Object { $_ -notmatch '^- generated_at:' }) -join "`n"
+            }
+            if ((& $normalise $psSide.Text).Trim() -ne (& $normalise $bashSide.Text).Trim()) {
+                throw "Level $parityLevel diverged between engines; byte budgets are not measured identically."
+            }
+        }
+    }
+
     Write-Host "PPS PowerShell smoke tests: OK"
 } finally {
     $resolved = [System.IO.Path]::GetFullPath($tempRoot)

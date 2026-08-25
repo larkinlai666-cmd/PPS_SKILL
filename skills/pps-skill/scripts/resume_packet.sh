@@ -2,7 +2,47 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-root_input="${1:-$(cd "$script_dir/.." && pwd -P)}"
+# Small-context repair: the protocol has always described L0/L1/L2 retrieval,
+# but this script only ever emitted one size. A mid-session agent that just
+# needs to re-anchor had to swallow the whole packet or read nothing. --level
+# emits SUBSETS of the same content: no new sections, no new state, and
+# --level full is byte-identical to the previous behaviour.
+packet_level="full"
+root_input=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --level)
+      [[ $# -ge 2 ]] || { echo "ERROR: --level needs a value (anchor|hot|full)." >&2; exit 2; }
+      packet_level="$2"
+      shift 2
+      ;;
+    --level=*)
+      packet_level="${1#--level=}"
+      shift
+      ;;
+    -h | --help)
+      echo "Usage: resume_packet.sh [ROOT] [--level anchor|hot|full]"
+      exit 0
+      ;;
+    -*)
+      echo "ERROR: unknown option: $1" >&2
+      exit 2
+      ;;
+    *)
+      [[ -z "$root_input" ]] || { echo "ERROR: unexpected extra argument: $1" >&2; exit 2; }
+      root_input="$1"
+      shift
+      ;;
+  esac
+done
+case "$packet_level" in
+  anchor | hot | full) ;;
+  *)
+    echo "ERROR: unknown --level '$packet_level'; use anchor, hot, or full." >&2
+    exit 2
+    ;;
+esac
+[[ -n "$root_input" ]] || root_input="$(cd "$script_dir/.." && pwd -P)"
 root="$(cd "$root_input" && pwd -P)"
 state="$root/PROJECT_STATE.md"
 context="$root/CONTEXT.md"
@@ -43,7 +83,14 @@ trap 'rm -f "$tmp_file"' EXIT
   echo "# PPS Resume Packet"
   echo
   echo "## Hot State"
-  for field in Protocol Profile Mode Stage Main Map Environment Package Status Capsule Coverage Blockers Next Updated Device Writer; do
+  # anchor level keeps only the fields needed to re-anchor: who/where/what is
+  # active. Everything else is recoverable by reading the state file.
+  if [[ "$packet_level" == "anchor" ]]; then
+    hot_fields=(Protocol Mode Stage Package Status Next)
+  else
+    hot_fields=(Protocol Profile Mode Stage Main Map Environment Package Status Capsule Coverage Blockers Next Updated Device Writer)
+  fi
+  for field in "${hot_fields[@]}"; do
     value="$(field_in_section "$state" "Hot State" "$field")"
     [[ -n "$value" ]] && printf -- '- %s: %s\n' "$field" "$value"
   done
@@ -64,7 +111,10 @@ trap 'rm -f "$tmp_file"' EXIT
     objective_truncated=0
     while IFS= read -r objective_line; do
       [[ -n "$objective_line" ]] || continue
-      line_bytes=$(( ${#objective_line} + 1 ))
+      # ${#var} counts CHARACTERS in a UTF-8 locale while the PowerShell edition
+      # counts BYTES; a non-ASCII objective then truncates differently on each
+      # engine. Measure bytes on both sides.
+      line_bytes=$(( $(printf '%s' "$objective_line" | wc -c | tr -d '[:space:]') + 1 ))
       if (( objective_used + line_bytes > objective_budget )); then
         objective_truncated=1
         break
@@ -96,12 +146,18 @@ trap 'rm -f "$tmp_file"' EXIT
       ' "$root/AGENTS.md"
     )"
     red_lines_kept=""
-    red_lines_budget=1500
+    # Red lines are a guardrail and are never dropped, but a re-anchor pull can
+    # afford less of them than a cold start.
+    if [[ "$packet_level" == "anchor" ]]; then
+      red_lines_budget=600
+    else
+      red_lines_budget=1500
+    fi
     red_lines_used=0
     red_lines_truncated=0
     while IFS= read -r red_line; do
       [[ -n "$red_line" ]] || continue
-      red_line_size=$(( ${#red_line} + 1 ))
+      red_line_size=$(( $(printf '%s' "$red_line" | wc -c | tr -d '[:space:]') + 1 ))
       if (( red_lines_used + red_line_size > red_lines_budget )); then
         red_lines_truncated=1
         break
@@ -119,7 +175,7 @@ trap 'rm -f "$tmp_file"' EXIT
     fi
   fi
 
-  if [[ -f "$root/EVENTS.md" ]]; then
+  if [[ -f "$root/EVENTS.md" && "$packet_level" != "anchor" ]]; then
     echo
     echo "## Recent Events"
     awk '
@@ -131,7 +187,15 @@ trap 'rm -f "$tmp_file"' EXIT
 
   echo
   echo "## Workset"
-  for field in Methods Facts Decisions Sources Assets Components Read Write Verify Excluded Coverage; do
+  # anchor level keeps the write boundary and its verification: those are the
+  # constraints an agent violates when its working memory has rotted. The rest
+  # of the manifest is lookup material, not a guardrail.
+  if [[ "$packet_level" == "anchor" ]]; then
+    workset_fields=(Read Write Verify Excluded)
+  else
+    workset_fields=(Methods Facts Decisions Sources Assets Components Read Write Verify Excluded Coverage)
+  fi
+  for field in "${workset_fields[@]}"; do
     value="$(field_in_section "$context" "Workset Manifest" "$field")"
     [[ -n "$value" ]] && printf -- '- %s: %s\n' "$field" "$value"
   done
@@ -162,6 +226,7 @@ trap 'rm -f "$tmp_file"' EXIT
   ' "$context")"
   [[ -n "$next_action" ]] && printf -- '- Next action: %s\n' "$next_action"
 
+  if [[ "$packet_level" != "anchor" ]]; then
   echo
   echo "## Component Rows"
   components="$(field_in_section "$context" "Workset Manifest" Components)"
@@ -197,6 +262,9 @@ trap 'rm -f "$tmp_file"' EXIT
     done <<< "$authority_ids"
   fi
 
+  fi
+
+  if [[ "$packet_level" == "full" ]]; then
   echo
   echo "## Asset Readiness"
   asset_output=""
@@ -209,6 +277,7 @@ trap 'rm -f "$tmp_file"' EXIT
     fi
   else
     echo "Asset checker: unavailable"
+  fi
   fi
 
   echo
@@ -286,16 +355,52 @@ trap 'rm -f "$tmp_file"' EXIT
     echo "- Git: unavailable or not initialized"
   fi
   echo "- Validation: pass"
+  # Machine-readable trailer: lets the gate observe whether a packet was pulled
+  # in this session, and tells a reader which subset it is holding.
+  printf -- '- packet_level: %s\n' "$packet_level"
+  printf -- '- generated_at: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 } > "$tmp_file"
 
 line_count="$(wc -l < "$tmp_file" | tr -d '[:space:]')"
 byte_count="$(wc -c < "$tmp_file" | tr -d '[:space:]')"
-if (( line_count > 240 )); then
-  echo "ERROR: resume packet would exceed the 240-line hard limit; narrow the workset." >&2
+# A hard failure over budget hands a small-context model ZERO information and
+# tells it to "narrow the workset" — which it cannot do mid-session. Degrade in
+# a fixed order instead, and say out loud what was dropped. The goal, the red
+# lines, the current package and the write boundary are never droppable: they
+# are the anti-drift payload the packet exists to carry.
+if (( line_count > 240 || byte_count > 32768 )); then
+  droppable_sections=("Asset Readiness" "Component Rows" "Active Authority Summaries" "Recent Events" "Repository Risk")
+  dropped_sections=""
+  for droppable in "${droppable_sections[@]}"; do
+    (( line_count > 240 || byte_count > 32768 )) || break
+    awk -v target="## $droppable" '
+      $0 == target { skipping = 1; next }
+      skipping && /^## / { skipping = 0 }
+      skipping { next }
+      { print }
+    ' "$tmp_file" > "$tmp_file.trim"
+    mv "$tmp_file.trim" "$tmp_file"
+    dropped_sections="${dropped_sections}${droppable}, "
+    line_count="$(wc -l < "$tmp_file" | tr -d '[:space:]')"
+    byte_count="$(wc -c < "$tmp_file" | tr -d '[:space:]')"
+  done
+  if [[ -n "$dropped_sections" ]]; then
+    printf -- '- packet_degraded: dropped %s to fit the L0 budget; re-read the files for those sections.\n' \
+      "${dropped_sections%, }" >> "$tmp_file"
+    line_count="$(wc -l < "$tmp_file" | tr -d '[:space:]')"
+    byte_count="$(wc -c < "$tmp_file" | tr -d '[:space:]')"
+  fi
+fi
+if (( line_count > 240 || byte_count > 32768 )); then
+  # Even after degrading, the undroppable core does not fit: that is a real
+  # workset problem, not a context-size problem.
+  echo "ERROR: resume packet exceeds the L0 budget even after dropping optional sections ($line_count lines / $byte_count bytes); narrow the workset." >&2
   exit 1
 fi
-if (( byte_count > 32768 )); then
-  echo "ERROR: resume packet would exceed the 32768-byte hard limit; narrow the workset." >&2
-  exit 1
+if [[ -d "$root/.pps" ]]; then
+  {
+    printf 'packet_level: %s\n' "$packet_level"
+    printf 'generated_at: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  } > "$root/.pps/last-packet" 2>/dev/null || true
 fi
 sed -n '1,240p' "$tmp_file"

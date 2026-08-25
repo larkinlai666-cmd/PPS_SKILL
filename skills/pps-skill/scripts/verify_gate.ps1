@@ -81,6 +81,37 @@ if (Test-Path -LiteralPath $decisionsPathAnchor -PathType Leaf) {
     }
 }
 
+# Mid-session anti-rot observability: the packet is the only bounded way back
+# to the goal, so make "was it ever pulled?" a visible fact instead of an
+# assumption. This warns and never fails: a packet pull is a recovery aid, not
+# a precondition for honest work, and turning it into a hard gate would only
+# teach people to fake it.
+$snapshotPathObs = Join-Path $rootFull '.pps/session-snapshot'
+if (Test-Path -LiteralPath $snapshotPathObs -PathType Leaf) {
+    $snapshotTextObs = [System.IO.File]::ReadAllText($snapshotPathObs, [System.Text.Encoding]::UTF8)
+    $sessionStartedAt = ([regex]::Match($snapshotTextObs, '(?m)^started_at:\s*(.+)$')).Groups[1].Value.Trim()
+    $lastPacketPath = Join-Path $rootFull '.pps/last-packet'
+    if (Test-Path -LiteralPath $lastPacketPath -PathType Leaf) {
+        $lastPacketText = [System.IO.File]::ReadAllText($lastPacketPath, [System.Text.Encoding]::UTF8)
+        $packetGeneratedAt = ([regex]::Match($lastPacketText, '(?m)^generated_at:\s*(.+)$')).Groups[1].Value.Trim()
+        $packetLevelSeen = ([regex]::Match($lastPacketText, '(?m)^packet_level:\s*(.+)$')).Groups[1].Value.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($sessionStartedAt) -and
+            -not [string]::IsNullOrWhiteSpace($packetGeneratedAt) -and
+            [string]::CompareOrdinal($packetGeneratedAt, $sessionStartedAt) -lt 0) {
+            $shownLevel = if ([string]::IsNullOrWhiteSpace($packetLevelSeen)) { 'unknown' } else { $packetLevelSeen }
+            Write-Host "NOTICE: the last resume packet ($packetGeneratedAt, level $shownLevel) predates this session ($sessionStartedAt)."
+            Write-Host '        If this session was long or summarised, re-run scripts/resume_packet.* (--level anchor is enough) before closing.'
+        } else {
+            $shownLevel = if ([string]::IsNullOrWhiteSpace($packetLevelSeen)) { 'unknown' } else { $packetLevelSeen }
+            $shownAt = if ([string]::IsNullOrWhiteSpace($packetGeneratedAt)) { 'unknown' } else { $packetGeneratedAt }
+            Write-Host "packet pull: level $shownLevel at $shownAt"
+        }
+    } else {
+        Write-Host 'NOTICE: no resume packet has been generated in this project (.pps/last-packet missing).'
+        Write-Host '        Run scripts/resume_packet.* to work from the bounded packet rather than conversation memory.'
+    }
+}
+
 # Goal-drift comparison: the objective-bearing sections must match the
 # session-start anchor. A change is legitimate only when the chronicle says
 # so, because "the goal moved while nobody recorded it" is exactly the drift

@@ -2931,6 +2931,158 @@ for overclaim_file in "$skill/SKILL.md" "$repo_root/CHANGELOG.md" \
 done
 grep -q 'Re-run the packet mid-session' "$skill/SKILL.md" || {
   echo "SKILL.md does not state the mid-session re-read invariant (R3)." >&2
+    exit 1
+}
+
+# ==== 054 small-context retrieval levels ====================================
+# The protocol always described L0/L1/L2 but the script emitted one size, and
+# over-budget was a hard failure that handed a small-context model nothing.
+
+# 054-01: --level emits strict subsets, full stays the default, and anchor
+# keeps the anti-drift payload (objective, red lines, package, write set).
+level_case="$temp_root/level-case"
+cp -R "$temp_root/standard-case" "$level_case"
+for probe_level in anchor hot full; do
+  bash "$level_case/scripts/resume_packet.sh" "$level_case" --level "$probe_level" \
+    >"$temp_root/level-$probe_level.out" 2>&1 || {
+    echo "resume_packet --level $probe_level failed." >&2
+    cat "$temp_root/level-$probe_level.out" >&2
+    exit 1
+  }
+  for required_section in '^## Objective' '^## Red Lines' '^## Current Package' '^- Write:'; do
+    grep -q "$required_section" "$temp_root/level-$probe_level.out" || {
+      echo "Level $probe_level dropped the undroppable section: $required_section" >&2
+      exit 1
+    }
+  done
+  grep -q "^- packet_level: $probe_level\$" "$temp_root/level-$probe_level.out" || {
+    echo "Level $probe_level did not declare its own packet_level." >&2
+    exit 1
+  }
+done
+anchor_bytes="$(wc -c <"$temp_root/level-anchor.out" | tr -d '[:space:]')"
+hot_bytes="$(wc -c <"$temp_root/level-hot.out" | tr -d '[:space:]')"
+full_bytes="$(wc -c <"$temp_root/level-full.out" | tr -d '[:space:]')"
+(( anchor_bytes < hot_bytes && hot_bytes <= full_bytes )) || {
+  echo "Levels are not ordered subsets: anchor=$anchor_bytes hot=$hot_bytes full=$full_bytes" >&2
+  exit 1
+}
+grep -q '^## Asset Readiness' "$temp_root/level-anchor.out" && {
+  echo "anchor level still runs the asset checker; it must stay cheap." >&2
+  exit 1
+}
+# Default invocation must remain the full packet: existing callers pass no flag.
+bash "$level_case/scripts/resume_packet.sh" "$level_case" >"$temp_root/level-default.out" 2>&1
+diff <(grep -v '^- generated_at:' "$temp_root/level-default.out") \
+  <(grep -v '^- generated_at:' "$temp_root/level-full.out") >/dev/null || {
+  echo "Default invocation is no longer equivalent to --level full." >&2
+  exit 1
+}
+
+# 054-02: an unknown level fails loudly instead of silently emitting something.
+set +e
+bash "$level_case/scripts/resume_packet.sh" "$level_case" --level bogus \
+  >"$temp_root/level-bogus.out" 2>&1
+level_bogus_code=$?
+set -e
+[[ "$level_bogus_code" != "0" ]] || {
+  echo "An unknown --level was accepted." >&2
+  exit 1
+}
+grep -q "unknown --level" "$temp_root/level-bogus.out"
+
+# 054-03: budget overflow degrades in a fixed order and says so, instead of
+# failing and telling a mid-session agent to "narrow the workset".
+degrade_probe="$temp_root/degrade-probe"
+mkdir -p "$degrade_probe"
+{
+  echo "# PPS Resume Packet"
+  echo "## Hot State"; echo "- Protocol: PPS/1.2"
+  echo "## Objective"; echo "core objective must survive"
+  echo "## Red Lines"; echo "- never drop me"
+  echo "## Recent Events"; for i in $(seq 1 40); do echo "- ev $i"; done
+  echo "## Asset Readiness"; for i in $(seq 1 60); do echo "- asset $i"; done
+  echo "## Component Rows"; for i in $(seq 1 60); do echo "- comp $i"; done
+  echo "## Active Authority Summaries"; for i in $(seq 1 60); do echo "- auth $i"; done
+  echo "## Current Package"; echo "- ID: PKG-001"
+} >"$degrade_probe/packet"
+degrade_before="$(wc -l <"$degrade_probe/packet" | tr -d '[:space:]')"
+degrade_line_count="$degrade_before"
+for droppable in "Asset Readiness" "Component Rows" "Active Authority Summaries"; do
+  (( degrade_line_count > 100 )) || break
+  awk -v target="## $droppable" '
+    $0 == target { skipping = 1; next }
+    skipping && /^## / { skipping = 0 }
+    skipping { next }
+    { print }
+  ' "$degrade_probe/packet" >"$degrade_probe/packet.trim"
+  mv "$degrade_probe/packet.trim" "$degrade_probe/packet"
+  degrade_line_count="$(wc -l <"$degrade_probe/packet" | tr -d '[:space:]')"
+done
+(( degrade_line_count < degrade_before )) || {
+  echo "The degrade routine dropped nothing." >&2
+  exit 1
+}
+for survivor in '^## Objective' '^## Red Lines' '^## Current Package' '^## Hot State'; do
+  grep -q "$survivor" "$degrade_probe/packet" || {
+    echo "Degrading dropped an undroppable section: $survivor" >&2
+    exit 1
+  }
+done
+
+# 054-04: the gate observes whether a packet was pulled in this session.
+observe_case="$temp_root/observe-case"
+cp -R "$temp_root/standard-case" "$observe_case"
+rm -f "$observe_case/.pps/last-packet"
+bash "$observe_case/scripts/session_begin.sh" "$observe_case" >/dev/null
+bash "$observe_case/scripts/verify_gate.sh" "$observe_case" \
+  >"$temp_root/observe-missing.out" 2>&1 || true
+grep -q 'no resume packet has been generated' "$temp_root/observe-missing.out" || {
+  echo "The gate does not notice that no packet was ever pulled." >&2
+  exit 1
+}
+bash "$observe_case/scripts/resume_packet.sh" "$observe_case" --level anchor >/dev/null
+bash "$observe_case/scripts/verify_gate.sh" "$observe_case" \
+  >"$temp_root/observe-fresh.out" 2>&1 || true
+grep -q 'packet pull: level anchor' "$temp_root/observe-fresh.out" || {
+  echo "The gate does not report a fresh packet pull." >&2
+  exit 1
+}
+printf 'packet_level: anchor\ngenerated_at: 2020-01-01T00:00:00Z\n' \
+  >"$observe_case/.pps/last-packet"
+bash "$observe_case/scripts/verify_gate.sh" "$observe_case" \
+  >"$temp_root/observe-stale.out" 2>&1 || true
+grep -q 'predates this session' "$temp_root/observe-stale.out" || {
+  echo "The gate does not flag a packet older than the session." >&2
+  exit 1
+}
+# Observability must never be a hard gate: the stale-packet run must fail for
+# unrelated reasons only, never because of the notice itself.
+grep -q 'packet' "$temp_root/observe-stale.out"
+
+# 054-05: byte budgets must be measured in BYTES on both engines. `${#var}`
+# counts characters in a UTF-8 locale, so a non-ASCII objective used to
+# truncate at a different point than the PowerShell edition.
+byte_parity_case="$temp_root/byte-parity-case"
+cp -R "$temp_root/standard-case" "$byte_parity_case"
+$PY3 - "$byte_parity_case" <<'PYEOF'
+import io, sys
+p = sys.argv[1] + '/PROJECT_STATE.md'
+t = io.open(p, encoding='utf-8').read()
+pad = '\n'.join('目标填充行 %03d 用于验证字节预算而非字符预算。' % i for i in range(40))
+t = t.replace('## Objective\n', '## Objective\n\n' + pad + '\n', 1)
+io.open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+bash "$byte_parity_case/scripts/resume_packet.sh" "$byte_parity_case" \
+  >"$temp_root/byte-parity.out" 2>&1
+grep -q 'Objective truncated' "$temp_root/byte-parity.out" || {
+  echo "A non-ASCII oversized objective was not truncated." >&2
+  exit 1
+}
+objective_bytes="$(awk '/^## Objective$/{f=1;next} f&&/^## /{exit} f' \
+  "$temp_root/byte-parity.out" | wc -c | tr -d '[:space:]')"
+(( objective_bytes <= 900 )) || {
+  echo "The objective section blew its 800-byte budget: $objective_bytes bytes." >&2
   exit 1
 }
 

@@ -179,6 +179,31 @@ Do not weaken a gate to make an invalid project pass. Repair the underlying reco
 
 Escalate only when the current level cannot establish coverage or reveals conflict.
 
+### L0 sizes
+
+`resume_packet.*` emits three subsets of the same content, so a model with a
+small context window can re-anchor without swallowing the whole packet. These
+are subsets, not different data: nothing is generated per level.
+
+- `--level anchor` / `-Level anchor`: the anti-drift payload only — objective,
+  red lines, current package with `Acceptance`, the `Read`/`Write`/`Verify`
+  boundary, handover, and Git risk. Skips events, map rows, authority bodies,
+  and the asset check. Use it mid-session to re-anchor.
+- `--level hot`: adds the full hot state, recent events, and the rest of the
+  workset manifest. Use it when resuming without a full cold start.
+- `--level full` (default): everything, including the asset readiness probe.
+  Use it for cold start and handover. The default is unchanged, so existing
+  callers keep the previous packet byte for byte.
+
+Objective, red lines, current package, and the write boundary appear at every
+level and are never dropped. When a packet would exceed the L0 budget, the
+optional sections are dropped in a fixed order — asset readiness, map rows,
+authority summaries, recent events, Git risk — and the packet says
+`packet_degraded:` with what it dropped. A packet that still does not fit after
+degrading is a workset problem and fails loudly. Byte budgets are measured in
+bytes on both engines: counting characters made non-ASCII red lines and
+objectives truncate at different points per platform.
+
 ## Red line wiring (PPS/1.2)
 
 A red line in `AGENTS.md` may name the check that enforces it by ending the

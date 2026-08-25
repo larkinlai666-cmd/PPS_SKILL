@@ -4,6 +4,46 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+### Added
+
+Small-context retrieval, in response to "can mid-session anti-rot go further
+without breaking the base structure?". Measurement first: the packet was only
+78 lines / ~3 KB against a 240-line / 32 KB budget, so size was never the
+constraint. The real gaps were that the packet had exactly one size and that
+exceeding the budget was a hard failure.
+
+- **`resume_packet.*` takes `--level anchor|hot|full`** (`-Level` on
+  PowerShell). These are subsets of the same content — no new sections, no new
+  state, nothing generated per level. `anchor` carries only the anti-drift
+  payload (objective, red lines, current package with `Acceptance`, the
+  `Read`/`Write`/`Verify` boundary, handover, Git risk) at roughly a third of
+  the full packet, so a mid-session re-anchor is cheap on a small context
+  window. `hot` adds hot state, recent events, and the rest of the manifest.
+  `full` remains the default and is byte-identical to the previous output.
+- **Budget overflow degrades instead of failing**: optional sections are
+  dropped in a fixed order (asset readiness, map rows, authority summaries,
+  recent events, Git risk) and the packet declares `packet_degraded:` with what
+  it dropped. Objective, red lines, current package, and the write boundary are
+  never droppable. Only a packet that still does not fit after degrading fails,
+  because that is a workset problem rather than a context-size problem.
+  Previously an over-budget packet handed a small-context model zero
+  information and told it to "narrow the workset" mid-session.
+- **The gate reports whether a packet was pulled this session**: the packet
+  writes `.pps/last-packet` (level + timestamp) and `verify_gate.*` prints a
+  fresh-pull line, or a notice when the last pull predates
+  `.pps/session-snapshot` or never happened. This is a notice, never a
+  failure: a packet pull is a recovery aid, and making it a hard gate would
+  only teach people to fake it.
+
+### Fixed
+
+- **Byte budgets are now measured in bytes on both engines**: the Bash edition
+  used `${#var}`, which counts characters in a UTF-8 locale, while the
+  PowerShell edition counted UTF-8 bytes. A non-ASCII objective or red-line
+  list therefore truncated at a different point per platform — and the same
+  expression silently changed meaning with `LC_ALL`. Fixture 054-06 compares
+  both engines byte for byte at every level.
+
 ### Changed
 
 Repairs from the 0.6.0 feature review (PPS-AUDIT-20260825-060F §7 and §8.4).

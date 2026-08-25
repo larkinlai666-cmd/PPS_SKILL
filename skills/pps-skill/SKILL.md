@@ -91,7 +91,7 @@ Reading the packet once at startup does not survive a long session: a summarised
 - The objective feels unclear, or a package has been "almost done" for many turns.
 - About to write outside the declared `Write` set.
 
-After re-running, the packet's Goal, `Acceptance`, red lines, `Write` set, and IDs override anything stated earlier in the conversation. To recover only the session's original objective, read `.pps/objective-anchor`: everything below its `-- objective --` marker is the anchored objective in readable form. The gate's Step 0 printout is a log line for the operator, not a substitute for this step.
+After re-running, the packet's Goal, `Acceptance`, red lines, `Write` set, and IDs override anything stated earlier in the conversation. Mid-session, prefer `--level anchor` (`-Level anchor` on PowerShell): it carries the objective, red lines, current package with `Acceptance`, and the write boundary at roughly a third of the full packet, which matters when the context window is small. To recover only the session's original objective, read `.pps/objective-anchor`: everything below its `-- objective --` marker is the anchored objective in readable form. The gate's Step 0 printout is a log line for the operator, not a substitute for this step; the gate does, however, report whether a packet was pulled in this session so a missing re-read is visible rather than assumed.
 
 ## Work and close
 

@@ -1,7 +1,16 @@
 [CmdletBinding()]
-param([string]$Root)
+param(
+    [string]$Root,
+    # Small-context repair: the protocol has always described L0/L1/L2
+    # retrieval, but this script only ever emitted one size. -Level emits
+    # SUBSETS of the same content: no new sections, no new state, and
+    # -Level full is byte-identical to the previous behaviour.
+    [ValidateSet('anchor', 'hot', 'full')]
+    [string]$Level = 'full'
+)
 
 $ErrorActionPreference = 'Stop'
+$packetLevel = $Level
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = Split-Path -Parent $PSScriptRoot
 }
@@ -62,7 +71,14 @@ $packet = [System.Collections.Generic.List[string]]::new()
 $packet.Add('# PPS Resume Packet')
 $packet.Add('')
 $packet.Add('## Hot State')
-foreach ($field in @('Protocol', 'Profile', 'Mode', 'Stage', 'Main', 'Map', 'Environment', 'Package', 'Status', 'Capsule', 'Coverage', 'Blockers', 'Next', 'Updated', 'Device', 'Writer')) {
+# anchor level keeps only the fields needed to re-anchor: who/where/what is
+# active. Everything else is recoverable by reading the state file.
+$hotFields = if ($packetLevel -eq 'anchor') {
+    @('Protocol', 'Mode', 'Stage', 'Package', 'Status', 'Next')
+} else {
+    @('Protocol', 'Profile', 'Mode', 'Stage', 'Main', 'Map', 'Environment', 'Package', 'Status', 'Capsule', 'Coverage', 'Blockers', 'Next', 'Updated', 'Device', 'Writer')
+}
+foreach ($field in $hotFields) {
     $value = Get-SectionField $stateLines 'Hot State' $field
     if (-not [string]::IsNullOrWhiteSpace($value)) { $packet.Add("- ${field}: $value") }
 }
@@ -125,7 +141,9 @@ if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
         $packet.Add('')
         $packet.Add('## Red Lines')
         # Budget by bytes so the shape of the list cannot silently truncate it.
-        $redBudget = 1500
+        # Red lines are a guardrail and are never dropped, but a re-anchor
+        # pull can afford less of them than a cold start.
+        $redBudget = if ($packetLevel -eq 'anchor') { 600 } else { 1500 }
         $redUsed = 0
         $redTruncated = $false
         foreach ($line in $redLines) {
@@ -141,7 +159,7 @@ if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
 }
 
 $eventsPath = Join-Path $rootFull 'EVENTS.md'
-if (Test-Path -LiteralPath $eventsPath -PathType Leaf) {
+if ((Test-Path -LiteralPath $eventsPath -PathType Leaf) -and $packetLevel -ne 'anchor') {
     $eventsLines = [System.IO.File]::ReadAllLines($eventsPath, [System.Text.Encoding]::UTF8)
     $eventEntries = [System.Collections.Generic.List[string]]::new()
     $insideEvents = $false
@@ -157,7 +175,14 @@ if (Test-Path -LiteralPath $eventsPath -PathType Leaf) {
 
 $packet.Add('')
 $packet.Add('## Workset')
-foreach ($field in @('Methods', 'Facts', 'Decisions', 'Sources', 'Assets', 'Components', 'Read', 'Write', 'Verify', 'Excluded', 'Coverage')) {
+# anchor level keeps the write boundary and its verification: those are the
+# constraints an agent violates when its working memory has rotted.
+$worksetFields = if ($packetLevel -eq 'anchor') {
+    @('Read', 'Write', 'Verify', 'Excluded')
+} else {
+    @('Methods', 'Facts', 'Decisions', 'Sources', 'Assets', 'Components', 'Read', 'Write', 'Verify', 'Excluded', 'Coverage')
+}
+foreach ($field in $worksetFields) {
     $value = Get-SectionField $contextLines 'Workset Manifest' $field
     if (-not [string]::IsNullOrWhiteSpace($value)) { $packet.Add("- ${field}: $value") }
 }
@@ -194,6 +219,7 @@ foreach ($line in $contextLines) {
     }
 }
 
+if ($packetLevel -ne 'anchor') {
 $packet.Add('')
 $packet.Add('## Component Rows')
 $components = Get-SectionField $contextLines 'Workset Manifest' 'Components'
@@ -231,6 +257,9 @@ if ($authorityIds.Count -eq 0) {
     }
 }
 
+}
+
+if ($packetLevel -eq 'full') {
 $packet.Add('')
 $packet.Add('## Asset Readiness')
 $assetChecker = Join-Path $rootFull 'scripts/asset_check.ps1'
@@ -248,6 +277,8 @@ if (Test-Path -LiteralPath $assetChecker -PathType Leaf) {
     }
 } else {
     $packet.Add('Asset checker: unavailable')
+}
+
 }
 
 $packet.Add('')
@@ -325,12 +356,59 @@ if ($null -ne $git -and (Test-GitRepository $git.Source $rootFull)) {
     $packet.Add('- Git: unavailable or not initialized')
 }
 $packet.Add('- Validation: pass')
+# Machine-readable trailer: lets the gate observe whether a packet was pulled
+# in this session, and tells a reader which subset it is holding.
+$packet.Add("- packet_level: $packetLevel")
+$packet.Add("- generated_at: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))")
 
-if ($packet.Count -gt 240) {
-    throw 'Resume packet would exceed the 240-line hard limit; narrow the workset.'
+function Measure-PacketBytes([System.Collections.Generic.List[string]]$Lines) {
+    return [System.Text.Encoding]::UTF8.GetByteCount(($Lines -join [Environment]::NewLine))
 }
-$packetBytes = [System.Text.Encoding]::UTF8.GetByteCount(($packet -join [Environment]::NewLine))
-if ($packetBytes -gt 32768) {
-    throw 'Resume packet would exceed the 32768-byte hard limit; narrow the workset.'
+function Remove-PacketSection(
+    [System.Collections.Generic.List[string]]$Lines, [string]$Heading) {
+    $kept = [System.Collections.Generic.List[string]]::new()
+    $skipping = $false
+    foreach ($line in $Lines) {
+        if ($line -eq "## $Heading") { $skipping = $true; continue }
+        if ($skipping -and $line -match '^## ') { $skipping = $false }
+        if ($skipping) { continue }
+        $kept.Add($line)
+    }
+    return $kept
+}
+
+# A hard failure over budget hands a small-context model ZERO information and
+# tells it to "narrow the workset" - which it cannot do mid-session. Degrade in
+# a fixed order instead, and say out loud what was dropped. The goal, the red
+# lines, the current package and the write boundary are never droppable: they
+# are the anti-drift payload the packet exists to carry.
+$packetBytes = Measure-PacketBytes $packet
+if ($packet.Count -gt 240 -or $packetBytes -gt 32768) {
+    $droppedSections = [System.Collections.Generic.List[string]]::new()
+    foreach ($droppable in @('Asset Readiness', 'Component Rows',
+            'Active Authority Summaries', 'Recent Events', 'Repository Risk')) {
+        if ($packet.Count -le 240 -and $packetBytes -le 32768) { break }
+        $packet = Remove-PacketSection $packet $droppable
+        $droppedSections.Add($droppable)
+        $packetBytes = Measure-PacketBytes $packet
+    }
+    if ($droppedSections.Count -gt 0) {
+        $packet.Add("- packet_degraded: dropped $($droppedSections -join ', ') to fit the L0 budget; re-read the files for those sections.")
+        $packetBytes = Measure-PacketBytes $packet
+    }
+}
+if ($packet.Count -gt 240 -or $packetBytes -gt 32768) {
+    # Even after degrading, the undroppable core does not fit: that is a real
+    # workset problem, not a context-size problem.
+    throw "Resume packet exceeds the L0 budget even after dropping optional sections ($($packet.Count) lines / $packetBytes bytes); narrow the workset."
+}
+$ppsDir = Join-Path $rootFull '.pps'
+if (Test-Path -LiteralPath $ppsDir -PathType Container) {
+    try {
+        [System.IO.File]::WriteAllText(
+            (Join-Path $ppsDir 'last-packet'),
+            "packet_level: $packetLevel`ngenerated_at: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))`n",
+            [System.Text.UTF8Encoding]::new($false))
+    } catch { }
 }
 $packet

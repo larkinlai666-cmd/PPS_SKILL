@@ -115,7 +115,28 @@ if [[ -f "$root/DECISIONS.md" ]]; then
     sort -u | sed -n '1,12p'
 fi
 
-# Goal-drift comparison: the objective-bearing sections must match the
+# Mid-session anti-rot observability: the packet is the only bounded way back
+# to the goal, so make "was it ever pulled?" a visible fact instead of an
+# assumption. This warns and never fails: a packet pull is a recovery aid, not
+# a precondition for honest work, and turning it into a hard gate would only
+# teach people to fake it.
+if [[ -f "$root/.pps/session-snapshot" ]]; then
+  session_started_at="$(sed -n 's/^started_at:[[:space:]]*//p' "$root/.pps/session-snapshot" | head -n 1)"
+  if [[ -f "$root/.pps/last-packet" ]]; then
+    packet_generated_at="$(sed -n 's/^generated_at:[[:space:]]*//p' "$root/.pps/last-packet" | head -n 1)"
+    packet_level_seen="$(sed -n 's/^packet_level:[[:space:]]*//p' "$root/.pps/last-packet" | head -n 1)"
+    if [[ -n "$session_started_at" && -n "$packet_generated_at" &&
+      "$packet_generated_at" < "$session_started_at" ]]; then
+      echo "NOTICE: the last resume packet ($packet_generated_at, level ${packet_level_seen:-unknown}) predates this session ($session_started_at)."
+      echo "        If this session was long or summarised, re-run scripts/resume_packet.* (--level anchor is enough) before closing."
+    else
+      echo "packet pull: level ${packet_level_seen:-unknown} at ${packet_generated_at:-unknown}"
+    fi
+  else
+    echo "NOTICE: no resume packet has been generated in this project (.pps/last-packet missing)."
+    echo "        Run scripts/resume_packet.* to work from the bounded packet rather than conversation memory."
+  fi
+fi
 # session-start anchor. A change is legitimate only when the chronicle says
 # so, because "the goal moved while nobody recorded it" is exactly the drift
 # this anchor exists to catch.
