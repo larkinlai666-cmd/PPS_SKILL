@@ -161,7 +161,19 @@ A goal change is a first-class event: a title prefixed `objective-revised` or `g
 
 ## Objective anchor and acceptance
 
-Context rot and goal drift corrupt long sessions even when every file stays structurally valid. PPS does not spawn fresh-context agents, so it anchors the goal and forces one re-read at the only checkpoint that cannot be skipped: the verify gate.
+Context rot and goal drift corrupt long sessions even when every file stays structurally valid. PPS does not spawn fresh-context agents, so it splits the problem in two and is honest about which half it closes.
+
+The **disk half** is closed by machines: `session_begin` anchors the goal-bearing sections, and the gate refuses a stamp when they change without a recorded revision. This catches an objective that was quietly rewritten on disk.
+
+The **working-memory half** is not closed by the gate. The gate runs at close, and by then the drift is already in the diff. The only bounded recovery PPS has is the resume packet, so the protocol requires re-running it mid-session rather than pretending a printout is a re-read:
+
+- The agent is asked to continue but has not read a packet this session.
+- The conversation was summarised or compacted.
+- The agent notices the objective feels unclear, or is about to write outside the declared Write set.
+
+After re-running, only the packet's Goal, Acceptance, red lines, Write set, and IDs are authoritative — not sentences from earlier in the conversation. `.pps/objective-anchor` also carries the anchored objective in readable form below a `-- objective --` marker, so recovering the session's original goal costs one small file read. The gate still compares only the hash.
+
+The gate's Step 0 printout of objective, red lines, and active decisions is a log line for the operator, not a memory mechanism: stdout is not proof that anything was read.
 
 - `scripts/session_begin.*` writes `.pps/objective-anchor` (git-ignored, device-local): the SHA-256 of the objective-bearing sections (`PROJECT_STATE.md` `## Objective` plus `CONTEXT.md` `## Current Package`), plus an `anchored_at` timestamp. Normalization: the two sections are extracted with headings excluded and concatenated, blank lines dropped, and the final joined text is hashed with trailing newlines stripped. Both sides of the anchor (session_begin and verify_gate) use the same extraction, so any third-party reimplementation must copy that exact normalization or the comparison never matches.
 - The verify gate re-surfaces the anchored objective, the `AGENTS.md` red lines, and the active decision IDs before anything else, then compares the current hash with the anchor. A mismatch fails the gate unless `EVENTS.md` records an `objective-revised`/`goal-revised` event dated on or after the anchor; the gate then refreshes the anchor. A change without a chronicle entry is drift, not progress. `software`/`hybrid` projects fail hard on a missing anchor; `document` projects warn.

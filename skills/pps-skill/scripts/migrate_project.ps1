@@ -524,6 +524,10 @@ function Invoke-Apply {
         Write-Host 'multitask layer: NOT enabled (single-task stays single-task; opt in with -WithMultitask when needed)'
     }
     Write-Host "NOTICE: review the coverage rows marked 'manual: migrated from PPS/1.1' in Hot State Next, then bind real checks."
+    Write-Host "NOTICE: the migrated capsule carries a floor acceptance item 'A1: ... (verify: validate_project)'."
+    Write-Host "        It passes while Stage stays 'bootstrap'. Before you move Stage past bootstrap on a"
+    Write-Host "        software/hybrid project, replace that A1 with a manifest check id or a real artifact"
+    Write-Host "        path, otherwise the verify gate will fail with 'acceptance items are structural-only floor'."
 }
 
 switch ($Mode) {

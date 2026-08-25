@@ -2783,4 +2783,155 @@ expect_invalid "$impossible_clock_case" \
   "Malformed event line" \
   "Impossible clock in an event stamp"
 
+# ==== 053 feature-review repairs (PPS-AUDIT-20260825-060F §7 + §8.4) =========
+
+# 053-01 (R1): the packet is the authority after a context reset, so it must
+# carry the objective body and the Acceptance items, not just a one-line Goal.
+packet_authority_case="$temp_root/packet-authority-case"
+cp -R "$temp_root/standard-case" "$packet_authority_case"
+bash "$packet_authority_case/scripts/resume_packet.sh" "$packet_authority_case" \
+  >"$temp_root/packet-authority.out" 2>&1
+grep -q '^## Objective' "$temp_root/packet-authority.out" || {
+  echo "The resume packet does not carry the objective body; a recovered agent only sees Goal." >&2
+  exit 1
+}
+grep -q '^- Acceptance:' "$temp_root/packet-authority.out" || {
+  echo "The resume packet does not carry Acceptance; 'done' does not survive a context reset." >&2
+  exit 1
+}
+grep -Eq '^[[:space:]]+- A1:' "$temp_root/packet-authority.out" || {
+  echo "The resume packet lists Acceptance but drops the A-items themselves." >&2
+  exit 1
+}
+packet_lines="$(wc -l <"$temp_root/packet-authority.out" | tr -d '[:space:]')"
+packet_bytes="$(wc -c <"$temp_root/packet-authority.out" | tr -d '[:space:]')"
+(( packet_lines <= 240 && packet_bytes <= 32768 )) || {
+  echo "The enriched packet broke the L0 budget: $packet_lines lines / $packet_bytes bytes." >&2
+  exit 1
+}
+
+# 053-02 (R2): the anchor must be readable, and the readable body must never be
+# able to forge the compared digest.
+anchor_readable_case="$temp_root/anchor-readable-case"
+cp -R "$temp_root/standard-case" "$anchor_readable_case"
+bash "$anchor_readable_case/scripts/session_begin.sh" "$anchor_readable_case" >/dev/null
+grep -q '^-- objective --' "$anchor_readable_case/.pps/objective-anchor" || {
+  echo "The anchor carries no readable objective; an agent cannot 'read the anchor'." >&2
+  exit 1
+}
+anchor_real_hash="$(sed -n 's/^objective_sha256:[[:space:]]*//p' \
+  "$anchor_readable_case/.pps/objective-anchor" | head -n 1)"
+printf 'objective_sha256: %s\n' "0000000000000000000000000000000000000000000000000000000000000000" \
+  >>"$anchor_readable_case/.pps/objective-anchor"
+bash "$anchor_readable_case/scripts/verify_gate.sh" "$anchor_readable_case" \
+  >"$temp_root/anchor-readable.out" 2>&1 || true
+grep -q 'objective anchor: unchanged since session begin' "$temp_root/anchor-readable.out" || {
+  echo "A forged 'objective_sha256:' line inside the readable body changed the compared digest." >&2
+  cat "$temp_root/anchor-readable.out" >&2
+  exit 1
+}
+[[ -n "$anchor_real_hash" ]]
+
+# 053-03 (§7-2): the structural floor is "no item proves anything", not "some
+# item is structural". A1 structural + A2 real must pass.
+mixed_acceptance_case="$temp_root/mixed-acceptance-case"
+cp -R "$temp_root/hybrid-case" "$mixed_acceptance_case"
+sed -i.bak 's/^- Stage: 0 \/ bootstrap$/- Stage: 1 \/ package/' \
+  "$mixed_acceptance_case/PROJECT_STATE.md"
+sed -i.bak 's|^- Main: .*$|- Main: docs/MAIN.md|' \
+  "$mixed_acceptance_case/PROJECT_STATE.md"
+$PY3 - "$mixed_acceptance_case" <<'PYEOF'
+import re, sys
+p = sys.argv[1] + '/CONTEXT.md'
+t = open(p, encoding='utf-8').read()
+t = re.sub(r'(?m)^(\s*)- A1:.*$',
+           r'\1- A1: Structural validation passes (verify: validate_project).'
+           '\n\\1- A2: Declared authority is wired to a manifest check (verify: M-001).',
+           t, count=1)
+open(p, 'w', encoding='utf-8').write(t)
+PYEOF
+bash "$mixed_acceptance_case/scripts/session_begin.sh" "$mixed_acceptance_case" >/dev/null
+set +e
+bash "$mixed_acceptance_case/scripts/verify_gate.sh" "$mixed_acceptance_case" \
+  >"$temp_root/mixed-acceptance.out" 2>&1
+set -e
+# The gate may still stop later for unrelated floors (the software template's
+# e2e_probe refuses `Main: .`); this case asserts only that the structural
+# floor no longer punishes a mixed declaration.
+if grep -q 'structural-only floor' "$temp_root/mixed-acceptance.out"; then
+  echo "A1 structural + A2 real check was rejected; the floor is still 'any' instead of 'all'." >&2
+  exit 1
+fi
+grep -q 'acceptance wiring: every acceptance item is backed by an executed check' \
+  "$temp_root/mixed-acceptance.out" || {
+  echo "A mixed acceptance declaration did not clear the acceptance wiring step." >&2
+  cat "$temp_root/mixed-acceptance.out" >&2
+  exit 1
+}
+
+# 053-04 (§7-2 negative): an all-structural non-bootstrap package must still
+# fail at the floor, and the diagnostic must point at the migrated A1. Uses a
+# hybrid project with a real Main so the run reaches the acceptance step
+# instead of stopping at the software template's e2e_probe floor.
+all_structural_case="$temp_root/all-structural-case"
+cp -R "$temp_root/hybrid-case" "$all_structural_case"
+sed -i.bak 's/^- Stage: 0 \/ bootstrap$/- Stage: 1 \/ package/' \
+  "$all_structural_case/PROJECT_STATE.md"
+sed -i.bak 's|^- Main: .*$|- Main: docs/MAIN.md|' \
+  "$all_structural_case/PROJECT_STATE.md"
+bash "$all_structural_case/scripts/session_begin.sh" "$all_structural_case" >/dev/null
+set +e
+bash "$all_structural_case/scripts/verify_gate.sh" "$all_structural_case" \
+  >"$temp_root/all-structural.out" 2>&1
+all_structural_code=$?
+set -e
+[[ "$all_structural_code" != "0" ]] || {
+  echo "An all-structural non-bootstrap package was stamped." >&2
+  exit 1
+}
+grep -q 'structural-only floor' "$temp_root/all-structural.out" || {
+  echo "An all-structural declaration did not hit the structural floor." >&2
+  cat "$temp_root/all-structural.out" >&2
+  exit 1
+}
+grep -q 'migrated from PPS/1.1' "$temp_root/all-structural.out" || {
+  echo "The structural-floor failure does not tell the operator to replace the migrated A1." >&2
+  exit 1
+}
+
+# 053-05 (§7-1/R4): the migration NOTICE must warn that the injected A1 has to
+# be replaced before Stage leaves bootstrap.
+mig_notice_case="$temp_root/mig-notice-case"
+cp -R "$repo_root/tests/fixtures/pps-1.1-software-standard" "$mig_notice_case"
+(cd "$mig_notice_case" && git init -q && git add -A &&
+  git -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base)
+bash "$skill/scripts/migrate_project.sh" "$mig_notice_case" --apply --confirm \
+  >"$temp_root/mig-notice.out" 2>&1
+grep -q 'verify: validate_project' "$temp_root/mig-notice.out" || {
+  echo "The migration NOTICE never names the injected floor A1." >&2
+  cat "$temp_root/mig-notice.out" >&2
+  exit 1
+}
+grep -q 'structural-only floor' "$temp_root/mig-notice.out" || {
+  echo "The migration NOTICE does not name the failure the operator will hit." >&2
+  exit 1
+}
+
+# 053-06 (§7-4): the over-claim must be gone from the shipped docs.
+for overclaim_file in "$skill/SKILL.md" "$repo_root/CHANGELOG.md" \
+  "$skill/references/protocol.md" "$skill/references/retrieval-and-gates.md" \
+  "$skill/references/design-rationale.md"; do
+  # Match the CLAIM, not any mention: the changelog legitimately quotes the
+  # retired wording to record that it was withdrawn. A quoted or negated
+  # mention is documentation; an unquoted one is advertising.
+  if grep -Eqi '(^|[^"'"'"'])forced re-read' "$overclaim_file"; then
+    echo "Stale over-claim 'forced re-read' still present in $overclaim_file." >&2
+    exit 1
+  fi
+done
+grep -q 'Re-run the packet mid-session' "$skill/SKILL.md" || {
+  echo "SKILL.md does not state the mid-session re-read invariant (R3)." >&2
+  exit 1
+}
+
 echo "PPS Bash smoke tests: OK"

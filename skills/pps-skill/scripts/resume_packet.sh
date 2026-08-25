@@ -48,6 +48,35 @@ trap 'rm -f "$tmp_file"' EXIT
     [[ -n "$value" ]] && printf -- '- %s: %s\n' "$field" "$value"
   done
 
+  # R1: the packet is the authority after a context reset, so it must carry the
+  # objective itself — not only the one-line package Goal. Bounded like the red
+  # lines: truncate on a byte budget rather than dropping the section.
+  objective_body="$(awk '
+    $0 ~ "^##[[:space:]]+Objective[[:space:]]*$" { inside=1; next }
+    inside && /^##[[:space:]]/ { exit }
+    inside && NF { print }
+  ' "$state")"
+  if [[ -n "$objective_body" ]]; then
+    echo
+    echo "## Objective"
+    objective_budget=800
+    objective_used=0
+    objective_truncated=0
+    while IFS= read -r objective_line; do
+      [[ -n "$objective_line" ]] || continue
+      line_bytes=$(( ${#objective_line} + 1 ))
+      if (( objective_used + line_bytes > objective_budget )); then
+        objective_truncated=1
+        break
+      fi
+      printf '%s\n' "$objective_line"
+      objective_used=$(( objective_used + line_bytes ))
+    done <<< "$objective_body"
+    if (( objective_truncated == 1 )); then
+      echo "- Objective truncated; read PROJECT_STATE.md for the full statement."
+    fi
+  fi
+
   if grep -Eq '^##[[:space:]]+Red Lines[[:space:]]*$' "$root/AGENTS.md" 2>/dev/null; then
     echo
     echo "## Red Lines"
@@ -113,6 +142,19 @@ trap 'rm -f "$tmp_file"' EXIT
     value="$(field_in_section "$context" "Current Package" "$field")"
     [[ -n "$value" ]] && printf -- '- %s: %s\n' "$field" "$value"
   done
+  # R1: "done" must survive a context reset. The capsule carries Acceptance as a
+  # multi-line sub-list, which the single-line field reader cannot see, so a
+  # recovered agent used to get Goal without ever learning what closes the
+  # package. Emit the items verbatim.
+  acceptance_items="$(awk '
+    $0 ~ "^##[[:space:]]+Current Package[[:space:]]*$" { inside=1; next }
+    inside && /^##[[:space:]]/ { exit }
+    inside && $0 ~ /^[[:space:]]*-[[:space:]]*A[0-9]+:/ { sub(/^[[:space:]]+/, ""); print }
+  ' "$context")"
+  if [[ -n "$acceptance_items" ]]; then
+    echo "- Acceptance:"
+    printf '%s\n' "$acceptance_items" | sed 's/^/  /'
+  fi
   next_action="$(awk '
     /^## Next Action[[:space:]]*$/ { inside=1; next }
     inside && /^## / { exit }

@@ -92,8 +92,16 @@ if (Test-Path -LiteralPath $anchorFilePath -PathType Leaf) {
     $anchoredHash = ''
     $anchoredAt = ''
     foreach ($anchorLine in [System.IO.File]::ReadAllLines($anchorFilePath, [System.Text.Encoding]::UTF8)) {
-        if ($anchorLine -match '^objective_sha256:\s*(.+)$') { $anchoredHash = $Matches[1].Trim() }
-        elseif ($anchorLine -match '^anchored_at:\s*(.+)$') { $anchoredAt = $Matches[1].Trim() }
+        # The readable objective body below the marker is context, never
+        # metadata: stop at the marker and keep the FIRST match only, so an
+        # objective that happens to contain "objective_sha256:" cannot forge
+        # the compared digest.
+        if ($anchorLine -match '^--\s*objective\s*--\s*$') { break }
+        if ($anchorLine -match '^objective_sha256:\s*(.+)$') {
+            if ([string]::IsNullOrWhiteSpace($anchoredHash)) { $anchoredHash = $Matches[1].Trim() }
+        } elseif ($anchorLine -match '^anchored_at:\s*(.+)$') {
+            if ([string]::IsNullOrWhiteSpace($anchoredAt)) { $anchoredAt = $Matches[1].Trim() }
+        }
     }
     if (-not [string]::IsNullOrWhiteSpace($anchoredHash) -and $anchoredHash -ne $anchorCurrentHash) {
         $revisedEvents = @()
@@ -124,8 +132,9 @@ if (Test-Path -LiteralPath $anchorFilePath -PathType Leaf) {
         if ($revisedEvents.Count -gt 0) {
             $refreshedLines = @(
                 "objective_sha256: $anchorCurrentHash",
-                "anchored_at: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
-            )
+                "anchored_at: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))",
+                '-- objective --'
+            ) + @($anchorNormText -split "`n")
             [System.IO.File]::WriteAllText(
                 $anchorFilePath,
                 ($refreshedLines -join "`n") + "`n",
@@ -740,9 +749,18 @@ if ($acceptanceLines.Count -gt 0) {
         Write-Host 'PPS verify gate: FAILED (acceptance not wired to an executed check)'
         exit 1
     }
-    if ($acceptanceStructuralOnly.Count -gt 0 -and $modeValue -in @('software', 'hybrid') -and $stageValue -notmatch '\bbootstrap\b') {
-        Write-Host "ERROR: non-bootstrap $modeValue package has acceptance items that only name structural gate names: $($acceptanceStructuralOnly -join ', ')."
-        Write-Host 'After bootstrap, every acceptance item must be backed by a manifest check or a real project artifact path.'
+    # The floor is "no item proves anything beyond structure", not "some item is
+    # structural". A1 bound to the structural gate plus A2 bound to a real check
+    # is an honest package and must pass: failing it punished the careful author
+    # and taught nothing.
+    if ($acceptanceStructuralOnly.Count -gt 0 -and
+        $acceptanceLines.Count -gt 0 -and
+        $acceptanceStructuralOnly.Count -ge $acceptanceLines.Count -and
+        $modeValue -in @('software', 'hybrid') -and
+        $stageValue -notmatch '\bbootstrap\b') {
+        Write-Host "ERROR: non-bootstrap $modeValue package declares only structural gate names as acceptance: $($acceptanceStructuralOnly -join ', ')."
+        Write-Host 'After bootstrap, at least one acceptance item must be backed by a manifest check or a real project artifact path.'
+        Write-Host "If this project was migrated from PPS/1.1, replace the injected 'A1: ... (verify: validate_project)' with a real check."
         Write-Host 'PPS verify gate: FAILED (acceptance items are structural-only floor)'
         exit 1
     }

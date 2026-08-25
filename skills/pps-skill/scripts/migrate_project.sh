@@ -488,6 +488,10 @@ EOF
     echo "multitask layer: NOT enabled (single-task stays single-task; opt in with --with-multitask when needed)"
   fi
   echo "NOTICE: review the coverage rows marked 'manual: migrated from PPS/1.1' in Hot State Next, then bind real checks."
+  echo "NOTICE: the migrated capsule carries a floor acceptance item 'A1: ... (verify: validate_project)'."
+  echo "        It passes while Stage stays 'bootstrap'. Before you move Stage past bootstrap on a"
+  echo "        software/hybrid project, replace that A1 with a manifest check id or a real artifact"
+  echo "        path, otherwise the verify gate will fail with 'acceptance items are structural-only floor'."
 }
 
 rollback() {

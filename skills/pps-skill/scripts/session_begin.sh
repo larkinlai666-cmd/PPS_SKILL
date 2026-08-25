@@ -199,6 +199,12 @@ dirty_count="$(sed -n '/^-- dirty --$/,$p' "$snapshot_file" | sed '1d' | sed '/^
 {
   printf 'objective_sha256: %s\n' "$(sha256_of_text "$(anchor_text)")"
   printf 'anchored_at: %s\n' "$now_iso"
+  # R2: a hash is unreadable. The gate compares the hash; a mid-session agent
+  # that has lost its working memory needs the objective itself, in one small
+  # file, without diffing two Markdown documents. Everything below the marker
+  # is human/agent-readable context and is NOT part of the compared digest.
+  printf -- '-- objective --\n'
+  anchor_text
 } > "$snapshot_dir/objective-anchor"
 claimed_paths="$(sed -n '/^-- dirty --$/,$p' "$snapshot_file" | sed '1d' | sed '/^$/d' |
   awk -F'\t' '{ print $2 }')"

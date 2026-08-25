@@ -4036,6 +4036,133 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         throw "Impossible clock failed without the malformed-line diagnostic: $($impossibleClock.Text)"
     }
 
+    # ==== 053 feature-review repairs (parity with the Bash suite) ============
+
+    # 053-01 (R1): the packet must carry the objective body and Acceptance.
+    $packetAuthorityCase = Join-Path $tempRoot 'packet-authority-case'
+    Copy-Item -LiteralPath $standard -Destination $packetAuthorityCase -Recurse
+    $packetAuthority = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $packetAuthorityCase 'scripts/resume_packet.ps1') -Root $packetAuthorityCase
+    }
+    if ($packetAuthority.Text -notmatch '(?m)^## Objective') {
+        throw 'The resume packet does not carry the objective body.'
+    }
+    if ($packetAuthority.Text -notmatch '(?m)^- Acceptance:') {
+        throw "The resume packet does not carry Acceptance; 'done' does not survive a context reset."
+    }
+    if ($packetAuthority.Text -notmatch '(?m)^\s+- A1:') {
+        throw 'The resume packet lists Acceptance but drops the A-items themselves.'
+    }
+    $packetLineCount = @($packetAuthority.Text -split "`r?`n").Count
+    if ($packetLineCount -gt 240) {
+        throw "The enriched packet broke the L0 line budget: $packetLineCount lines."
+    }
+
+    # 053-02 (R2): the anchor must be readable, and the readable body must never
+    # be able to forge the compared digest.
+    $anchorReadableCase = Join-Path $tempRoot 'anchor-readable-case'
+    Copy-Item -LiteralPath $standard -Destination $anchorReadableCase -Recurse
+    $anchorReadableSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $anchorReadableCase 'scripts/session_begin.ps1') -Root $anchorReadableCase
+    }
+    if ($anchorReadableSession.Code -ne 0) {
+        throw "anchor-readable session_begin failed: $($anchorReadableSession.Text)"
+    }
+    $anchorReadablePath = Join-Path $anchorReadableCase '.pps/objective-anchor'
+    $anchorReadableText = [System.IO.File]::ReadAllText($anchorReadablePath, [System.Text.Encoding]::UTF8)
+    if ($anchorReadableText -notmatch '(?m)^--\s*objective\s*--\s*$') {
+        throw "The anchor carries no readable objective; an agent cannot 'read the anchor'."
+    }
+    Add-Content -LiteralPath $anchorReadablePath -Encoding utf8 `
+        -Value 'objective_sha256: 0000000000000000000000000000000000000000000000000000000000000000'
+    $anchorForged = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $anchorReadableCase 'scripts/verify_gate.ps1') -Root $anchorReadableCase
+    }
+    if ($anchorForged.Text -notmatch 'objective anchor: unchanged since session begin') {
+        throw "A forged 'objective_sha256:' line inside the readable body changed the compared digest: $($anchorForged.Text)"
+    }
+
+    # 053-03 (§7-2): A1 structural + A2 real must clear the acceptance step.
+    $mixedAcceptanceCase = Join-Path $tempRoot 'mixed-acceptance-case'
+    Copy-Item -LiteralPath $hybrid -Destination $mixedAcceptanceCase -Recurse
+    $mixedStatePath = Join-Path $mixedAcceptanceCase 'PROJECT_STATE.md'
+    $mixedState = [System.IO.File]::ReadAllText($mixedStatePath, [System.Text.Encoding]::UTF8)
+    $mixedState = $mixedState -replace '(?m)^- Stage: 0 / bootstrap$', '- Stage: 1 / package'
+    $mixedState = $mixedState -replace '(?m)^- Main: .*$', '- Main: docs/MAIN.md'
+    [System.IO.File]::WriteAllText($mixedStatePath, $mixedState, $utf8NoBom)
+    $mixedContextPath = Join-Path $mixedAcceptanceCase 'CONTEXT.md'
+    $mixedContext = [System.IO.File]::ReadAllText($mixedContextPath, [System.Text.Encoding]::UTF8)
+    $mixedContext = [regex]::Replace(
+        $mixedContext, '(?m)^(\s*)- A1:.*$',
+        '${1}- A1: Structural validation passes (verify: validate_project).' + "`n" +
+        '${1}- A2: Declared authority is wired to a manifest check (verify: M-001).', 1)
+    [System.IO.File]::WriteAllText($mixedContextPath, $mixedContext, $utf8NoBom)
+    $mixedSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mixedAcceptanceCase 'scripts/session_begin.ps1') -Root $mixedAcceptanceCase
+    }
+    if ($mixedSession.Code -ne 0) { throw "mixed-acceptance session_begin failed: $($mixedSession.Text)" }
+    $mixedGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $mixedAcceptanceCase 'scripts/verify_gate.ps1') -Root $mixedAcceptanceCase
+    }
+    if ($mixedGate.Text -match 'structural-only floor') {
+        throw "A1 structural + A2 real check was rejected; the floor is still 'any' instead of 'all'."
+    }
+    if ($mixedGate.Text -notmatch 'acceptance wiring: every acceptance item is backed by an executed check') {
+        throw "A mixed acceptance declaration did not clear the acceptance wiring step: $($mixedGate.Text)"
+    }
+
+    # 053-04 (§7-2 negative): an all-structural non-bootstrap package must fail
+    # at the floor, and the diagnostic must point at the migrated A1.
+    $allStructuralCase = Join-Path $tempRoot 'all-structural-case'
+    Copy-Item -LiteralPath $hybrid -Destination $allStructuralCase -Recurse
+    $allStatePath = Join-Path $allStructuralCase 'PROJECT_STATE.md'
+    $allState = [System.IO.File]::ReadAllText($allStatePath, [System.Text.Encoding]::UTF8)
+    $allState = $allState -replace '(?m)^- Stage: 0 / bootstrap$', '- Stage: 1 / package'
+    $allState = $allState -replace '(?m)^- Main: .*$', '- Main: docs/MAIN.md'
+    [System.IO.File]::WriteAllText($allStatePath, $allState, $utf8NoBom)
+    $allSession = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $allStructuralCase 'scripts/session_begin.ps1') -Root $allStructuralCase
+    }
+    if ($allSession.Code -ne 0) { throw "all-structural session_begin failed: $($allSession.Text)" }
+    $allGate = Invoke-NativeCapture {
+        & $engine -NoProfile -ExecutionPolicy Bypass `
+            -File (Join-Path $allStructuralCase 'scripts/verify_gate.ps1') -Root $allStructuralCase
+    }
+    if ($allGate.Code -eq 0) {
+        throw 'An all-structural non-bootstrap package was stamped.'
+    }
+    if ($allGate.Text -notmatch 'structural-only floor') {
+        throw "An all-structural declaration did not hit the structural floor: $($allGate.Text)"
+    }
+    if ($allGate.Text -notmatch 'migrated from PPS/1\.1') {
+        throw 'The structural-floor failure does not tell the operator to replace the migrated A1.'
+    }
+
+    # 053-06 (§7-4): the over-claim must be gone from the shipped docs.
+    foreach ($overclaimFile in @(
+            (Join-Path $skill 'SKILL.md'),
+            (Join-Path $repoRoot 'CHANGELOG.md'),
+            (Join-Path $skill 'references/protocol.md'),
+            (Join-Path $skill 'references/retrieval-and-gates.md'),
+            (Join-Path $skill 'references/design-rationale.md'))) {
+        $overclaimText = [System.IO.File]::ReadAllText($overclaimFile, [System.Text.Encoding]::UTF8)
+        # Match the CLAIM, not any mention: the changelog legitimately quotes
+        # the retired wording to record that it was withdrawn.
+        if ($overclaimText -match '(?i)(^|[^"''])forced re-read') {
+            throw "Stale over-claim 'forced re-read' still present in $overclaimFile."
+        }
+    }
+    $skillDocText = [System.IO.File]::ReadAllText((Join-Path $skill 'SKILL.md'), [System.Text.Encoding]::UTF8)
+    if ($skillDocText -notmatch 'Re-run the packet mid-session') {
+        throw 'SKILL.md does not state the mid-session re-read invariant (R3).'
+    }
+
     Write-Host "PPS PowerShell smoke tests: OK"
 } finally {
     $resolved = [System.IO.Path]::GetFullPath($tempRoot)

@@ -1,6 +1,6 @@
 # PPS/1.2 adversarial review
 
-- Review date: 2026-08-24 (updated for the 0.6.0 anti-drift round, self-distilled)
+- Review date: 2026-08-25 (updated for the 0.6.0 feature-review repair round)
 - Scope: skill 0.6.0, PPS/1.2 core duties DUTY-A..I plus the optional multitask layer
 - Method: first-principles threat model, strict-superset comparison, fault injection on every gate, replay of every external bypass fixture (PKG-024/025/027 and the core-duty report) on both platforms, cross-platform stamp parity, full regression
 - Verdict: **PASS as a strict upgrade within the personal serial-project boundary**
@@ -36,6 +36,39 @@ revision cannot launder it; a real `objective-revised` event legitimizes the
 change and refreshes the anchor; a missing anchor fails `software`/`hybrid`
 outright; and the gate re-surfaces objective, red lines, and active decisions
 before anything else on every run.
+
+### 0.6.0 feature-review repair round (PPS-AUDIT-20260825-060F)
+
+An external feature review scored the three new mechanisms separately instead
+of as one release: anchor 6/10, `Acceptance` 5/10, gate printout 2/10, and
+long-session anti-rot 3/10. Its central finding was structural rather than a
+bypass: **the locks sit at both ends of a session while the drift happens in
+the middle.** The repairs below take the report's own scope — §7 items 1–4 and
+§8.4 R1–R3 — and add no fields.
+
+| Item | Finding | Repair |
+|---|---|---|
+| R1 packet did not carry "done" | The L0 packet shipped only the one-line package `Goal`; `## Objective` and the multi-line `Acceptance` list were absent, because the single-line field reader cannot see a sub-list. A recovered or compacted session therefore could not see what closes the package | Both engines emit `## Objective` (800-byte budget, truncation noted) and the verbatim `A1…` list. Fixture 053-01 asserts both plus the unchanged 240-line / 32 KB budget |
+| R2 the anchor was unreadable | `.pps/objective-anchor` held only a hash and a timestamp, so an agent that lost working memory could not "read the anchor" | The anchored objective is written below a `-- objective --` marker on both `session_begin` and gate refresh. The gate still compares only the hash; header parsing stops at the marker and keeps the first match, so a body containing `objective_sha256:` cannot forge the digest. Fixture 053-02 asserts readability and proves the forgery fails |
+| §7-2 the acceptance floor was `any` | A package declaring `A1` on the structural gate plus `A2` on a real check failed. The floor punished the careful author and taught nothing | The floor fires only when *every* item is structural. Fixtures 053-03 (mixed passes the acceptance step) and 053-04 (all-structural still fails) pin both directions |
+| §7-1 the migration trap was silent | `migrate_project.*` injects `A1: … (verify: validate_project)`, which passes under `bootstrap` and then fails the moment `Stage` advances, with no warning at migration time | The NOTICE now names the item, the condition, and the exact failure string. The floor diagnostic also points at the migrated `A1`. Fixtures 053-05 and 053-04 |
+| §7-4 the printout was over-claimed | "Forced re-read" / "protocol-level answer to context rot" described a `Write-Host` call. stdout is not proof of reading, and the gate runs after the drift is already in the diff | The claim is retired from `SKILL.md`, `protocol.md`, `retrieval-and-gates.md`, `design-rationale.md`, and `CHANGELOG.md`; the printout is described as an operator log line. Fixture 053-06 keeps it from returning |
+| R3 no mid-session recovery | The protocol required reading the packet only at startup, so a compacted session had no bounded way back to the goal | `SKILL.md` states a mid-session re-read invariant with four triggers, and declares the packet authoritative over earlier conversation |
+| §7-3 same-day laundering | The short-precision comparison that keeps migrated calendar-day chronicles readable also means any same-day rewrite counts as recorded | Documented as a deliberate price in `retrieval-and-gates.md` rather than presented as equal strictness |
+
+Two limits are now stated rather than advertised away. The gate cannot un-rot a
+session, because it runs at close; and the objective anchor is a per-machine
+session fact under `.pps/`, not a cross-device one. What the release does close
+is the disk half: an objective rewritten without a recorded revision, and a
+`done` that no check ever proved.
+
+One regression was introduced and caught inside this round: the PowerShell
+floor was rewritten against a variable name that did not exist
+(`$acceptanceItems` instead of `$acceptanceLines`), so `$null.Count` silenced
+the floor entirely on that engine while Bash still enforced it. Fixture 053-04
+failed loudly and named it. The lesson matches D-060's: **a parity edit must be
+re-verified on the engine it was not written on**, because a null-valued
+condition in PowerShell fails open rather than erroring.
 
 ## Open / closed core defects (D-CORE series, core-duty report 2026-08-20)
 

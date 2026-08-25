@@ -4,6 +4,56 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## [Unreleased]
 
+### Changed
+
+Repairs from the 0.6.0 feature review (PPS-AUDIT-20260825-060F §7 and §8.4).
+No new fields and no new subsystems: the report's verdict was that the anchor
+and `Acceptance` are worth keeping, that the gate printout was over-claimed,
+and that the mid-session gap belongs to the resume packet, not to the gate.
+
+- **The resume packet now carries the objective and "done"** (R1): `## Objective`
+  from `PROJECT_STATE.md` (800-byte budget, truncation noted) and the full
+  `Acceptance` list from the capsule. Previously the packet carried only the
+  one-line package `Goal`, so a recovered or compacted session could not see
+  what closes the package. The multi-line `A1…` sub-list needs its own reader;
+  the single-line field reader could never see it. L0 budgets are unchanged.
+- **The objective anchor is readable, not just comparable** (R2):
+  `.pps/objective-anchor` keeps `objective_sha256` and `anchored_at`, then
+  writes the anchored objective below a `-- objective --` marker, so recovering
+  the session's original goal is one small file read. The gate still compares
+  only the hash, and both engines stop parsing header fields at the marker and
+  keep the first match, so a body containing `objective_sha256:` cannot forge
+  the compared digest. The gate writes the body on refresh too.
+- **The acceptance floor no longer punishes honest packages** (§7-2): the floor
+  fires only when *every* acceptance item names a structural gate name. `A1`
+  bound to `validate_project` plus `A2` bound to a real check is a valid
+  declaration and passes; previously any single structural item failed a
+  non-bootstrap software/hybrid package.
+- **The migration notice names the acceptance trap** (§7-1): `migrate_project.*`
+  now states that the injected floor `A1: … (verify: validate_project)` passes
+  only while `Stage` stays `bootstrap`, and must be replaced with a manifest
+  check id or a real artifact path before `Stage` moves past it.
+- **The gate printout is described honestly** (§7-4): `SKILL.md`, `protocol.md`,
+  `retrieval-and-gates.md`, `design-rationale.md`, and this file no longer call
+  it a "forced re-read" or a protocol-level answer to context rot. It is a log
+  line for the operator; stdout is not proof that an agent read it.
+- **Mid-session re-read is now a stated invariant** (R3): `SKILL.md` requires
+  re-running `resume_packet.*` when a session is continued without a packet,
+  after a summarisation or compaction, when the objective feels unclear, or
+  before writing outside the `Write` set — and treats the packet as overriding
+  anything stated earlier in the conversation.
+- **The same-day laundering limit is documented** (§7-3): `append_event` writes
+  full ISO stamps, so the default path compares revisions to the second, but a
+  hand-written or migrated `YYYY-MM-DD` revision line is compared only to the
+  day. That is the stated price of keeping append-only PPS/1.1 chronicles
+  readable, not a claim of equal strictness.
+
+Both suites gain fixture group 053 (six cases): the packet carries objective
+and Acceptance within budget, the anchor is readable and its body cannot forge
+the digest, mixed acceptance clears the floor, all-structural still fails with
+the migration hint, the migration notice names the trap, and the retired
+over-claim cannot come back.
+
 ### Fixed
 
 Self-distillation pass over the 0.6.0 ISO-8601 chronicle migration. The
@@ -50,11 +100,12 @@ and "done" is declared as checkable acceptance items.
   `objective-revised`/`goal-revised` event (which refreshes the anchor).
   software/hybrid fail hard on a missing anchor; document warns. The stamp
   records `objective_sha256`.
-- **Anchor review ritual**: every gate run re-surfaces the anchored
+- **Anchor review printout**: every gate run re-surfaces the anchored
   objective, the AGENTS.md red lines, and the active decision IDs before
-  anything is stamped — a forced re-read at the only unskippable checkpoint,
-  PPS's protocol-level answer to context rot (no fresh-context subagents,
-  no token cost).
+  anything is stamped. This is a log line for the operator, not a memory
+  mechanism: stdout is not proof that an agent read it, and the gate runs at
+  close, after any drift is already in the diff. Working memory is recovered
+  by re-running the bounded resume packet mid-session (see `protocol.md`).
 - **Acceptance field**: `CONTEXT.md` Current Package declares `A1, A2, ...`
   items, each naming what "done" means and a machine check `(verify: ...)`.
   The validator requires the field on non-bootstrap PPS/1.2 packages

@@ -82,6 +82,17 @@ The default mode remains `document`. The initializer refuses a non-empty target,
 
 The packet intentionally excludes source contents. Never substitute the whole tree or recent files for the manifest.
 
+### Re-run the packet mid-session
+
+Reading the packet once at startup does not survive a long session: a summarised or compacted conversation loses the goal, the red lines, and the `Write` set, and the verify gate only runs at close — after any drift is already in the diff. Re-run `resume_packet.*` when any of these is true, then treat only the packet as authoritative:
+
+- Asked to continue, but no packet has been read in this session.
+- The conversation was summarised or compacted.
+- The objective feels unclear, or a package has been "almost done" for many turns.
+- About to write outside the declared `Write` set.
+
+After re-running, the packet's Goal, `Acceptance`, red lines, `Write` set, and IDs override anything stated earlier in the conversation. To recover only the session's original objective, read `.pps/objective-anchor`: everything below its `-- objective --` marker is the anchored objective in readable form. The gate's Step 0 printout is a log line for the operator, not a substitute for this step.
+
 ## Work and close
 
 Keep one concrete package active. For code, lock component, entry point, interface, paths, and verification before editing. Distinguish:

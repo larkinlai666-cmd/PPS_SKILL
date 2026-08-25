@@ -84,7 +84,9 @@ Declared verification runs through the project verify gate:
 7. The gate refuses to stamp when the handover safety proof itself is absent: software/hybrid packages fail on a missing `.pps/session-snapshot` or a missing `scripts/boundary_check.*`, because a stamp written without them certifies a handover nobody checked.
 8. Nothing auto-executes `Verify`. The agent inspects commands before running them; the stamp records that the inspected gate ran on this device.
 
-Knowing the rule is not running the rule. The stamp turns "I should have verified" into a checkable artifact. The anchor review turns "the goal stayed the same" into a checkable artifact too: context rot is bounded by a forced re-read at the only checkpoint that cannot be skipped.
+Knowing the rule is not running the rule. The stamp turns "I should have verified" into a checkable artifact. The anchor review turns "the goal stayed the same" into a checkable artifact too — but only for the goal as written on disk. Working memory is recovered by re-running the resume packet, not by the gate's printout.
+
+Two limits are stated rather than hidden. The gate's Step 0 printout is a log line, not evidence that an agent read it. And revision events are compared at the precision both sides share: `append_event` writes full ISO stamps, so the default path compares to the second, but a hand-written or migrated `YYYY-MM-DD` revision line is only compared to the day — any rewrite on that same day counts as recorded. That is the deliberate price of keeping migrated PPS/1.1 chronicles readable, since the chronicle is append-only and may never be rewritten.
 
 ## Review gate
 

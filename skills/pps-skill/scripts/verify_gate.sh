@@ -143,8 +143,12 @@ stage_value="$(
 )"
 anchor_path="$root/.pps/objective-anchor"
 if [[ -f "$anchor_path" ]]; then
-  anchored_hash="$(sed -n 's/^objective_sha256:[[:space:]]*//p' "$anchor_path" | head -n 1)"
-  anchored_at="$(sed -n 's/^anchored_at:[[:space:]]*//p' "$anchor_path" | head -n 1)"
+  # The readable objective body below the marker is context, never metadata:
+  # read fields only from the header so an objective that happens to contain
+  # "objective_sha256:" cannot forge the compared digest.
+  anchor_header="$(sed -n '/^--[[:space:]]*objective[[:space:]]*--[[:space:]]*$/q;p' "$anchor_path")"
+  anchored_hash="$(printf '%s\n' "$anchor_header" | sed -n 's/^objective_sha256:[[:space:]]*//p' | head -n 1)"
+  anchored_at="$(printf '%s\n' "$anchor_header" | sed -n 's/^anchored_at:[[:space:]]*//p' | head -n 1)"
   if [[ -n "$anchored_hash" && "$anchored_hash" != "$anchor_current_hash" ]]; then
     revised_events=""
     if [[ -f "$root/EVENTS.md" ]]; then
@@ -173,6 +177,8 @@ if [[ -f "$anchor_path" ]]; then
       {
         printf 'objective_sha256: %s\n' "$anchor_current_hash"
         printf 'anchored_at: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf -- '-- objective --\n'
+        printf '%s\n' "$anchor_text_value"
       } > "$anchor_path"
       echo "objective anchor: revised via a recorded objective-revised event; anchor refreshed"
     else
@@ -715,11 +721,20 @@ if [[ -n "$acceptance_items" ]]; then
     exit 1
   fi
   acceptance_structural_only="$(printf '%s' "$acceptance_structural_only" | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')"
+  acceptance_total="$(printf '%s\n' "$acceptance_items" | grep -c '[^[:space:]]' || true)"
+  acceptance_structural_count="$(printf '%s\n' "$acceptance_structural_only" | tr ' ' '\n' | grep -c '[^[:space:]]' || true)"
+  # The floor is "no item proves anything beyond structure", not "some item is
+  # structural". A1 bound to the structural gate plus A2 bound to a real check
+  # is an honest package and must pass: failing it punished the careful author
+  # and taught nothing.
   if [[ -n "$acceptance_structural_only" ]] &&
+     (( acceptance_total > 0 )) &&
+     (( acceptance_structural_count >= acceptance_total )) &&
      [[ "$mode_value" =~ ^(software|hybrid)$ ]] &&
      ! printf '%s' "$stage_value" | grep -q 'bootstrap'; then
-    echo "ERROR: non-bootstrap $mode_value package has acceptance items that only name structural gate names: $acceptance_structural_only." >&2
-    echo "After bootstrap, every acceptance item must be backed by a manifest check or a real project artifact path." >&2
+    echo "ERROR: non-bootstrap $mode_value package declares only structural gate names as acceptance: $acceptance_structural_only." >&2
+    echo "After bootstrap, at least one acceptance item must be backed by a manifest check or a real project artifact path." >&2
+    echo "If this project was migrated from PPS/1.1, replace the injected 'A1: ... (verify: validate_project)' with a real check." >&2
     echo "PPS verify gate: FAILED (acceptance items are structural-only floor)" >&2
     exit 1
   fi

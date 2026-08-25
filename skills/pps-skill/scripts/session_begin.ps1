@@ -215,8 +215,13 @@ $anchorNormText = (($anchorRawText -split "`r?`n") |
     Where-Object { $_ -ne '' }) -join "`n"
 $anchorLines = @(
     "objective_sha256: $(Get-TextSha256 $anchorNormText)",
-    "anchored_at: $nowIso"
-)
+    "anchored_at: $nowIso",
+    # R2: a hash is unreadable. The gate compares the hash; a mid-session agent
+    # that has lost its working memory needs the objective itself, in one small
+    # file, without diffing two Markdown documents. Everything below the marker
+    # is human/agent-readable context and is NOT part of the compared digest.
+    '-- objective --'
+) + @($anchorNormText -split "`n")
 [System.IO.File]::WriteAllText(
     (Join-Path $snapshotDir 'objective-anchor'),
     ($anchorLines -join "`n") + "`n",

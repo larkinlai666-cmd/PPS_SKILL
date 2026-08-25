@@ -67,6 +67,38 @@ foreach ($field in @('Protocol', 'Profile', 'Mode', 'Stage', 'Main', 'Map', 'Env
     if (-not [string]::IsNullOrWhiteSpace($value)) { $packet.Add("- ${field}: $value") }
 }
 
+# R1: the packet is the authority after a context reset, so it must carry the
+# objective itself — not only the one-line package Goal. Bounded like the red
+# lines: truncate on a byte budget rather than dropping the section.
+$objectiveBody = [System.Collections.Generic.List[string]]::new()
+$insideObjective = $false
+foreach ($line in $stateLines) {
+    if ($line -match '^##\s+Objective\s*$') { $insideObjective = $true; continue }
+    if ($insideObjective -and $line -match '^##\s') { break }
+    if ($insideObjective -and -not [string]::IsNullOrWhiteSpace($line)) {
+        $objectiveBody.Add($line)
+    }
+}
+if ($objectiveBody.Count -gt 0) {
+    $packet.Add('')
+    $packet.Add('## Objective')
+    $objectiveBudget = 800
+    $objectiveUsed = 0
+    $objectiveTruncated = $false
+    foreach ($line in $objectiveBody) {
+        $lineBytes = [System.Text.Encoding]::UTF8.GetByteCount($line) + 1
+        if (($objectiveUsed + $lineBytes) -gt $objectiveBudget) {
+            $objectiveTruncated = $true
+            break
+        }
+        $packet.Add($line)
+        $objectiveUsed += $lineBytes
+    }
+    if ($objectiveTruncated) {
+        $packet.Add('- Objective truncated; read PROJECT_STATE.md for the full statement.')
+    }
+}
+
 $agentsPath = Join-Path $rootFull 'AGENTS.md'
 if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
     $agentsLines = [System.IO.File]::ReadAllLines($agentsPath, [System.Text.Encoding]::UTF8)
@@ -135,6 +167,22 @@ $packet.Add('## Current Package')
 foreach ($field in @('ID', 'Goal', 'Output anchor', 'Allowed change', 'Forbidden change')) {
     $value = Get-SectionField $contextLines 'Current Package' $field
     if (-not [string]::IsNullOrWhiteSpace($value)) { $packet.Add("- ${field}: $value") }
+}
+# R1: "done" must survive a context reset. Acceptance is a multi-line sub-list,
+# which Get-SectionField cannot see, so a recovered agent used to get Goal
+# without ever learning what closes the package. Emit the items verbatim.
+$acceptanceItems = [System.Collections.Generic.List[string]]::new()
+$insideAcceptancePkg = $false
+foreach ($line in $contextLines) {
+    if ($line -match '^##\s+Current Package\s*$') { $insideAcceptancePkg = $true; continue }
+    if ($insideAcceptancePkg -and $line -match '^##\s') { break }
+    if ($insideAcceptancePkg -and $line -match '^\s*-\s*A\d+:') {
+        $acceptanceItems.Add($line.Trim())
+    }
+}
+if ($acceptanceItems.Count -gt 0) {
+    $packet.Add('- Acceptance:')
+    foreach ($item in $acceptanceItems) { $packet.Add("  $item") }
 }
 $insideNext = $false
 foreach ($line in $contextLines) {
