@@ -3341,4 +3341,66 @@ grep -q 'CLI parity drift' "$temp_root/parity-drift.out" || {
   exit 1
 }
 
+# ==== 057 cross-engine anchor parity + example/format checks ================
+# The anchor is written by one engine and verified by the other across a
+# device handoff: session_begin on macOS, verify_gate on Windows. Both
+# directions must hold, or a cross-device session dies at the gate through no
+# fault of the work. The normalization rule is the protocol: drop blank lines,
+# keep every other line verbatim (the PS engine once trimmed each line, which
+# broke the anchor across engines while every same-engine test stayed green).
+cross_case="$temp_root/cross-anchor-case"
+cp -R "$temp_root/standard-case" "$cross_case"
+if command -v pwsh >/dev/null 2>&1; then
+  # 057-01a: bash session_begin -> PS verify_gate.
+  bash "$cross_case/scripts/session_begin.sh" "$cross_case" >/dev/null
+  pwsh -NoProfile -ExecutionPolicy Bypass     -File "$cross_case/scripts/verify_gate.ps1" -Root "$cross_case"     >"$temp_root/cross-bash-ps.out" 2>&1 || {
+    echo "PS verify_gate rejected an anchor written by bash session_begin:" >&2
+    cat "$temp_root/cross-bash-ps.out" >&2
+    exit 1
+  }
+  # 057-01b: PS session_begin -> bash verify_gate (takeover claims the
+  # unexpired snapshot; the anchor, not the snapshot, is under test).
+  pwsh -NoProfile -ExecutionPolicy Bypass     -File "$cross_case/scripts/session_begin.ps1" -Root "$cross_case" -Takeover     >/dev/null 2>&1
+  bash "$cross_case/scripts/verify_gate.sh" "$cross_case"     >"$temp_root/cross-ps-bash.out" 2>&1 || {
+    echo "bash verify_gate rejected an anchor written by PS session_begin:" >&2
+    cat "$temp_root/cross-ps-bash.out" >&2
+    exit 1
+  }
+fi
+
+# 057-02: the documentation-example and timestamp-format checks must catch an
+# injected drift and pass again after the restore (same pattern as 056).
+skmd="$repo_root/skills/pps-skill/SKILL.md"
+appsh="$repo_root/skills/pps-skill/scripts/append_event.sh"
+cp "$skmd" "$temp_root/SKILL.md.057.bak"
+cp "$appsh" "$temp_root/append_event.sh.057.bak"
+trap 'cp "$temp_root/SKILL.md.057.bak" "$skmd" 2>/dev/null || true; cp "$temp_root/append_event.sh.057.bak" "$appsh" 2>/dev/null || true' EXIT
+printf '\nRun `scripts/verify_gate.sh --ghost-flag` once per session.\n' >>"$skmd"
+sed -i.bak "s|date -u '+%Y-%m-%dT%H:%M:%SZ'|date -u '+%d/%m/%Y'|" "$appsh"
+rm -f "$appsh.bak"
+set +e
+"$PY3" "$repo_root/tools/validate_skill.py" >"$temp_root/check-057.out" 2>&1
+check_057_code=$?
+set -e
+cp "$temp_root/SKILL.md.057.bak" "$skmd"
+cp "$temp_root/append_event.sh.057.bak" "$appsh"
+trap - EXIT
+[[ "$check_057_code" != "0" ]] || {
+  echo "The example/format checks missed an injected drift." >&2
+  exit 1
+}
+grep -q 'unknown bash option' "$temp_root/check-057.out" || {
+  echo "The injected ghost example was not reported." >&2
+  exit 1
+}
+grep -q 'Non-protocol date format' "$temp_root/check-057.out" || {
+  echo "The injected date format was not reported." >&2
+  exit 1
+}
+"$PY3" "$repo_root/tools/validate_skill.py" >"$temp_root/check-057-restored.out" 2>&1 || {
+  echo "The checks failed after the injected drift was restored:" >&2
+  cat "$temp_root/check-057-restored.out" >&2
+  exit 1
+}
+
 echo "PPS Bash smoke tests: OK"

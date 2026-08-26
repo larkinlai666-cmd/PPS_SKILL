@@ -360,6 +360,171 @@ def check_cli_parity() -> None:
 check_cli_parity()
 
 
+def check_doc_examples() -> None:
+    """Every documented command example must name options that exist.
+
+    An example the user copies is an interface promise. Extract the option
+    tokens from each `scripts/<name>.<ext>` mention in the Markdown (bounded
+    window after the mention, so prose cannot accidentally trigger this), and
+    verify each token against the paired scripts' parameter surface:
+    `--xxx` (bash spelling) must exist on the bash side or the PS side;
+    `-Xxx` (PowerShell spelling) must exist on the PS side. A `.*` mention
+    promises both engines and is checked against either side.
+    """
+    scripts = SKILL / "scripts"
+    mention_re = re.compile(r"scripts/([a-z_]+)\.(sh|ps1|\*)")
+    # A flag must not be glued to a preceding letter/digit: this excludes
+    # date placeholders like YYYY-MM-DD and path tails like foo-Bar.md.
+    bash_flag_re = re.compile(r"(?<![A-Za-z0-9])--[a-z][a-z-]*")
+    ps_flag_re = re.compile(r"(?<![A-Za-z0-9_])-[A-Z][A-Za-z]+")
+    # Flags of the PowerShell host itself, not of the PPS script that follows
+    # them in a full command line; and the windows/PowerShell policy flag.
+    engine_flags = {
+        "file", "executionpolicy", "noprofile", "nologo", "command",
+        "noninteractive", "encodedcommand", "enc", "outputformat", "windowstyle",
+    }
+
+    bash_opts: dict[str, set[str]] = {}
+    ps_params: dict[str, set[str]] = {}
+    option_re = re.compile(r"--[a-z][a-z-]*")
+    param_re = re.compile(r"\[(?:string|switch|string\[\])\]\s*\$(\w+)")
+
+    def bash_surface(name: str) -> set[str]:
+        if name not in bash_opts:
+            found: set[str] = set()
+            sh = scripts / f"{name}.sh"
+            if sh.is_file():
+                for line in read(sh).splitlines():
+                    if "Usage:" in line:
+                        for opt in option_re.findall(line):
+                            found.add(opt[2:].replace("-", ""))
+                        break
+            bash_opts[name] = found
+        return bash_opts[name]
+
+    def ps_surface(name: str) -> set[str]:
+        if name not in ps_params:
+            found: set[str] = set()
+            ps = scripts / f"{name}.ps1"
+            if ps.is_file():
+                text = read(ps)
+                start = text.find("param(")
+                if start != -1:
+                    depth = 0
+                    end = -1
+                    for i in range(start, len(text)):
+                        if text[i] == "(":
+                            depth += 1
+                        elif text[i] == ")":
+                            depth -= 1
+                            if depth == 0:
+                                end = i
+                                break
+                    if end != -1:
+                        block = text[start + len("param("):end]
+                        for nm in param_re.findall(block):
+                            found.add(nm.lower())
+            ps_params[name] = found
+        return ps_params[name]
+
+    for md in sorted(list(SKILL.glob("*.md")) + list((SKILL / "references").glob("*.md"))):
+        text = read(md)
+        for match in mention_re.finditer(text):
+            name = match.group(1)
+            ext = match.group(2)
+            # Window is the rest of the LINE, not a fixed span: a 200-char
+            # window crosses into neighbouring examples and misattributes
+            # their options to this script. A line that lists several scripts
+            # (the inventory style) attributes each option to the LINE, not to
+            # one mention: it passes when ANY script named on the line owns
+            # the option.
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            line_end = text.find("\n", match.end())
+            if line_end == -1:
+                line_end = len(text)
+            window = text[match.end():line_end]
+            line_mentions = [
+                m for m in mention_re.finditer(text)
+                if line_start <= m.start() < line_end
+            ]
+            bside: set[str] = set()
+            pside: set[str] = set()
+            for lm in line_mentions:
+                bside |= bash_surface(lm.group(1))
+                pside |= ps_surface(lm.group(1))
+            for flag in bash_flag_re.findall(window):
+                normalized = flag[2:].replace("-", "")
+                if normalized not in bside and normalized not in pside:
+                    error(
+                        f"Documented example names an unknown bash option in {md.relative_to(REPO)}: "
+                        f"scripts/{name}.{ext} {flag}"
+                    )
+            for flag in ps_flag_re.findall(window):
+                lowered = flag[1:].lower()
+                if lowered in engine_flags:
+                    continue
+                if lowered not in pside:
+                    error(
+                        f"Documented example names an unknown PowerShell option in {md.relative_to(REPO)}: "
+                        f"scripts/{name}.{ext} {flag}"
+                    )
+
+
+def check_timestamp_formats() -> None:
+    """Protocol timestamps share one format per engine; drift breaks ISO string
+    comparisons silently.
+
+    The ISO-8601 second-precision Z-suffixed timestamp is a load-bearing
+    format: session/packet/event comparison and the fresh-packet pulse order
+    by it as a string. A script that starts writing `%d/%m/%Y` breaks that
+    comparison without failing any test. Allowed formats per engine, each with
+    a documented non-protocol use:
+
+    - timestamp `%Y-%m-%dT%H:%M:%SZ` / `yyyy-MM-ddTHH:mm:ssZ`: protocol fields.
+    - date `%Y-%m-%d` / `yyyy-MM-dd`: protocol date fields.
+    - compact `%Y%m%dT%H%M%SZ` / `yyyyMMddTHHmmssZ`: backup directory names.
+    - spaced `%Y %m %d`: bash-only input to the Julian-day calculation in
+      validate_project; the PS engine computes the day from .NET dates, so it
+      has no counterpart and is exempt.
+    """
+    allowed_bash = {
+        "+%Y-%m-%dT%H:%M:%SZ",
+        "+%Y-%m-%d",
+        "+%Y%m%dT%H%M%SZ",
+        "+%Y %m %d",
+    }
+    allowed_ps = {
+        "yyyy-MM-ddTHH:mm:ssZ",
+        "yyyy-MM-dd",
+        "yyyyMMddTHHmmssZ",
+    }
+    bash_date_re = re.compile(r"date -u '([^']+)'")
+    ps_tostring_re = re.compile(r"ToString\((['\"])(.*?)\1\)")
+
+    for sh in sorted((SKILL / "scripts").glob("*.sh")):
+        for fmt in bash_date_re.findall(read(sh)):
+            if fmt not in allowed_bash:
+                error(
+                    f"Non-protocol date format in {sh.relative_to(REPO)}: date -u '{fmt}'. "
+                    "Protocol fields use +%Y-%m-%dT%H:%M:%SZ or +%Y-%m-%d."
+                )
+    for ps in sorted((SKILL / "scripts").glob("*.ps1")):
+        # findall returns (quote, format) tuples because the regex captures
+        # the quote character; unpack so the format is compared as a string.
+        for _quote, fmt in ps_tostring_re.findall(read(ps)):
+            if "yyyy" not in fmt:
+                continue
+            if fmt not in allowed_ps:
+                error(
+                    f"Non-protocol timestamp format in {ps.relative_to(REPO)}: ToString('{fmt}'). "
+                    "Protocol fields use 'yyyy-MM-ddTHH:mm:ssZ' or 'yyyy-MM-dd'."
+                )
+
+
+check_doc_examples()
+check_timestamp_formats()
+
+
 if ERRORS:
     print(f"PPS distribution validation: FAILED ({len(ERRORS)} error(s))")
     for item in ERRORS:

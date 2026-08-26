@@ -6,6 +6,27 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ### Added
 
+**Cross-engine anchor parity fixed and pinned.** The objective anchor is
+written by one engine and verified by the other across a device handoff
+(session_begin on macOS, verify_gate on Windows), and the PS engine was
+trimming every line of the anchored sections while the bash engine kept lines
+verbatim. Same-engine tests stayed green; a cross-engine session died at the
+gate through no fault of the work. Normalization is now engine-neutral on
+both sides: drop blank lines, keep every other line verbatim. The protocol
+text now says the anchor is engine-neutral and that non-blank lines are never
+trimmed. Fixture 057 verifies both handoff directions.
+
+**Documented examples and timestamp formats are now validated invariants.**
+`validate_skill.py` checks every `scripts/<name>.<ext>` mention in the
+Markdown against the real parameter surfaces (line-scoped, so inventory-style
+lines attribute options to the line, and PowerShell host flags like `-File`
+are excluded); and every `date -u '+...'` / `ToString('...')` format against
+the protocol formats (ISO second-precision Z, ISO date, compact backup-dir
+name, and the bash-only Julian-day input). Fixture 057 injects drifts into
+both checks on both engines and requires the checker to catch them and pass
+again after restore. One checker bug was fixed while pinning it: a two-group
+regex made findall return tuples, which silently skipped every PS format.
+
 **CLI parity is now a validated invariant.** `validate_skill.py` parses each
 paired `.sh`/`.ps1` script and fails when one engine exposes an option the
 other does not (bash Usage line vs. the PowerShell `param()` block, normalized

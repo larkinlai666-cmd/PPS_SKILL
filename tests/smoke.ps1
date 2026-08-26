@@ -4602,6 +4602,73 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         }
     }
 
+    # ==== 057 cross-engine anchor parity + format checks ======================
+    # The anchor is written by one engine and verified by the other across a
+    # device handoff. Both directions must hold: the normalization rule is
+    # "drop blank lines, keep every other line verbatim".
+    $crossCase = Join-Path $tempRoot 'cross-anchor-case'
+    Copy-Item -LiteralPath $standard -Destination $crossCase -Recurse
+    $bashExe3 = Get-Command bash -ErrorAction SilentlyContinue
+    if ($null -ne $bashExe3) {
+        # 057-01a: PS session_begin -> bash verify_gate.
+        $crossSb = Invoke-NativeCapture {
+            & $engine -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $crossCase 'scripts/session_begin.ps1') -Root $crossCase
+        }
+        $crossGateBash = Invoke-NativeCapture {
+            & $bashExe3.Source (Join-Path $crossCase 'scripts/verify_gate.sh') $crossCase
+        }
+        if ($crossGateBash.Code -ne 0) {
+            throw "bash verify_gate rejected an anchor written by PS session_begin: $($crossGateBash.Text)"
+        }
+        # 057-01b: bash session_begin -> PS verify_gate (takeover claims the
+        # unexpired snapshot).
+        $crossSb2 = Invoke-NativeCapture {
+            & $bashExe3.Source (Join-Path $crossCase 'scripts/session_begin.sh') $crossCase '--takeover'
+        }
+        $crossGatePs = Invoke-NativeCapture {
+            & $engine -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $crossCase 'scripts/verify_gate.ps1') -Root $crossCase
+        }
+        if ($crossGatePs.Code -ne 0) {
+            throw "PS verify_gate rejected an anchor written by bash session_begin: $($crossGatePs.Text)"
+        }
+    }
+
+    # 057-02: the timestamp-format check must catch an injected PS format and
+    # pass again after the restore.
+    $pyProbe2 = Get-Command python3 -ErrorAction SilentlyContinue
+    if ($null -eq $pyProbe2) { $pyProbe2 = Get-Command python -ErrorAction SilentlyContinue }
+    if ($null -ne $pyProbe2) {
+        $fmtScript = Join-Path $repoRoot 'skills/pps-skill/scripts/append_event.ps1'
+        $fmtBackup = Join-Path $tempRoot 'append_event.ps1.057.bak'
+        Copy-Item -LiteralPath $fmtScript -Destination $fmtBackup
+        try {
+            $fmtText = [System.IO.File]::ReadAllText($fmtScript, [System.Text.Encoding]::UTF8)
+            $fmtText = $fmtText.Replace(
+                "ToString('yyyy-MM-ddTHH:mm:ssZ')",
+                "ToString('dd/MM/yyyy')")
+            [System.IO.File]::WriteAllText($fmtScript, $fmtText, $utf8NoBom)
+            $fmtDrift = Invoke-NativeCapture {
+                & $pyProbe2.Source (Join-Path $repoRoot 'tools/validate_skill.py')
+            }
+            if ($fmtDrift.Code -eq 0) {
+                throw 'The timestamp-format check missed an injected PS format.'
+            }
+            if ($fmtDrift.Text -notmatch 'Non-protocol timestamp format') {
+                throw "The format failure does not name the drift: $($fmtDrift.Text)"
+            }
+        } finally {
+            Copy-Item -LiteralPath $fmtBackup -Destination $fmtScript -Force
+        }
+        $fmtRestored = Invoke-NativeCapture {
+            & $pyProbe2.Source (Join-Path $repoRoot 'tools/validate_skill.py')
+        }
+        if ($fmtRestored.Code -ne 0) {
+            throw "The format check failed after the injected format was restored: $($fmtRestored.Text)"
+        }
+    }
+
     Write-Host "PPS PowerShell smoke tests: OK"} finally {
     $resolved = [System.IO.Path]::GetFullPath($tempRoot)
     $comparison = if ($IsWindows -or $env:OS -eq 'Windows_NT') {

@@ -211,8 +211,7 @@ $anchorContextText = [System.IO.File]::ReadAllText(
 $anchorRawText = (Get-AnchorSection 'Objective' $anchorStateText) + "`n" +
     (Get-AnchorSection 'Current Package' $anchorContextText)
 $anchorNormText = (($anchorRawText -split "`r?`n") |
-    ForEach-Object { $_.Trim() } |
-    Where-Object { $_ -ne '' }) -join "`n"
+    Where-Object { $_ -notmatch '^\s*$' }) -join "`n"
 $anchorLines = @(
     "objective_sha256: $(Get-TextSha256 $anchorNormText)",
     "anchored_at: $nowIso",

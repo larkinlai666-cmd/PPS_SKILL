@@ -48,8 +48,7 @@ $anchorContextText0 = [System.IO.File]::ReadAllText(
 $anchorRawText = (Get-AnchorSection 'Objective' $anchorStateText0) + "`n" +
     (Get-AnchorSection 'Current Package' $anchorContextText0)
 $anchorNormText = (($anchorRawText -split "`r?`n") |
-    ForEach-Object { $_.Trim() } |
-    Where-Object { $_ -ne '' }) -join "`n"
+    Where-Object { $_ -notmatch '^\s*$' }) -join "`n"
 $anchorCurrentHash = Get-TextSha256 $anchorNormText
 
 Write-Host "-- Step 0/4: objective anchor review"
