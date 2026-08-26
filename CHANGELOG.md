@@ -6,6 +6,20 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ### Added
 
+**PPS self-observation channel (fault log).** When a PPS script notices an
+anomaly in itself or its environment, it records one structured line in
+`.pps/fault-log.md` through `scripts/fault_log.*`. The channel is strictly
+side-effect-free: it never changes any check, gate, stamp, or exit code, and
+every caller swallows its failure, so a logging problem can never change the
+behaviour of the script that logged it. The contract (line format, the
+closed set of fault codes F-ENV / F-DEGRADED / F-PPS, wiring points, and the
+field-to-review loop that turns clusters of lines into review vectors and
+fixtures) is `references/self-observation.md`. First wiring points:
+session_begin's sha256 digest degraded to unhashable, resume_packet's L0
+packet degradation, and init_project's Git-not-found. Fixture 058 pins the
+structured line, the append-never-rewrite rule, the engine-parity line
+structure in both directions, and the wiring points on both engines.
+
 **Cross-engine anchor parity fixed and pinned.** The objective anchor is
 written by one engine and verified by the other across a device handoff
 (session_begin on macOS, verify_gate on Windows), and the PS engine was

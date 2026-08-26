@@ -38,6 +38,9 @@ function Get-PathSha256([string]$Path) {
     try {
         return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     } catch {
+        $faultPrevExit = $LASTEXITCODE
+        try { & (Join-Path $PSScriptRoot 'fault_log.ps1') -Root $Root -Type F-ENV -Script session_begin -Message "sha256 hashing failed for $Path; digest degraded to unhashable" } catch { }
+        $global:LASTEXITCODE = $faultPrevExit
         return 'unhashable'
     }
 }

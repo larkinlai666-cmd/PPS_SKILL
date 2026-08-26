@@ -4669,6 +4669,49 @@ printf '{"count":%s,"bytes":%s}\n' "$PPS_FAKE_RCLONE_COUNT" "$PPS_FAKE_RCLONE_BY
         }
     }
 
+    # ==== 058 self-observation channel ========================================
+    # fault_log.* records structured self-observations and must never affect
+    # any other behaviour: append-only, engine-parity line structure, and
+    # wiring points that cannot silently detach.
+    $flCase = Join-Path $tempRoot 'fl-case'
+    [System.IO.Directory]::CreateDirectory($flCase) | Out-Null
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill 'scripts/fault_log.ps1') -Root $flCase `
+        -Type F-ENV -Script session_begin -Message 'fixture env fault' | Out-Null
+    $flText = [System.IO.File]::ReadAllText((Join-Path $flCase '.pps/fault-log.md'), [System.Text.Encoding]::UTF8)
+    if ($flText -notmatch '(?m)^- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z \| F-ENV \| script: session_begin \| engine: pwsh \| fixture env fault$') {
+        throw 'fault_log.ps1 did not write the structured line.'
+    }
+    # Append, never rewrite: the first line must survive a second write.
+    & $engine -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $skill 'scripts/fault_log.ps1') -Root $flCase `
+        -Type F-PPS -Script verify_gate -Message 'fixture internal note' | Out-Null
+    $flText2 = [System.IO.File]::ReadAllText((Join-Path $flCase '.pps/fault-log.md'), [System.Text.Encoding]::UTF8)
+    if (([regex]::Matches($flText2, 'fixture env fault')).Count -ne 1) {
+        throw 'fault_log.ps1 rewrote or duplicated the first line.'
+    }
+    if (([regex]::Matches($flText2, 'fixture internal note')).Count -ne 1) {
+        throw 'fault_log.ps1 did not append the second line.'
+    }
+    # Engine parity: a bash-written line has the same field structure.
+    $bashExe4 = Get-Command bash -ErrorAction SilentlyContinue
+    if ($null -ne $bashExe4) {
+        & $bashExe4.Source (Join-Path $skill 'scripts/fault_log.sh') $flCase `
+            '--type' 'F-DEGRADED' '--script' 'resume_packet' '--message' 'fixture bash fault' | Out-Null
+        $flText3 = [System.IO.File]::ReadAllText((Join-Path $flCase '.pps/fault-log.md'), [System.Text.Encoding]::UTF8)
+        if ($flText3 -notmatch '(?m)^- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z \| F-DEGRADED \| script: resume_packet \| engine: bash \| fixture bash fault$') {
+            throw 'fault_log.sh wrote a structurally different line.'
+        }
+    }
+    # Wiring points must not silently detach: each pinned point still calls
+    # the channel with its fault code.
+    $sbPsText = [System.IO.File]::ReadAllText((Join-Path $skill 'scripts/session_begin.ps1'), [System.Text.Encoding]::UTF8)
+    if ($sbPsText -notmatch 'fault_log.ps1') { throw 'session_begin.ps1 lost its fault_log wiring.' }
+    $rpPsText = [System.IO.File]::ReadAllText((Join-Path $skill 'scripts/resume_packet.ps1'), [System.Text.Encoding]::UTF8)
+    if ($rpPsText -notmatch 'F-DEGRADED') { throw 'resume_packet.ps1 lost its degraded wiring.' }
+    $ipPsText = [System.IO.File]::ReadAllText((Join-Path $skill 'scripts/init_project.ps1'), [System.Text.Encoding]::UTF8)
+    if ($ipPsText -notmatch 'fault_log.ps1') { throw 'init_project.ps1 lost its fault_log wiring.' }
+
     Write-Host "PPS PowerShell smoke tests: OK"} finally {
     $resolved = [System.IO.Path]::GetFullPath($tempRoot)
     $comparison = if ($IsWindows -or $env:OS -eq 'Windows_NT') {

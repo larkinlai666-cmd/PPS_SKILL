@@ -93,6 +93,10 @@ Reading the packet once at startup does not survive a long session: a summarised
 
 After re-running, the packet's Goal, `Acceptance`, red lines, `Write` set, and IDs override anything stated earlier in the conversation. Mid-session, prefer `--level anchor` (`-Level anchor` on PowerShell): it drops events, map rows, authority bodies, and the asset probe while keeping the objective, red lines, current package with `Acceptance`, and the write boundary. On a template project that is about two thirds of the full packet; the saving grows with the project, because the sections it drops are the ones that grow. To recover only the session's original objective, read `.pps/objective-anchor`: everything below its `-- objective --` marker is the anchored objective in readable form. The gate's Step 0 printout is a log line for the operator, not a substitute for this step; the gate does, however, report whether a packet was pulled in this session so a missing re-read is visible rather than assumed.
 
+## Self-observation
+
+When a PPS script notices an anomaly in itself or its environment, it records one structured line in `.pps/fault-log.md` through `scripts/fault_log.*`. The channel is strictly side-effect-free: it never changes any check, gate, stamp, or exit code, and its own failure never propagates. Between real-world runs, read that log and feed its clusters back into the review loop — the full contract (format, fault codes, wiring points, field-to-review loop) is in the [self-observation protocol](references/self-observation.md).
+
 ## Work and close
 
 Keep one concrete package active. For code, lock component, entry point, interface, paths, and verification before editing. Distinguish:

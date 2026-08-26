@@ -387,6 +387,9 @@ if (( line_count > 240 || byte_count > 32768 )); then
   if [[ -n "$dropped_sections" ]]; then
     printf -- '- packet_degraded: dropped %s to fit the L0 budget; re-read the files for those sections.\n' \
       "${dropped_sections%, }" >> "$tmp_file"
+    "$script_dir/fault_log.sh" "$root" --type F-DEGRADED --script resume_packet \
+      --message "L0 packet degraded: dropped ${dropped_sections%, } to fit the budget" \
+      >/dev/null 2>&1 || true
     line_count="$(wc -l < "$tmp_file" | tr -d '[:space:]')"
     byte_count="$(wc -c < "$tmp_file" | tr -d '[:space:]')"
   fi

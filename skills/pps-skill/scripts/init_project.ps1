@@ -227,6 +227,9 @@ if (-not $NoGit) {
     $git = Get-Command git -ErrorAction SilentlyContinue
     if ($null -eq $git) {
         Write-Warning "Git was not found; project files were created without a repository."
+        $faultPrevExit3 = $LASTEXITCODE
+        try { & (Join-Path $PSScriptRoot 'fault_log.ps1') -Root $target -Type F-ENV -Script init_project -Message 'Git was not found; project created without a repository' } catch { }
+        $global:LASTEXITCODE = $faultPrevExit3
     } else {
         $initializationProbe = Invoke-NativeProbe {
             & $git.Source -C $target init --quiet -b main 2>$null

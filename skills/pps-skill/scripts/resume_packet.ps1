@@ -394,6 +394,9 @@ if ($packet.Count -gt 240 -or $packetBytes -gt 32768) {
     }
     if ($droppedSections.Count -gt 0) {
         $packet.Add("- packet_degraded: dropped $($droppedSections -join ', ') to fit the L0 budget; re-read the files for those sections.")
+        $faultPrevExit2 = $LASTEXITCODE
+        try { & (Join-Path $PSScriptRoot 'fault_log.ps1') -Root $Root -Type F-DEGRADED -Script resume_packet -Message "L0 packet degraded: dropped $($droppedSections -join ', ') to fit the budget" } catch { }
+        $global:LASTEXITCODE = $faultPrevExit2
         $packetBytes = Measure-PacketBytes $packet
     }
 }

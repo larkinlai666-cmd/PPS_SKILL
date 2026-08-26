@@ -3403,4 +3403,56 @@ grep -q 'Non-protocol date format' "$temp_root/check-057.out" || {
   exit 1
 }
 
+# ==== 058 self-observation channel ==========================================
+# fault_log.* records structured self-observations and must never affect any
+# other behaviour: append-only, engine-parity line structure, and wiring
+# points that cannot silently detach.
+fl_case="$temp_root/fl-case"
+mkdir -p "$fl_case"
+bash "$skill/scripts/fault_log.sh" "$fl_case" --type F-ENV --script session_begin \
+  --message "fixture env fault" >/dev/null
+grep -qE '^- [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z \| F-ENV \| script: session_begin \| engine: bash \| fixture env fault$' \
+  "$fl_case/.pps/fault-log.md" || {
+  echo "fault_log.sh did not write the structured line." >&2
+  exit 1
+}
+# Append, never rewrite: the first line must survive a second write.
+bash "$skill/scripts/fault_log.sh" "$fl_case" --type F-PPS --script verify_gate \
+  --message "fixture internal note" >/dev/null
+[[ "$(grep -c 'fixture env fault' "$fl_case/.pps/fault-log.md")" == "1" ]] || {
+  echo "fault_log.sh rewrote or duplicated the first line." >&2
+  exit 1
+}
+[[ "$(grep -c 'fixture internal note' "$fl_case/.pps/fault-log.md")" == "1" ]] || {
+  echo "fault_log.sh did not append the second line." >&2
+  exit 1
+}
+# Engine parity: a PS-written line has the same field structure; only the
+# timestamp and the engine value may differ.
+if command -v pwsh >/dev/null 2>&1; then
+  pwsh -NoProfile -ExecutionPolicy Bypass \
+    -File "$skill/scripts/fault_log.ps1" -Root "$fl_case" -Type F-DEGRADED \
+    -Script resume_packet -Message "fixture ps fault" >/dev/null
+  grep -qE '^- [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z \| F-DEGRADED \| script: resume_packet \| engine: pwsh \| fixture ps fault$' \
+    "$fl_case/.pps/fault-log.md" || {
+    echo "fault_log.ps1 wrote a structurally different line." >&2
+    exit 1
+  }
+fi
+# Wiring points must not silently detach: each pinned point still calls the
+# channel with its fault code. The behavioural triggers are environmental, so
+# the pin is a wiring assertion, the same pattern as the entry-liveness checks.
+grep -q 'fault_log.sh' "$skill/scripts/session_begin.sh" || {
+  echo "session_begin.sh lost its fault_log wiring." >&2
+  exit 1
+}
+grep -q -- '--type F-DEGRADED' "$skill/scripts/resume_packet.sh" || {
+  echo "resume_packet.sh lost its degraded wiring." >&2
+  exit 1
+}
+grep -q 'fault_log.sh' "$skill/scripts/init_project.sh" || {
+  echo "init_project.sh lost its fault_log wiring." >&2
+  exit 1
+}
+
 echo "PPS Bash smoke tests: OK"

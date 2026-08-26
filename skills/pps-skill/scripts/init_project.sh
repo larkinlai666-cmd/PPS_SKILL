@@ -274,6 +274,9 @@ if (( no_git == 0 )); then
     fi
   else
     echo "WARNING: Git was not found; project files were created without a repository." >&2
+    "$script_dir/fault_log.sh" "$target" --type F-ENV --script init_project \
+      --message "Git was not found; project created without a repository" \
+      >/dev/null 2>&1 || true
   fi
 fi
 

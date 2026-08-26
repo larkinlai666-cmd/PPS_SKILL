@@ -76,6 +76,9 @@ sha256_of_text() {
   elif command -v openssl >/dev/null 2>&1; then
     printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'
   else
+    "$script_dir/fault_log.sh" "$root" --type F-ENV --script session_begin \
+      --message "sha256 hashing unavailable; anchor digest degraded to unhashable" \
+      >/dev/null 2>&1 || true
     echo "unhashable"
   fi
 }
